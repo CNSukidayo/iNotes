@@ -38,4 +38,5 @@
 !spring/resources/**
 !sql
 !sql/ES.md
-
+!config
+!config/**
