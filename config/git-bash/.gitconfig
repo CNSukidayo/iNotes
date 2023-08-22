@@ -1,0 +1,17 @@
+[user]
+	name = sukidayo
+	email = 2985384723@qq.com
+[credential "https://gitee.com"]
+	provider = generic
+[credential "http://192.168.1.139"]
+	provider = generic
+[core]
+	longpaths = true
+	fscache = true
+	preloadindex = true
+	quotepath = false
+	assumeunicode = true
+[gui]
+	encoding = utf-8
+[gc]
+	auto = 256

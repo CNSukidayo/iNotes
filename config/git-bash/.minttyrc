@@ -1,0 +1,13 @@
+FontHeight=15
+ThemeFile=windows10
+Language=zh_CN
+Locale=C
+Charset=UTF-8
+BellType=0
+ComposeKey=off
+BoldAsFont=yes
+BoldAsColour=no
+Answerback=
+FontSmoothing=partial
+ScrollbackLines=1000
+BellTaskbar=no
