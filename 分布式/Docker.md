@@ -1,9 +1,9 @@
 # 目录
-1. 基本环境搭建  
+1.基本环境搭建  
   
 **附录:**  
-A. docker命令大全
-B. 常用docker镜像大全  
+A.docker命令大全  
+B.常用docker镜像大全  
 
 
 ## 1. 基本环境搭建  
@@ -103,7 +103,8 @@ bf80164是容器的id(不是镜像的id);后面的bin/bash是必须的
 6.将
 
 ## 附录:  
-A. docker命令大全
+A. docker命令大全  
+B. 常用docker镜像大全  
 
 ### A. docker命令大全  
 1.[docker命令官方网站](//todo)  
@@ -164,22 +165,35 @@ docker run -p 7901:3306 --name mysql8.0 \
 
 #### 2.Redis  
 1.下载镜像  
-`docker pull redis:7.0.13`  
+`docker pull redis:7.0`  
 
 2.先创建配置文件  
 **解释:** 这有个小坑,在docker挂载的时候有可能将最后一个文件识别成目录,所有这里要先创建Redis配置文件的.  
 `mkdir -p ~/software/redis/conf`  创建配置文件目录  
 `touch ~/software/redis/conf/redis.conf` 创建Redis配置文件  
+*提示:这个配置文件来源于Redis的官方github*  
+**[redis.conf](resources/redis/redis.conf)**  
+**注意:** 这个配置就是看一下,不要上传到Linux服务器上,有什么需要改的配置直接在刚才touch创建的配置文件中修改.  
 
 3.创建容器并启动
 ```shell
 docker run -p 7902:6379 --name redis \
 -v ~/software/redis/data:/data \
 -v ~/software/redis/conf/redis.conf:/etc/redis/redis.conf \
--d redis:7.0.13 redis-server /etc/redis/redis.conf
+-d redis:7.0 redis-server /etc/redis/redis.conf
 ```
 
 **解释:** 后面的/etc/redis/redis.conf是容器里面的配置文件,意思是启动redis的时候携带的配置文件  
+
+4.设置Redis密码  
+`vim ~/software/redis/conf/redis.conf` 编辑Redis配置文件,设置Redis密码  
+`requirepass [password]` 在配置文件中设置Redis密码  
+`redis-cli -a [password]` 使用密码连接Redis客户局  
+
+**Redis详细配置见:Redis=>B.Redis命令大全=>5.redis.conf**  
+
+5.Redis默认安装路径 /usr/local/bin(可以进入容器中访问)  
+
 
 #### 3.Nacos
 1.下载镜像  
