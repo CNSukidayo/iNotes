@@ -552,7 +552,7 @@ Time3阶段时事务B处于阻塞状态;因为事务B无法获取插入间隙锁
 **介绍:** 索引下推(Index Condition Pushdown)可以在非聚簇索引遍历过程中,对索引中包含的字段先做判断,过滤掉不符合条件的记录,减少回表次数
 
 ### 5.2 查询执行计划  
-**通过explain查询执行计划,返回一下列的内容**  
+1.**通过explain查询执行计划,返回一下列的内容**  
 |     列名      |                    含义                     |
 | :-----------: | :-----------------------------------------: |
 |      id       |           SELECT查询的编号           |
@@ -602,7 +602,22 @@ Time3阶段时事务B处于阻塞状态;因为事务B无法获取插入间隙锁
 
 *索引的优缺点:sql优化主要就是针对索引优化,使用索引的好处不多说了,使用索引的弊端是:索引本身就很大(一般索引存放在硬盘中,并且innodb引擎下索引与数据存放在一起)、索引会降低增删改的效率;索引只能加快查询的速度(因为以前改数据只要该数据库里的内容,现在改数据库的同时还要把索引改了).*  
 
-
+**扩展知识点:**  
+2.笛卡尔积  
+这个也很好解释,和我之前做B站评论区中奖小伙伴筛选的过滤机制一样.总之为的就是减少执行次数,比如现在有三张表
+A B C 数据量分别是 6 3 2 如果按照ABC的顺序查询结果就是6*3=18*2=36 但如果按照CBA的顺序查询结果就是:2*3=6*6=36 虽然结果是一样的,但是中间操作少了,减少执行次数,一个简单的结论就是数据越少的表会越优先执行.  
+3.子查询  
+select tc.tcdesc from teachercard tc,course c ,teacher t where 	c.tid = t.tid and t.tcid = tc.tcid and c.cname = 'sql';  
+那么我们实际查询的表是老师的描述信息,所以teachercard被称为主查询表.另外的表值起到限制条件的作用(另外的表就被称之为子查询)  
+4.衍生查询&临时表  
+select cr.cname from (select * from course where tid in (1,2)) cr;  
+此时的cr表就是临时表,首先我们对course表进行查询,查询出来的这张表作为临时表再对这张临时表的cname字段进行查询,这就是衍生查询.  
+在from子查询中,如果table1 union table2 ,则table1的select_type值为derived,table2为union表  
+explain select cr.cname from (select * from course where tid=1 union select * from course where tid=2) cr;  
+5.合并查询  
+上述的第二个例子中,右表为union  
+6.联合查询  
+告知开发人员那些表之间存在union查询  
 
 ### 5.3 优化实战  
 **目录:**  
