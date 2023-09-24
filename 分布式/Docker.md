@@ -188,7 +188,9 @@ docker run -p 7902:6379 --name redis \
 4.设置Redis密码  
 `vim ~/software/redis/conf/redis.conf` 编辑Redis配置文件,设置Redis密码  
 `requirepass [password]` 在配置文件中设置Redis密码  
-`redis-cli -a [password]` 使用密码连接Redis客户局  
+`redis-cli -a [password] --raw` 使用密码连接Redis客户局
+* `-a [password]` 设置密码启动客户端
+* `--raw` 解决中文乱码问题  
 
 **Redis详细配置见:Redis=>B.Redis命令大全=>5.redis.conf**  
 
