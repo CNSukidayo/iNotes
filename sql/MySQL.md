@@ -93,12 +93,12 @@ limit子句从上一步得到的VT6虚拟表中选出从指定位置开始的指
 4.MySQL的InnoDB存储引擎的REPEATABLE-READ隔离级别可以很大程度避免幻读,所以SERIALIZABLE的这种隔离级别不常用.  
 
 5.解决幻读的方法  
-* **快照读:** 通过MVCC的版本号来保障,当前事务只会读取不大于事务开始时版本号的数据,所以后序插入的数据由于版本号过高就不会被当前事务读取到.它的SQL语句形式是(select ... from);也就是说REPEATABLE-READ隔离级别默认就是通过MVCC来实现的.  
+* **快照读:** 通过MVCC的版本号来保障,当前事务只会读取不大于事务开始时版本号的数据,所以后序插入的数据由于版本号过高就不会被当前事务读取到.它的SQL语句形式是(select ... from);也就是说REPEATABLE-READ隔离级别默认就是通过MVCC来实现的(但MVCC需要搭配undo日志).  
 * **当前读:** 这里要结合MySQL**行**锁那一章,通过记录锁+间隙锁的方式解决了幻读;它的SQL语句的形式是:(select ... for update)当执行这段语句的时候,会加上next-key lock ,如果有其它事务在next-key lock范围内插入数据,那么这条插入语句就会被阻塞,从而避免了幻读问题. 
 * ~~使用SERIALIZABLE隔离级别(划掉是因为效率不高,用是可以用的)~~
 
 ### 2.4 MVCC  
-**解释:** MVCC称为多版本并发控制;它是一种概念,具体的实现手段通过Read View来实现.  
+**解释:** MVCC称为多版本并发控制;它是一种概念,具体的实现手段通过Read View + undo log来实现.  
 **解释:** Read View本质就是一个数据结构,如果是通过Read View来实现的话,每个事务都会有一个Read View对象.通过Read View对象可以实现**可重复读**、**读已提交**  
 
 Read View的数据结构:  
@@ -534,6 +534,206 @@ Time3阶段时事务A处于阻塞状态;因为事务A无法获取插入间隙锁
 4.Time4阶段加锁分析  
 Time3阶段时事务B处于阻塞状态;因为事务B无法获取插入间隙锁,因为事务A持有(20,30)这把间隙锁.  
 *注意:此时发生死锁现象*  
+
+## 4.日志  
+**目录:**  
+4.1 三种日志  
+4.2 undo log  
+4.3 buffer pool  
+4.4 redo log  
+4.5 bin log  
+
+
+### 4.1 三种日志  
+**初步介绍:**  
+* undo log(回滚日志):是Innodb存储引擎层生成的日志,实现了事务中的原子性,主要用于事务回滚和MVCC.  
+* redo log(重做日志):是Innodb存储引擎层生成的日志,实现了事务中的持久性,主要用于掉电等故障恢复.  
+* binlog(归档日志):是Server层生成的日志,主要用于数据备份和主从复制.
+
+**区别:**  
+* redo log记录了此次事务[完成后]的数据状态,记录的是更新之后的值.  
+* undo log记录了此次事务[开始前]的数据状态,记录的是更新之前的值  
+* 
+
+### 4.2 undo log
+
+**1.undo日志是如何保证原子性的?**  
+undo日志在事务执行过程中,都记录下回滚时需要的信息到一个日志里,那么事务执行中途发生了MySQL崩溃后就利用该日志进行回滚.
+![undo日志工作原理](resources/mysql/5.webp)
+
+每当InnoDB引擎对一条记录进行操作(修改、删除、新增)时,要把回滚时需要的信息都记录到undo log里,比如:  
+* 在插入一条记录时,要把这条记录的主键值记下来,这样之后回滚时只需要把这个主键值对应的记录删掉就好了.
+* 在删除一条记录时,要把这条记录中的内容都记下来,这样之后回滚时再把由这些内容组成的记录插入到表中就好了.
+* 在更新一条记录时,要把被更新的列的旧值记下来,这样之后回滚时再把这些列更新为旧值就好了.
+
+<font color="#00FF00">回滚日志就是记录下事务的每一个步骤,回滚的时候执行逆操作即可</font>  
+
+2.undo日志中的版本链与MVCC  
+
+一条记录的每一次更新操作产生的undo log格式都有一roll_pointer 指针和一个trx_id事务id(这两个字段是隐含的,详情见2.事务=>2.4MVCC=>聚簇索引)  
+
+* 通过trx_id可以知道该记录是被哪个事务修改的
+* 通过roll_pointer指针可以将这些undo log串成一个链表,这个链表就被称为版本链.  
+![版本链](resources/mysql/6.png)  
+
+读已提交和可重复读隔离级别实现是通过[事务的Read View里的字段]和[记录中的两个隐藏列(trx_id和roll_pointer)]的比对,如果不满足可见行,就会顺着**undo log**版本链里找到满足其可见性的记录,从而控制并发事务访问同一个记录时的行为,这就叫MVCC(多版本并发控制);也就是说MVCC在寻找当前事务可见的记录时是通过undo日志来完成的.所以MVCC是搭配undo日志共同完成的.
+
+3.undo log的两大作用  
+* 实现事务回滚,保障事务的原子性.事务处理过程中,如果出现了错误或者用户执行了ROLLBACK语句,MySQL可以利用undo log中的历史数据将数据恢复到事务开始之前的状态.
+* 实现MVCC(多版本并发控制)关键因素之一:MVCC是通过ReadView + undo log实现的.undo log为每条记录保存多份历史数据,MySQL在执行快照读(普通select语句)的时候,会根据事务的Read View里的信息,顺着undo log的版本链找到满足其可见性的记录.  
+
+4.undo log的刷盘机制  
+查看buffer pool中的第4点,并且undo log的刷新还和redo log有很强的关联.  
+
+### 4.3 buffer pool
+1.MySQL是如何保存修改的数据的?  
+当我们执行update语句时,MySQL从磁盘中读取数据放到内存;在内存中修改完毕之后不会直接将记录更新到磁盘(因为这会造成大量的IO);而是会将数据放入内存中的buffer pool(缓冲池)区域.  
+
+![buffer pool](resources/mysql/7.png)  
+
+2.buffer pool的读取机制  
+* 读取数据时先从buffer pool中读取,如果读取不到再去磁盘中读取.  
+* 当修改数据时,如果数据存在于Buffer Pool中,那直接修改Buffer Pool中数据所在的页,然后将其页设置为脏页(该页的内存数据和磁盘上的数据已经不一致),为了减少磁盘I/O,不会立即将脏页写入磁盘,后续由后台线程选择一个合适的时机将脏页写入到磁盘.
+
+3.buffer pool缓存的内容  
+MySQL启动时,innodb会为buffer pool申请一片连续的内存空间,然后按照默认16KB的大小划分出一个个页,buffer pool中的页就叫做缓存页.  
+
+![buffer pool](resources/mysql/8.png)  
+
+4.undo页是什么?  
+之前说过undo log就是记录一个事务内的所有操作(为了通过逆操作来还原数据),那么undo log同样也会先写入buffer pool中undo页;等待统一刷新到磁盘.  
+
+### 4.4 redo log
+1.buffer pool的问题  
+由于buffer pool中的数据是存在于内存中的,一旦服务器断电则内存中的数据都没了;这就会导致buffer pool中的脏页数据丢失.  
+
+2.解决思路  
+undo记录的是事务执行的过程,而当事务commit时会先更新buffer pool中的页并标记为脏页,然后将本次的事务记录到redo log中  
+后续innodb会在合适的时机将buffer pool中的脏页刷新到磁盘中,这就是WAL技术.  
+WAL:MySQL写操作不是立即写到磁盘上,而是先写日志,然后在合适的时机再写到磁盘上.  
+![wal](resources/mysql/9.png)  
+
+3.什么是redo log?  
+redo log是物理日志,记录了某个数据页做了什么修改,每当执行一个事务就会产生这样的一条或者多条物理日志.  
+<font color="#00FF00">redo log保证了事务四大特性中的持久性</font>
+
+4.redo log持久化的机制  
+在事务提交时,只要先将redo log持久化到磁盘即可,可以不需要等到缓存在Buffer Pool里的脏页数据持久化到磁盘.  
+当系统崩溃时,虽然脏页数据没有持久化,但是redo log已经持久化，接着MySQL重启后.可以根据redo log的内容,将所有数据恢复到最新的状态
+
+5.redo log和数据持久化不是一样的吗?  
+貌似redo log持久化就是为了保证数据一致,那不就不需要数据持久化了吗?  
+数据写入到buffer pool,然后buffer pool再更新磁盘数据;为的是减少磁盘的IO次数,并且buffer pool中的数据才是磁盘真正需要写入的数据.  
+redo log的本质还是做故障恢复用的,并且写入redo log使用了追加操作,所以磁盘是顺序写;而buffer pool中数据的写入需要先找到数据的写入位置,然后才能写到磁盘,所以磁盘操作时随机写.  
+磁盘的**顺序写**比**随机写**要高效很多,因此redo log的开销更小.  
+
+6.redo log和undo log的关系  
+undo log记录的是事务执行过程中的每一步操作,这些每一步操作会生成undo log日志文件的内容,undo log会写入buffer pool的undo页面.  
+但是commit之后相当于这些undo日志就没用的,此时redo log派上作用,<font color="#00FF00">所以在内存修改undo页面后,需要记录对应的redo日志.</font>  
+<font color="#FFC800">事务提交之前发生了崩溃，重启后会通过 undo log 回滚事务，事务提交之后发生了崩溃，重启后会通过 redo log 恢复事务</font>  
+![redo和undo](resources/mysql/10.png)  
+
+7.redo log的刷盘机制  
+之前说过redo log的写操作时顺序写,所以它的性能较高;但是redo log是一产生数据就写入磁盘中吗?  
+实际上redo log有它专门的缓冲区redo log buffer,每当产生一条redo log日志的时候会写入到redo log buffer,后续在持久化到磁盘如下图:  
+![redo log刷盘时机](resources/mysql/11.png)  
+`redo log buffer`默认大小16MB,可以通过`innodb_log_Buffer_size`参数动态调整缓冲区大小,从而使得 MySQL处理大事务时不必立即写入磁盘.  
+
+**8.缓存在redo log buffer中的数据还是存在于内存中,那么它什么时候刷盘呢?**  
+* MySQL关闭时
+* 当redo log buffer中记录的写入量大于redo log buffer设置的内存空间的一半时,会触发落盘.  
+* InnoDB的后台线程每隔1秒,将redo log buffer持久化到磁盘.  
+* 每次提交事务时根据`innodb_flush_log_at_trx_commit`参数的值会有不同的刷盘策略.  
+
+`innodb_flush_log_at_trx_commit`有三种不同的值:  
+* 参数1:该值是默认值即默认策略,每次事务提交时都将缓存在redo log buffer中的redo log直接刷盘,这样就可以最大程度地保障MySQL的数据不会丢失.  
+* 参数0:表示每次事务提交时,还是将redo log留在redo log buffer中,该模式下在事务提交时不会主动触发写入磁盘的操作(所以这种策略下就是通过前三个条件进行日志的刷盘)  
+* 参数2:每次提交事务时都将缓存在redo log buffer中的redo log写到操作系统中的page cazhe中,也就是写到了操作系统的文件系统的缓存中.
+
+`innodb_flush_log_at_trx_commit`值为0或2时的<font color="#00FF00">后台线程每隔一秒执行刷盘的操作:</font>  
+* 参数0:会把缓存在redo log buffer中的redo log,通过调用write()系统调用写到操作系统的Page Cache,然后调用fsync()系统调用持久化到磁盘.所以参数为0的策略,MySQL进程的崩溃会导致上一秒钟所有事务数据的丢失.  
+* 参数2:调用fsync()系统调用,将缓存在操作系统Page Cache里的redo log持久化到磁盘.所以参数为2的策略,较取值为0情况下更安全,因为MySQL进程的崩溃并不会丢失数据,只有在操作系统崩溃或者系统断电的情况下,上一秒钟所有事务数据才可能丢失.  
+**后台进程参与的情况下,redo log的刷盘策略:**  
+![redo](resources/mysql/13.png)  
+
+9.`innodb_flush_log_at_trx_commit`三种参数不同场景下的性能  
+* 数据安全性:参数1 > 参数2 > 参数0
+* 写入性能:参数0 > 参数2 > 参数1
+
+10.`innodb_flush_log_at_trx_commit`三种参数的使用场景  
+* 参数1:用在一些对数据安全性要求比较高的场景
+* 参数0:在一些可以容忍数据库崩溃时丢失1s数据的场景中,我们可以将该值设置为0,这样可以明显地减少日志同步到磁盘的I/O操作.  
+* 安全性和性能折中的方案就是参数2,虽然参数2没有参数0的性能高,但是数据安全性方面比参数0强,因为参数2只要操作系统不宕机,即使数据库崩溃了,也不会丢失数据,同时性能方便比参数1高.
+
+11.redo log文件的组织方式  
+默认情况下,innodb有一个重做日志文件组(redo log group),该文件组由两个重做日志文件(redo log)组成;分别叫ib_logfile0和ib_logfile1.  
+![redo log group](resources/mysql/14.png)  
+这两个文件的大小是一致的  
+
+**工作方式:**  
+重做日志文件组是以循环的方式工作的,从头开始写写到末尾时就回到头重新写.   
+先写ib_logfile0文件,写满了会切换到ib_logfile1写.如果ib_logfile1也写满了会切换回ib_logfile0文件继续写.  
+![写方式](resources/mysql/15.png)  
+
+**两个指针:**  
+实际上redo log文件是防止buffer pool中的数据丢失而设计的,所以当buffer pool中的数据写入到磁盘是,对应的redo log就失去了价值,这时候我们便可以擦除这部分数据,从而腾出新的空间写入新的redo log.  
+redo log是循环写的方式,相当于一个环形,InnoDB用<font color="#00FF00">write pos</font>表示redo log当前记录写到的位置,用<font color="#00FF00">checkpoint</font>表示当前要擦除的位置.
+![两个指针](resources/mysql/16.png)  
+
+**解释:**  
+* write pos和checkpoint的移动都是顺时针方向  
+* write pos ~ checkpoint之间的部分(图中的红色部分),用来记录新的更新操作
+* check point ~ write pos之间的部分(图中蓝色部分):待落盘的脏数据页记录
+
+如果<font color="#00FF00">write pos</font>追上了<font color="#FF00FF">checkpoint</font>,就意味着redo log文件满了,这时 MySQL不能再执行新的更新操作,也就是说MySQL会被阻塞(因此所以针对并发量大的系统,适当设置redo log的文件大小非常重要),此时会停下来将Buffer Pool中的脏页刷新到磁盘中,然后标记redo log中哪些记录可以被擦除,接着对旧的redo log记录进行擦除,等擦除完旧记录腾出了空间,<font color="#FF00FF">checkpoint</font> 就会往后移动(图中顺时针),然后MySQL恢复正常运行,继续执行新的更新操作
+
+### 4.5 bin log 
+**介绍:**  
+MySQL在完成一条更新操作后,Server层还会生成一条bin log,等之后事务提交的时候,会将该事物执行过程中产生的所有binlog统一写入binlog文件  
+binlog文件是记录了所有数据库表结构变更和表数据修改的日志,不会记录查询类的操作,比如SELECT和SHOW操作  
+
+**bin log和redo log的区别:**  
+bin log和redo log都是记录事务对数据库造成的修改,它们有四点区别:  
+* 适用对象不同:
+  * binlog是MySQL的Server层实现的日志,所有存储引擎都可以使用
+  * redo log是Innodb存储引擎实现的日志
+* 文件格式不同:
+  * binlog有三种格式:
+    * STATEMENT:每一条修改数据的SQL都会被记录到binlog中(相当于记录了逻辑操作,所以针对这种格式,binlog可以称为逻辑日志),主从复制中slave端再根据SQL语句重现.但STATEMENT有动态函数的问题,比如你用了uuid或者now这些函数,你在主库上执行的结果并不是你在从库执行的结果这种随时在变的函数会导致复制的数据不一致;
+    * ROW:记录行数据最终被修改成什么样了(这种格式的日志,就不能称为逻辑日志了),不会出现STATEMENT下动态函数的问题.但ROW的缺点是每行数据的变化结果都会被记录,比如执行批量update语句,更新多少行数据就会产生多少条记录,使binlog文件过大,而在STATEMENT格式下只会记录一个update语句而已;
+    * MIXED:包含了STATEMENT和ROW模式,它会根据不同的情况自动使用ROW模式和STATEMENT模式
+  * redo log是物理日志,记录的是在某个数据页做了什么修改,比如对 XXX表空间中的YYY数据页ZZZ偏移量的地方做了AAA更新
+* 写入方式不同:
+  * binlog是**追加写**,写满一个文件,就创建一个新的文件继续写,不会覆盖以前的日志,保存的是全量的日志.
+  * redo log是**循环写**,日志空间大小是固定,全部写满就从头开始,保存未被刷入磁盘的脏页日志.
+* 用途不同:
+  * binlog用于<font color="#FF00FF">备份恢复、主从复制</font>
+  * redo log用于掉电等故障恢复
+
+1.恢复问题  
+如果数据库被删库了,可以使用bin log日志进行恢复;因为bin log保存的是全量日志,即保存了所有数据的变更情况  
+如果被删库了是不可以使用redo log恢复的,因为redo log是循环写,已经被刷盘的数据会从redo log文件中移除.  
+
+2.主从复制是怎么实现的  
+MySQL的主从复制依赖于binlog,也就是记录MySQL上的所有变化并以二进制形式保存在磁盘上.复制的过程就是将binlog中的数据从主库传输到从库上.  
+这个过程一般是 **<font color="#00FF00">异步</font>** 的,也就是主库上执行事务操作的线程不会等待复制binlog的线程同步完成(也就不会阻塞).  
+
+MySQL集群的三个阶段:  
+* 写入binlog:主库写binlog日志,提交事务,并更新本地存储数据  
+* 同步binlog:把binlog复制到所有从库上,每个从库把binlog写到暂存日志中
+* 回放binlog:回放binlog,并更新存储引擎中的数据
+
+**引出读写分离:**  
+在完成主从复制之后,你就可以在写数据时只写主库,在读数据时只读从库,这样即使写请求会锁表或者锁记录,也不会影响读请求的执行.  
+![主从复制](resources/mysql/17.png)  
+
+**从库数量:**  
+从库数量不宜过多,因为从库数量的增加,主库也要创建同样多的log dump线程来处理从库复制的请求,对主库资源消耗较高,同时还受限于主库的网络带宽.  
+
+**主从复制的模型:**  
+* 同步复制:MySQL主库提交事务的线程要等待所有从库的复制成功响应,才返回客户端结果.这种方式在实际项目中,基本上没法用,原因有两个:一是性能很差,因为要复制到所有节点才返回响应;二是可用性也很差,主库和所有从库任何一个数据库出问题,都会影响业务.  
+* 异步复制(默认模型):MySQL主库提交事务的线程并不会等待binlog同步到各从库,就返回客户端结果.这种模式一旦主库宕机,数据就会发生丢失.
+* 半同步复制:MySQL 5.7版本之后增加的一种复制方式,介于两者之间,事务线程不用等待所有的从库复制成功响应,只要一部分复制成功响应回来就行,比如一主二从的集群,只要数据成功复制到任意一个从库上,主库的事务线程就可以返回给客户端.这种半同步复制的方式,兼顾了异步复制和同步复制的优点,即使出现主库宕机.至少还有一个从库有最新的数据,不存在数据丢失的风险.
 
 
 
