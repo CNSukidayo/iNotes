@@ -205,10 +205,10 @@ private:
 1.表锁  
 **用法:**  
 ```sql
-//表级别的共享锁，也就是读锁；
+//表级别的共享锁,也就是读锁；
 lock tables t_student read;
 
-//表级别的独占锁，也就是写锁；
+//表级别的独占锁,也就是写锁；
 lock tables t_stuent write;
 ```
 
@@ -542,6 +542,8 @@ Time3阶段时事务B处于阻塞状态;因为事务B无法获取插入间隙锁
 4.3 buffer pool  
 4.4 redo log  
 4.5 bin log  
+4.6 日志全流程分析  
+4.7 二阶段提交    
 
 
 ### 4.1 三种日志  
@@ -553,7 +555,7 @@ Time3阶段时事务B处于阻塞状态;因为事务B无法获取插入间隙锁
 **区别:**  
 * redo log记录了此次事务[完成后]的数据状态,记录的是更新之后的值.  
 * undo log记录了此次事务[开始前]的数据状态,记录的是更新之前的值  
-* 
+* bin log用户备份恢复、主从复制
 
 ### 4.2 undo log
 
@@ -619,7 +621,7 @@ redo log是物理日志,记录了某个数据页做了什么修改,每当执行�
 
 4.redo log持久化的机制  
 在事务提交时,只要先将redo log持久化到磁盘即可,可以不需要等到缓存在Buffer Pool里的脏页数据持久化到磁盘.  
-当系统崩溃时,虽然脏页数据没有持久化,但是redo log已经持久化，接着MySQL重启后.可以根据redo log的内容,将所有数据恢复到最新的状态
+当系统崩溃时,虽然脏页数据没有持久化,但是redo log已经持久化,接着MySQL重启后.可以根据redo log的内容,将所有数据恢复到最新的状态
 
 5.redo log和数据持久化不是一样的吗?  
 貌似redo log持久化就是为了保证数据一致,那不就不需要数据持久化了吗?  
@@ -630,7 +632,7 @@ redo log的本质还是做故障恢复用的,并且写入redo log使用了追加
 6.redo log和undo log的关系  
 undo log记录的是事务执行过程中的每一步操作,这些每一步操作会生成undo log日志文件的内容,undo log会写入buffer pool的undo页面.  
 但是commit之后相当于这些undo日志就没用的,此时redo log派上作用,<font color="#00FF00">所以在内存修改undo页面后,需要记录对应的redo日志.</font>  
-<font color="#FFC800">事务提交之前发生了崩溃，重启后会通过 undo log 回滚事务，事务提交之后发生了崩溃，重启后会通过 redo log 恢复事务</font>  
+<font color="#FFC800">事务提交之前发生了崩溃,重启后会通过 undo log 回滚事务,事务提交之后发生了崩溃,重启后会通过 redo log 恢复事务</font>  
 ![redo和undo](resources/mysql/10.png)  
 
 7.redo log的刷盘机制  
@@ -693,7 +695,7 @@ MySQL在完成一条更新操作后,Server层还会生成一条bin log,等之后
 binlog文件是记录了所有数据库表结构变更和表数据修改的日志,不会记录查询类的操作,比如SELECT和SHOW操作  
 
 **bin log和redo log的区别:**  
-bin log和redo log都是记录事务对数据库造成的修改,它们有四点区别:  
+bin log和redo log都是记录事务对数据库造成的修改(这两个日志记录的东西实际上是差不多的),它们有四点区别:  
 * 适用对象不同:
   * binlog是MySQL的Server层实现的日志,所有存储引擎都可以使用
   * redo log是Innodb存储引擎实现的日志
@@ -734,6 +736,116 @@ MySQL集群的三个阶段:
 * 同步复制:MySQL主库提交事务的线程要等待所有从库的复制成功响应,才返回客户端结果.这种方式在实际项目中,基本上没法用,原因有两个:一是性能很差,因为要复制到所有节点才返回响应;二是可用性也很差,主库和所有从库任何一个数据库出问题,都会影响业务.  
 * 异步复制(默认模型):MySQL主库提交事务的线程并不会等待binlog同步到各从库,就返回客户端结果.这种模式一旦主库宕机,数据就会发生丢失.
 * 半同步复制:MySQL 5.7版本之后增加的一种复制方式,介于两者之间,事务线程不用等待所有的从库复制成功响应,只要一部分复制成功响应回来就行,比如一主二从的集群,只要数据成功复制到任意一个从库上,主库的事务线程就可以返回给客户端.这种半同步复制的方式,兼顾了异步复制和同步复制的优点,即使出现主库宕机.至少还有一个从库有最新的数据,不存在数据丢失的风险.
+
+3.bin log的刷盘时机  
+事务执行过程中,会先把日志写到Server层的bin log cache中,事务提交的时候再把bin log cache写入bin log文件中(不是刷盘,而是写入到OS的磁盘缓存中)  
+
+MySQL给每个线程(连接)分配了一片内存用于缓冲bin log,该内存就是bin log cache,参数binlog_cache_size指定了每个线程的bin log cache的大小,如果使用的过程中超过了这个值规定的大小就会暂存到磁盘的交换区.  
+
+<font color="#00FF00">在提交事务的时候执行器把 binlog cache 里的完整事务写入到 binlog 文件中,并清空 binlog cache</font>
+![bin log刷盘时机](resources/mysql/18.png)  
+虽然每个线程有自己binlog cache,但是最终都写到同一个binlog文件:  
+
+* 图中的write,指的就是指把日志写入到binlog文件,但是并没有把数据持久化到磁盘,因为数据还缓存在文件系统的page cache里,write的写入速度还是比较快的,因为不涉及磁盘I/O.  
+* 图中的fsync,才是将数据持久化到磁盘的操作,这里就会涉及磁盘I/O,所以频繁的fsync会导致磁盘的I/O升高.  
+  
+通过设置`sync_binlog `参数来控制bin log刷盘策略:  
+* 参数0:表示每次提交事务都只write将数据写入操作系统的page cache而不fsync,后续交由操作系统决定何时将数据持久化到磁盘中(和Redis中AOF持久化的一个策略一致)  
+* 参数1:表示每次提交事务都会write,然后马上执行fsync.  
+* 参数N:表示每次提交事务都write,但累积N个事务后才fsync
+
+**性能和安全性:**  
+参数0的性能是最好的,但如果服务器发生宕机(非MySQL宕机);则未持久化到磁盘上的数据将会丢失.  
+参数1是最安全的,即使发生服务器宕机也只会丢失最近的一条事务的bin log,但它的性能是最差的.  
+如果能够容忍在服务器宕机情况下少量事务的丢失,为了提高写入性能可以将sync_binlog的值设置为100~1000
+
+### 4.6 日志全流程分析
+假设现在执行一条update SQL语句`update student set s_name = '蔡徐坤' where id = 25`它的执行过程如下  
+首先优化器分析出执行计划之后,执行器就按照执行计划开始执行  
+1.执行器负责具体执行,会调用存储引擎的接口,通过主键索引数获取id=1这一行记录:
+* 如果id=1这一行所在的数据也本身就在buffer pool中,就直接返回给执行器更新  
+* 如果记录不在buffer pool中,就数据页从磁盘读入到buffer pool中,返回记录给执行器  
+
+2.执行器得到聚簇索引记录后,会看一下更新前的记录和更新后的记录是否一样
+* 如果一样的话就不进行后续的更新流程  
+* 如果不一样的话就把更新前的记录和更新后的记录都当作参数传给innodb,让innodb真正的执行更新记录的操作.  
+
+3.innodb开始事务,innodb更新记录前首先要记录相应的undo log,因为这是更新操作,需要把被更新的列的旧值记录下来,生成一条undo log然后将该日志写入buffer pool中的undo页面,修改完之后还需要记录对应的redo log.  
+
+4.innodb修改内存中的记录,同时将该内容标记为脏页,然后将记录写到redo log中,这个时候更新就算完成了.为了减少磁盘IO,不会立即将脏页写入磁盘,通过WAL技术由后台线程选择一个合适的时机将脏页写入到磁盘中.  
+
+5.至此一条记录更新完毕  
+
+6.在一条更新语句执行完成后,客户端commit了(此时才进入commit阶段),然后开始记录该语句对应的binlog,此时记录的binlog会被保存到binlog cache,并没有刷新到硬盘上的 binlog文件,在事务提交时才会统一将该事务运行过程中的所有binlog刷新到硬盘.  
+
+7.两阶段提交  
+
+### 4.7 二阶段提交
+**注意:**  
+本质上redo log和bin log是两个独立的文件,所以就可能出现半成功状态.  
+
+假设原本id=25的t_name的值为kun,接着执行`update student set s_name = '蔡徐坤' where id = 25`;如果在持久化redo log和bin log的过程中出现了半成功状态,那么就会出现两种情况:  
+* <font color="#00FF00">如果在将redo log刷入到磁盘之后, MySQL突然宕机了,而binlog还没有来得及写入.</font>MySQL重启后,通过redo log能将Buffer Pool中id = 1这行数据的name字段恢复到新值蔡徐坤,但是binlog里面没有记录这条更新语句.在主从架构中,binlog 会被复制到从库,由于binlog丢失了这条更新语句,从库的这一行name字段是旧值kun,与主库的值不一致性;
+* <font color="#00FF00">如果在将binlog刷入到磁盘之后,MySQL突然宕机了,而redo log还没有来得及写入</font>由于redo log还没写,崩溃恢复以后这个事务无效,所以 id = 1 这行数据的name字段还是旧值kun,而binlog里面记录了这条更新语句,在主从架构中,binlog会被复制到从库,从库执行了这条更新语句,那么这一行name字段是新值蔡徐坤,与主库的值不一致性;
+
+所以持久化redo log和bin log这两份日志的时候,如果出现半成功状态,就会造成主从环境的数据不一致.是因为redo log影响主库的数据,binlog影响从库的数据
+
+**两阶段提交就是为了解决两份日志逻辑不一致的问题而出现的**  
+两阶段提交其实是分布式事务一致性协议,它可以保证多个逻辑操作要不全部成功,要不全部失败,不会出现半成功的状态.
+
+两阶段提交把每个事务的提交拆分成了2个阶段,分别是<font color="#00FF00">准备</font>和<font color="#00FF00">提交</font>阶段.
+
+1.两阶段提交的过程  
+在MySQL的InnoDB存储引擎中,开启binlog的情况下,MySQL会同时维护binlog日志与InnoDB的redo log,为了保证这两个日志的一致性,MySQL使用了内部<font color="#00FF00">XA事务</font>.内部<font color="#00FF00">XA事务</font>由binlog作为协调者,存储引擎是参与者.  
+
+当客户端执行commit语句或者在自动提交的情况下,MySQL内部开启一个XA事务,分两阶段来完成XA事务的提交.  
+![两阶段提交](resources/mysql/19.png)  
+
+从图中可看出,事务的提交过程有两个阶段,就是将redo log的写入拆成了两个步骤:<font color="#00FF00">prepare和commit</font>,中间再穿插写入binlog.
+* prepare阶段:将XID(内部XA事务的ID)写入到redo log,同时将redo log对应的事务状态设置为prepare,然后将redo log持久化到磁盘(innodb_flush_log_at_trx_commit = 1 的作用)
+* commit阶段:把XID写入到binlog,然后将binlog持久化到磁盘(sync_binlog = 1 的作用),接着调用引擎的提交事务接口,将redo log对应的事务设置为commit,此时该状态并不需要持久化到磁盘,只需要write到文件系统的page cache中就够了,因为只要binlog写磁盘成功,就算redo log的状态还是prepare也没有关系,一样会被认为事务已经执行成功.(因为只要bin log日志写入page cache成功了,redo log的状态就不是那么重要了)
+
+2.异常重启会有什么现象?  
+我们来看看在两阶段提交的不同时刻,<font color="#00FF00">MySQL异常重启(不是操作系统宕机)</font>会出现什么现象?下图中有时刻A和时刻B都有可能发生崩溃:  
+![崩溃时刻](resources/mysql/20.png)  
+
+*首先:不管是时刻A还是时刻B崩溃,此时redo log对应事务的状态都是prepare*
+
+在MySQL重启后会按顺序扫描redo log文件,碰到处于prepare状态的redo log,就拿着redo log中的XID去binlog查看是否存在此XID:  
+* 如果bin log中没有当前内部XA事务的XID,说明redo log刷盘成功,但是bin log还没有完成刷盘,则回滚事务;对应时刻A崩溃的情况  
+* 如果bin log中有当前内部事务的XID,说明redo log和bin log都已经完成了刷盘,则提交事务.对应时刻B崩溃发生的情况.  
+
+**小总结:**  
+对于处于prepare阶段的redo log,即可以提交事务,也可以回滚事务,这取决于是否能在binlog中查找到与redo log相同的XID.  
+<font color="#00FF00">两阶段提交是以binlog写成功为事务提交成功的标识</font>
+
+3.事务未提交时,redo log也会刷盘吗?  
+会的,参考redo log刷盘时机,缓存在redo log buffer中的redo log信息回呗后台线程每隔一秒一起持久化到磁盘中.  
+即<font color="#00FF00">事务没提交的时候,redo log也是可能被持久化到磁盘的</font>  
+如果此时MySQL崩溃了,还没提交事务的redo log已经被持久化磁盘了,mysql重启后,数据不就不一致了?  
+实际上并不会,虽然redo log已经持久化了,但是bin log还没有持久化所以并不会造成数据不一致.  
+
+4.两阶段提交的问题  
+两阶段提交能够保证了两个日志文件的数据一致性,但是其性能较差:  
+* 磁盘I/O次数高:对于`"双1"`配置(即redo log和bin log每次提交都会刷盘的配置),每个事务提交都会进行两次fsync(),一次是redo log刷盘,另一次是binlog刷盘.  
+* 锁竞争激烈:两阶段提交虽然能够保证<font color="#00FF00">单事务</font>两个日志的内容一致,但在<font color="#00FF00">多事务</font>的情况下,却不能保证两者的提交顺序一致,因此,在两阶段提交的流程基础上,还需要加一个锁来保证提交的原子性,从而保证多事务的情况下两个日志的提交顺序一致.  
+
+*为什么两阶段提交的磁盘IO次数会很高?*  
+binlog和redo log在内存中都对应的缓存空间,binlog会缓存在binlog cache,redo log,会缓存在redo log buffer(本质上是由于redo log和bin log是两个独立文件,它们的关联性较低导致的),它们持久化到磁盘的时机分别由下面这两个参数控制.一般我们为了避免日志丢失的风险,会将这两个参数设置为1:  
+* 当sync_binlog = 1的时候,表示每次提交事务都会将binlog cache里的binlog直接持久到磁盘.  
+* 当innodb_flush_log_at_trx_commit = 1时,表示每次事务提交时,都将缓存在redo log buffer里的redo log直接持久化到磁盘
+
+可以看到,如果sync_binlog和innodb_flush_log_at_trx_commit都设置为1,那么在每个事务提交过程中,<font color="#00FF00">都会至少调用2次刷盘操作</font>,一次是redo log刷盘,一次是binlog落盘,所以这会成为性能瓶颈  
+
+**为什么会产生锁竞争激烈?**  
+在早期的MySQL版本中,通过使用prepare_commit_mutex锁来保证事务提交的顺序,在一个事务获取到锁时才能进入prepare阶段,一直到commit阶段结束才能释放锁,下个事务才可以继续进行prepare操作  
+通过加锁虽然完美地解决了顺序一致性的问题,但在并发量较大的时候,就会导致对锁的争用,性能不佳.  
+<font color="#00FF00">说白了锁就是为了保障多个事务写入redo log和bin log到cache page的顺序一致(注意执行过程中日志是写入内存缓冲区的)</font>
+
+5.组提交优化  
+MySQL引入了binlog组提交(group commit)机制,当有多个事务提交的时候,会将多个binlog刷盘操作合并成一个,从而减少磁盘I/O的次数,如果说10个事务依次排队刷盘的时间成本是10,那么将这10个事务一次性一起刷盘的时间成本则近似于1.  
+
+
 
 
 
