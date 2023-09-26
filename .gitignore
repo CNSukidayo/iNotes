@@ -38,7 +38,7 @@
 !spring/resources
 !spring/resources/**
 !sql
-!sql/ES.md
+!sql/SQL语句.xlsx
 !sql/resources
 !sql/resources/**
 !sql/MySQL.md
