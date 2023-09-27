@@ -543,8 +543,9 @@ Time3阶段时事务B处于阻塞状态;因为事务B无法获取插入间隙锁
 4.4 redo log  
 4.5 bin log  
 4.6 日志全流程分析  
-4.7 二阶段提交    
-
+4.7 二阶段提交  
+4.8 MySQL磁盘IO很高,有什么优化方法?  
+4.9 慢查询日志  
 
 ### 4.1 三种日志  
 **初步介绍:**  
@@ -776,7 +777,7 @@ MySQL给每个线程(连接)分配了一片内存用于缓冲bin log,该内存�
 
 5.至此一条记录更新完毕  
 
-6.在一条更新语句执行完成后,客户端commit了(此时才进入commit阶段),然后开始记录该语句对应的binlog,此时记录的binlog会被保存到binlog cache,并没有刷新到硬盘上的 binlog文件,在事务提交时才会统一将该事务运行过程中的所有binlog刷新到硬盘.  
+6.在一条更新语句执行完成后,客户端commit了(此时才进入commit阶段),然后开始记录该语句对应的binlog,此时记录的binlog会被保存到binlog cache,并没有刷新到硬盘上的binlog文件,在事务提交时才会统一将该事务运行过程中的所有binlog刷新到硬盘.  
 
 7.两阶段提交  
 
@@ -844,6 +845,66 @@ binlog和redo log在内存中都对应的缓存空间,binlog会缓存在binlog c
 
 5.组提交优化  
 MySQL引入了binlog组提交(group commit)机制,当有多个事务提交的时候,会将多个binlog刷盘操作合并成一个,从而减少磁盘I/O的次数,如果说10个事务依次排队刷盘的时间成本是10,那么将这10个事务一次性一起刷盘的时间成本则近似于1.  
+
+引入了组提交机制后,prepare阶段不变,只针对commit阶段,将commit阶段拆分为三个过程:  
+*再次提示:prepare阶段只做redo log的写操作;而commit阶段会操作bin log和redo log*  
+* flush阶段:多个事务按进入的顺序将binlog从cache写入page cache(不刷盘)  
+* sync阶段:对binlog文件做fsync操作(多个事务的binlog合并一次刷盘)  
+* commit阶段:各个事务按顺序做InnoDB commit操作(<font color="#00FF00">这一步是提交redo log的</font>)  
+
+上面的每个阶段都有一个队列,每个阶段有锁进行保护,因此保证了事务写入的顺序,第一个进入队列的事务会成为leader,leader领导所在队列的所有事务,全权负责整队的操作,完成后通知队内其他事务操作结束.  
+![阶段队列](resources/mysql/21.png)  
+
+也就是说现在还是要获取锁,只不过获取的是这三个阶段(队列)中的一个锁,<font color="#00FF00">这样就使锁的粒度减小了,并且每个队列中还包含了多个事务</font>;从而进一步提高性能.也使得多个阶段可以并发执行  
+
+6.redo log的组提交优化  
+第5点说的是对commit阶段做的优化,现在如果要对prepare阶段做优化(即对redo log的写操作做优化)  
+新的改进是,在prepare阶段不再让事务各自执行redo log的刷盘操作,而是推迟到组提交的flush阶段,让prepare阶段融合到flush阶段.  
+<font color="#00FF00">在sync阶段之前,通过延迟写redo log的方式,为redo log做了一次组写入,从而对bin log和redo log都进行了优化</font>
+
+7.组提交每个阶段的流程  
+**注意:** 这里的实验环境是针对`"双1配置"`即sync_binlog和innodb_flush_log_at_trx_commit都配置为1  
+*再次提醒:组提交阶段的三个阶段是由commit阶段拆分下来的,这里的图实际上包含了prepare阶段(redo log延迟到flush阶段刷新)*  
+
+> flush阶段  
+
+第一个事务会成为flush阶段的Leader,此时后面到来的事务都是Follower  
+![flush阶段](resources/mysql/22.png)  
+接着,获取队列中的事务组,由绿色事务组的Leader对redo log做一次write + fsync,即一次将同组事务的redolog刷盘(<font color="#00FF00">redo log-prepare阶段的优化</font>)  
+![flush阶段](resources/mysql/23.png)  
+完成了prepare阶段后,将绿色这一组事务执行过程中产生的bin log buffer写入binlog文件(调用write,不会调用fsync,所以不会刷盘,binlog缓存在操作系统的文件系统中)  
+![flush阶段](resources/mysql/24.png)  
+从上面这个过程,可以知道flush阶段队列的作用是**用于支撑redo log的组**提交.并且该阶段也会将bin log buffer写入到page cache  
+如果在这一步完成后数据库崩溃,由于binlog中没有该组事务的记录,所以MySQL会在重启后回滚该组事务.  
+
+> sync阶段  
+
+绿色这一组事务的binlog写入到binlog文件后,并不会马上执行刷盘的操作,而是会等待一段时间,个等待的时长由`Binlog_group_commit_sync_delay`参数控制,目的是为了组合更多事务的binlog,然后再一起刷盘,如下:  
+![sync](resources/mysql/25.png)  
+不过,在等待的过程中,如果事务的数量提前达到了Binlog_group_commit_sync_no_delay_count参数设置的值,就不用继续等待了,就马上将binlog刷盘,如下图:  
+![sync](resources/mysql/26.png)  
+从上面的过程,可以知道sync阶段队列的作用是用于支持**binlog的组**提交  
+如果想提升bin log组提交的效果,可以通过设置下面这两个参数实现:  
+* `binlog_group_commit_sync_delay=N`:表示在等待N微妙后,直接调用fsync,将处于文件系统中page cache中的binlog刷盘,也就是将[ binlog 文件]持久化到磁盘  
+* `binlog_group_commit_sync_no_delay_count=N`:表示如果队列中的事务数达到N个,就忽视binlog_group_commit_sync_delay的设置,直接调用fsync,将处于文件系统中page cache中的binlog刷盘  
+
+如果在这一步完成后数据库崩溃,由于binlog中已经有了事务记录,MySQL会在重启后通过redo log刷盘的数据继续进行事务的提交  
+
+> commit阶段  
+
+最后进入commit阶段,调用引擎的提交事务接口,将redo log状态设置为commit(<font color="#00FF00">这一步是提交redo log的</font>)  
+![commit](resources/mysql/27.png)
+
+commit阶段队列的作用是承接sync阶段的事务,完成最后的引擎提交,使得sync可以尽早的处理下一组事务,最大化组提交的效率  
+
+### 4.8 MySQL磁盘IO很高,有什么优化方法?
+现在我们知道事务在提交的时候,需要将binlog和redo log持久化到磁盘,那么如果出现MySQL磁盘I/O很高的现象,我们可以通过控制以下参数,来 "延迟"binlog和redo log刷盘的时机,从而降低磁盘I/O的频率
+
+* 设置组提交的两个参数:`binlog_group_commit_sync_delay`和`binlog_group_commit_sync_no_delay_count`参数,延迟binlog刷盘的时机,从而减少binlog的刷盘次数.这个方法是基于"额外的故意等待"来实现的,因此可能会增加语句的响应时间,但即使MySQL进程中途挂了,也没有丢失数据的风险,因为binlog早被写入到page cache了,只要系统没有宕机,缓存在page cache里的binlog就会被持久化到磁盘.  
+* 将`sync_binlog`设置为大于1的值(比较常见是100~1000),表示每次提交事务都write,但累积N个事务后才fsync,相当于延迟了binlog刷盘的时机.但是这样做的风险是,主机掉电时会丢N个事务的binlog日志
+* 将`innodb_flush_log_at_trx_commit`设置为2;表示每次事务提交时,都只是缓存在redo log buffer里的redo log写到redo log文件,注意写入到[redo log 文件]并不意味着写入到了磁盘,因为操作系统的文件系统中有个Page Cache,专门用来缓存文件数据的,所以写入[redo log文件]意味着写入到了操作系统的文件缓存,然后交由操作系统控制持久化到磁盘的时机.但是这样做的风险是,主机掉电的时候会丢数据  
+
+### 4.9 慢查询日志
 
 
 
