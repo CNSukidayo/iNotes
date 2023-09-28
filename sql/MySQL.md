@@ -9,7 +9,7 @@
 **目录:**  
 1.1 SQL的执行过程  
 1.2 select语句的执行顺序  
-1.3 MySQL一行记录的存储过程  
+1.3 MySQL一行记录的存储结构  
 
 ### 1.1 SQL的执行过程
 1.SQL执行流程图  
@@ -145,11 +145,12 @@ MySQL也有长连接和短连接的概念,它们的区别如下
 
 
 
-
 ### 1.2 select语句的执行顺序  
 SQL编写顺序:`select distinct field from left_table_name left join right_table_name on left_table_name.field=right_table_name.field where ... and/or ... group by field1,field2... with rollup having ... order by field desc/asc limit ...`
 
 SQL解析顺序:`from ... on.. join.. where .. group by ... having ... select dinstinst order by limit ...`  
+
+注意:having关键字是可以使用select后面指定的field别名的,所以field的解析顺序至少应该在hiving之前  
 
 **特性:**
 当select * from ... 后面指定的是多张表时,左表的输出会作为右表的输出(相对而言的左右表),最终会生成一个VT1虚拟表.计算这两张关联表的笛卡尔积,生成虚拟表VT1-J1.基于虚拟表VT1-J1这一个虚拟表进行过滤,过滤出所有满足ON谓词条件的列,生成并放到新虚拟表VT1-J2(注意是基于VT1-J1,所以这里产生了J2这张新表).如果使用了外连接(LEFT,RIGHT,FULL),主表(也就是外连接的时候,不是有一张表查出的内容作为另一张表的输入,作为另一张表的输入的这张表就是主表)主表中不符合ON条件的列也会被加入到VT1-J2中(也就是主表中不符合条件的数据还是会被添加到VT1-J2这张表里的),作为外部行,生成虚拟表VT1-J3.
@@ -160,6 +161,189 @@ select对select子句中的元素进行处理,生成VT5表,计算表达式 计�
 如果在查询中指定了DISTINCT子句,则会创建一张内存临时表(如果内存放不下,就需要存放在硬盘了).这张临时表的表结构和上一步产生的虚拟表VT5是一样的,不同的是对进行DISTINCT操作的列增加了一个唯一索引,以此来除重复数据.  
 从VT5-J2中的表中,根据ORDER BY 子句的条件对结果进行排序,生成VT6表.  
 limit子句从上一步得到的VT6虚拟表中选出从指定位置开始的指定行数据.  
+
+### 1.3 MySQL一行记录的存储结构
+1.查看MySQL数据文件的存放路径  
+`show variables like 'datadir'`  
+```sql
+mysql> SHOW VARIABLES LIKE 'datadir';
++---------------+-----------------+
+| Variable_name | Value           |
++---------------+-----------------+
+| datadir       | /var/lib/mysql/ |
++---------------+-----------------+
+1 row in set (0.00 sec)
+```
+
+我们每创建一个database数据库,都会在该目录下创建一个以database为名的目录,然后表结构和表数据文件都会存放在这个目录下.  
+现在创建一个库my_test,该database里有一张名为t_order的表  
+cd 进入/var/lib/mysql/my_test目录,查看结构  
+```shell
+[root@xiaolin ~]#ls /var/lib/mysql/my_test
+db.opt  
+t_order.frm  
+t_order.ibd
+```
+* db.opt:用来存储当前数据库的默认字符集和字符校验规则  
+* t_order.frm:该文件用于保存表结构文件,在MySQL中每建立一张表都会生成一个.frm文件,该文件是用来保存每个表的元数据信息的,主要包含表结构定义  
+* t_order.ibd:保存t_order表数据的文件,表数据既可以存在共享表空间文件(文件名:ibdata1)里,也可以存放在独占表空间文件(文件名:表名.idb),这个行为是由参数`innodb_file_per_table`控制的,若设置了参数`innodb_file_per_table`为1,则会将存储的数据、索引等信息单独存储在一个独占表空间.MySQL8中该参数默认为1  
+
+2.表空间文件的结构  
+<font color="#00FF00">表空间由段(segment)、区(extend)、页(page)、行(row)组成</font>innodb存储引擎的逻辑结构大致如下:  
+![表空间结构](resources/mysql/30.png)  
+
+* 行(row):数据库表中的记录都是按行(row)进行存放的,每行记录根据不同的行格式,有不同的存储结构  
+* 页(page):记录是按照页存储的,但是数据的读取不以行为单位,否则每次读取数据(一次I/O)只能处理一行数据,效率十分低下.  
+  <font color="#00FF00">innodb的数据是以页为单位来读写的</font>,即读取的数据是按照页来读取放入内存的buffer pool  
+  默认每个页的大小为16KB,也就是最多能保证16KB的连续存储空间  
+  数据表中的记录存放在内存中buffer pool的数据页中  
+  查看:4.日志=>4.3buffer pool
+* 区(extent):  
+  innodb存储引擎是通过B+树来组织数据的  
+  B+树中每一层的数据都是通过双向链表组织起来的,如果是以页为单位来分配存储空间,由于链表中相邻两个页之间的物理位置可能不是连续的,可能离地非常远就会导致大量的随机IO,从而导致性能的下降.  
+  解决方式是让链表中相邻的两个页面分配在连续的磁盘上的位置也相邻  
+  <font color="#00FF00">在表数据量很大的情况下,为索引分配空间的时候就不再按照页为单位进行分配了,而是按照区为单位进行分配.每个区的大小为1M,可以容纳64个16KB的页面,这样就使得链表中相邻的页的物理位置也相邻,就能使用顺序I/O了</font>  
+* 段(segment):  
+  <font color="#FF00FF">表空间是由各个段组成的</font>,段是由多个区(extent)组成的,段一般分为数据段、索引段和回滚段等.(也就是说段也能再分,由不同的段再分为不同的区)  
+  * 索引段:存放B+树的非叶子节点的<font color="#FF00FF">区</font>的集合  
+  * 数据段:存放B+树的叶子节点的<font color="#FF00FF">区</font>的集合
+  * 回滚段:存放的是回滚数据的区的集合
+
+3.innodb的行格式有哪些  
+行格式(row_format)就是一条记录的存储结构  
+innodb提供四种行格式:Redundant、Compact、Dynamic和Compressed  
+* Redundant:没人用不介绍  
+* Compact:一种紧凑的行格式,目的是为了让一个数据页能放入更多的行记录;解决Redundant格式不紧凑的问题  
+* Dynamic和Compressed:都是紧凑行格式,它们的行格式都和Compact差不多,都是基于Compact的改进,自MySQL5.7之后默认使用Dynamic  
+
+4.Compact行格式  
+![compact行格式](resources/mysql/31.png)  
+<font color="#00FF00">一条完整的记录分为:记录的额外信息和记录的真实信息</font>  
+
+**<font color="#FFC800">记录的额外信息:</font><font color="#FF00FF">变长字段长度列表、null值列表、记录头信息</font>**  
+
+**变长字段长度列表:**  
+varchar是可变长度,所以在存储varchar型数据的时候,不仅要存储数据内容本身也要存储数据的长度信息,这个长度信息就存储在**变长字段长度列表**中,读取的时候就通过**变长字段长度列表**去读取对应长度的数据.TEXT、BLOB的实现方式也是如此.  
+假设这里t_user表的结构如下,其中name和phone都是可变字符串:  
+```sql
+CREATE TABLE `t_user` (
+  `id` int(11) NOT NULL,
+  `name` VARCHAR(20) DEFAULT NULL,
+  `phone` VARCHAR(20) DEFAULT NULL,
+  `age` int(11) DEFAULT NULL,
+  PRIMARY KEY (`id`) USING BTREE
+) ENGINE = InnoDB DEFAULT CHARACTER SET = ascii ROW_FORMAT = COMPACT;
+```
+现在t_user表里有这三条记录:  
+![表记录](resources/mysql/32.png)  
+
+* 第一条记录:  
+  name列的值为a,真实数据占用的字节数是1字节,十六进制0x01  
+  phone列的值为123,真实数据占用的字节数是3字节,十六进制0x03  
+  age列和id列不是变长字段,所以这里不用管  
+
+> 存放在变长字段列表中真实数据长度的信息会按照<font color="#00FF00">逆序存放</font>,所以变长字段长度列表中的内容是03 01 而不是01 03  
+
+![变长字段长度列表](resources/mysql/33.png)  
+
+* 第二条记录中变长字段长度列表的值是04 02,如图:  
+  ![变长字段长度列表](resources/mysql/34.png) 
+
+* 第三条记录中phone列的值是null,<font color="#00FF00">NULL是不会存放在行格式中记录的真实数据部分里的</font>,所以变长字段长度列表是不存放null的变长字段长度的  
+  ![变长字段长度列表](resources/mysql/35.png)
+
+> 为什么变长字段长度列表中的信息要逆序存放?  
+> 主要是因为,<font color="#FFC800">记录头信息</font>中指向下一条记录的指针,指向的是下一条记录的<font color="#FFC800">记录头信息</font>和<font color="#FFC800">真实数据</font>.好处是向左读就是记录头信息,向右读就是真实数据,比较方便.  
+> 这样在读取的时候,记录头指针往前左读到的第一个长度就是记录头指针往右读到的第一个变长字段的长度;使得位置靠前的记录的真实数据和数据对应的字段长度信息可以同时在一个CPU Cache Line中,这样就可以提高CPU Cache的命中率.  
+
+*提示:并不是所有表的行格式都有变长字段长度列表这条数据的;当数据列表没有变长字段的时候,比如全部都是int类型的字段,这时候表里的行格式就不会有变长字段长度列表了*  
+
+**null值列表:**  
+在Compact的行组织格式下,并不会把null值存放到记录的真实数据中,因为这样会比较浪费空间,所以Compact组织方式把列的null值存放到null值列表中.  
+如果允许列为null值(只要有一个允许为null后面的规则就生效),则每个列对应一个二进制位(bit),二进制位按照列的顺序逆序排列.  
+* 二进制位的值为1时,代表该列的值为null  
+* 二进制位的值为0时,代表该列的值不为null  
+
+*提示:NULL值列表必须用整数个字节的位表示(1字节8位),如果使用的二进制位个数不足整数个字节,则在字节的高位补0*  
+还是以刚才的t_user表为例子:  
+![t_user](resources/mysql/32.png)  
+* 第一条记录:  
+  ![null](resources/mysql/36.png)  
+  但是innodb是用整数字节的二进制来表示null值列表的,现在不足8位所以最高位要补0,最终的二进制表示如下:  
+  ![二进制表示](resources/mysql/37.png)  
+  对于第一条数据,null值列表用十六进制表示是0x00  
+* 第二条记录:  
+  age列是null值,所以对于第二条记录,null值列表用十六进制表示是0x04  
+  ![null值列表](resources/mysql/38.png)
+* 第三条记录:  
+  phone和age值都是null,所以第三条记录的null值列表的十六进制表示是0x06  
+  ![null值列表](resources/mysql/39.png)  
+
+小总结:  
+![null值列表](resources/mysql/40.png)  
+
+> 每个表都有null值列表吗?  
+> 同可变字段长度列表一样,如果数据库的所有表的字段都定义成not null时,这个时候表的行格式就没有null值列表了  
+> 所以数据库表设计的时候一般推荐将字段设置为not null,这样可以至少节省1字节的空间.  
+
+> null值列表的长度是固定1字节空间吗?如果这样的话,一条记录有9个null值字段,该怎么表示?
+> 实际上null值列表不是固定1个字节,当一条记录有9个字段值都是NULL,那么就会创建2字节空间的<font color="#00FF00">NULL值列表</font>,以此类推  
+
+**记录头信息:**  
+记录头信息中包含的内容很多,这里讲解几个比较重要的  
+* delete_mask:标识此条记录是否被删除(逻辑删除字段);所以MySQL语句并不会真正删除记录,而是将记录的delete_mask标记为1  
+* next_record:下一条记录的位置.从这里可以知道,记录与记录之间是通过链表组织的.在前面我也提到了,指向的是下一条记录的<font color="#FFC800">记录头信息</font>和<font color="#FFC800">真实数据</font>之间的位置;这样做的好处就是是向左读就是记录头信息,向右读就是真实数据.  
+* record_type:表示当前记录的类型,0表示普通记录,1表示B+树非叶子节点记录,2表示最小记录,3表示最大记录.  
+
+**<font color="#FFC800">记录的真实信息隐藏列:</font><font color="#FF00FF">row_id、trx_id、roll_pointer</font>**  
+
+![记录的真实数据](resources/mysql/41.png)  
+
+* row_id:
+  如果我们建表的时候指定了主键或者唯一约束列,那么就没有row_id 隐藏字段了.如果既没有指定主键,又没有唯一约束,那么InnoDB就会为记录添加row_id隐藏字段,row_id不是必需的,占用6个字节.  
+* trx_id:
+  事务的id,表示这个数据是由哪个事务生成的.trx_id是必须的,占用6个字节.  
+* roll_pointer:
+  这条记录的上一个版本的指针.roll_point是必须的,占用7个字节.  
+
+5.varchar(n)中n的取值最大是多少  
+<font color="#00FF00">MySQL规定除了TEXT、BLOBS这种大对象类型之外,其它所有的列(不包括隐藏列(<font color="#FFC800">特指不包括row_id、trx_id、roll_pointer</font>)和记录头信息列)占用的字节长度加起来不能超过65535个字节</font>  
+也就是说,一行记录除了TEXT、BLOBs类型的列,限制最大为65535字节,注意是一行的总长度,不是一列.  
+varchar(n)中的n代表的是最多存储的字符数量,并不是字节大小.  
+其次要算varchar(n)最大允许存储多少字节数,还要取决于数据库表的字符集,因为字符集代表1个字符要占用多少字节,比如ASCII字符集,1个字符占用1字节,那么varchar(100)就代表最大允许存储100个字节.  
+
+**单字段的情况:**  
+现在我们清楚,一行记录最大能存储65535字节的数据,那假设数据库只有一个varchar(n)类型的列且字符集是ASCII,在这种情况下varchar(n)中n最大取值是65535吗?  
+现在我们就创建一个表,它只有一个字段且类型是varchar(65535);结果是创建失败.  
+原因是,一行记录的最大字节数65535,其实是包含<font color="#FF00FF">变长字段长度列表</font>和<font color="#FF00FF">null值列表</font>所占用的字节数.所以计算varchar(n)中n的最大值时要减去这两个列表占用的长度.  
+
+> null值列表占用多少字节?  
+> 之前说过null值列表最少需要1字节.  
+
+> 变长字段长度列表占用多少字节?  
+> <font color="#00FF00">变长字段长度列表</font>占用的字节数= 所有<font color="#00FF00">变长字段长度</font>占用的字节数之和  
+> 那么<font color="#00FF00">变长字段长度</font>占用多少字节数呢?  
+> * 条件一:如果变长字段允许存储的最大字节数小于等于255字节,就会用1字节表示<font color="#00FF00">变长字段长度</font>  
+> * 条件二:如果变长字段允许存储的最大字节数大于255字节,就会用2字节表示<font color="#00FF00">变长字段长度</font>  
+> 
+> 由于这里字段类型是varchar(65535),字符集是ASCII,所以代表变长字段允许存储的最大字节数是65535,符合条件二,所以会用2字节来表示<font color="#00FF00">变长字段长度</font>  
+
+<font color="#00FF00">在数据库表只有一个varchar(n)字段且字符集是ascii的情况下,varchar(n)中n最大值=65535 - 2 - 1 = 65532</font>  
+
+*提示:如果是UTF-8字符集,一个字符最多需要三个字节,varchar(n)的n最大取值就是65532/3 = 21844*  
+
+**多字段的情况:**  
+<font color="#00FF00">如果有多个字段的话,要保证所有字段的长度 + 变长字段字节数列表所占用的字节数 + NULL值列表所占用的字节数 <= 65535</font>  
+
+6.行溢出后,MySQL是怎么处理的  
+MySQL中磁盘与内存交互的基本单位是页,一个页的大小一般是16KB,也就是<font color="#00FF00">16384字节</font>,而一个varchar(n)类型的列最多可以存储<font color="#00FF00">65532字节</font>,一些大对象例如TEXT、BLOB可能存储更多的数据,这是一个页可能就存不了一条记录;这个时候就会发生行溢出,多的数据就会存到另外的<font color="#00FF00">溢出页</font>中  
+当发生行溢出时,在记录的真实数据处只会保存该列的一部分数据,而把剩余的数据放在<font color="#00FF00">溢出页</font>中,然后真实数据处用<font color="#00FF00">20字节存储指向溢出页的地址</font>,从而可以找到剩余数据所在的页.大致如下图所示:  
+![行溢出](resources/mysql/42.png)  
+上面这个是Compact行格式在发生行溢出后的处理.  
+
+Compressed和Dynamic这两个行格式和Compact非常类似,主要的区别在于处理行溢出数据时有些区别.  
+这两种格式采用完全的行溢出方式,记录的真实数据处不会存储该列的一部分数据,只存储20个字节的指针来指向溢出页.而实际的数据都存储在溢出页中,看起来就像下面这样:  
+![行溢出](resources/mysql/43.png)  
 
 
 
@@ -687,7 +871,7 @@ Time3阶段时事务B处于阻塞状态;因为事务B无法获取插入间隙锁
 
 **1.undo日志是如何保证原子性的?**  
 undo日志在事务执行过程中,都记录下回滚时需要的信息到一个日志里,那么事务执行中途发生了MySQL崩溃后就利用该日志进行回滚.
-![undo日志工作原理](resources/mysql/5.webp)
+![undo日志工作原理](resources/mysql/5.png)
 
 每当InnoDB引擎对一条记录进行操作(修改、删除、新增)时,要把回滚时需要的信息都记录到undo log里,比如:  
 * 在插入一条记录时,要把这条记录的主键值记下来,这样之后回滚时只需要把这个主键值对应的记录删掉就好了.
