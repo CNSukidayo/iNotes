@@ -7,6 +7,7 @@ C.实战篇
 **目录:**  
 1.10大数据类型  
 2.Redis持久化  
+3.Redis事务  
 
 **附录:**  
 A.Redis基本环境搭建  
@@ -172,6 +173,8 @@ public class Stream{
 2.1 总体介绍  
 2.2 RDB  
 2.3 AOF  
+2.4 RDB+AOF混合持久化  
+2.5 纯缓存模式  
 
 
 ### 2.1 总体介绍  
@@ -256,12 +259,17 @@ Redis会在后台异步进行快照操作,<font color="#FFC800">不阻塞</font>
 #### 2.2.6 RDB修复命令
 查看:基础篇=>附录=>A.Redis基本环境搭建=>4.安装文件说明=>redis-check-rdb  
 **作用:**  
-`redis-check-rdb [file.rbd]` 修复破损的RDB文件  
+`redis-check-rdb [file.rbd]` 修复破损的RDB文件(需要来到file.rbd文件所在路径下执行该命令)  
 
 ### 2.3 AOF
 **目录:**  
 2.3.1 基本介绍  
 2.3.2 AOF文件的持久化流程  
+2.3.3 多AOF持久化文件  
+2.3.4 修复AOF文件  
+2.3.5 AOF的优势  
+2.3.6 AOF的劣势  
+2.3.7 AOF的重写机制  
 
 #### 2.3.1 基本介绍
 1.基本介绍
@@ -273,6 +281,13 @@ Redis会在后台异步进行快照操作,<font color="#FFC800">不阻塞</font>
 
 3.持久化文件名称  
 默认aof的持久化文件名称为:appendonly.aof  
+`appendfilename [fileName(default="appendonly.aof")]`  设置AOF持久化文件的名称  
+
+4.持久化文件路径  
+`appenddirname [dir(default="appendonlydir")]` 设置AOF持久化文件的路径;  
+注意该路径最终的效果是`dir`+`appenddirname`;也就是说会在配置文件`dir`的目录下的`appenddirname`目录下创建aof文件.  
+查看:基础篇=>附录=>A.Redis基本环境搭建=>5.redis.conf
+
 
 #### 2.3.2 AOF文件的持久化流程
 *提示:AOF只记录Redis的增删改操作不记录查询操作*  
@@ -282,6 +297,7 @@ Redis会在后台异步进行快照操作,<font color="#FFC800">不阻塞</font>
 2.Redis服务器产生的AOF日志内存并不是实时写回到AOF文件中,而是先写入一个**AOF缓冲区**,它就类似MySQL中的日志,MySQL中的日志也不是实时写入磁盘中,也是写入一个内存的缓冲区中.所以AOF缓冲区也是Redis在内存中开辟的一块区域  
 
 3.写入到AOF缓冲区的AOF日志文件会有三种不同的策略来刷盘  
+策略的设置见:基础篇=>附录=>A.Redis基本环境搭建=>5.redis.conf  
 
 * always:同步写回,每个写命令执行完立刻同步地将日志写回磁盘(很安全但是性能不高)  
 * everysec(默认):每秒写回,每隔一秒将AOF缓冲区的内容写入刷盘
@@ -294,9 +310,114 @@ Redis会在后台异步进行快照操作,<font color="#FFC800">不阻塞</font>
 
 5.Redis重启时根据AOF文件恢复数据  
 
+#### 2.3.3 多AOF持久化文件
+*高版本使用多AOF文件持久化策略*  
+现在一个AOF文件由三个文件构成即:appendonly.aof.1.base.rdb、appendonly.aof.1.incr.aof、appendonly.aof.manifest;当然文件的名称还是通过`appendfilename`来指定  
+* base:表示基础AOF,它一般由子进程通过重写产生,该文件最多只有一个  
+* incr:表示增量AOF,它一般会在AOFRW开始执行时被创建,该文件可能存在多个(一般Redis的写操作会持久化到该文件里)  
+* history:表示历史AOF,它由base和incr AOF变化而来,每次AOFRW成功完成时,本次AOFRW之前对应的base和incr AOF都将变为history,history类型的AOF会被Redis删除.  
+
+为了管理这些AOF,引入了一个manifest(清单)文件来跟踪、管理这些AOF.同时,为了便于AOF备份和拷贝,我们将所有的AOF文件和manifest文件放入一个单独的文件目录中,目录名由`appenddirname`来决定.  
+
+#### 2.3.4 修复AOF文件  
+来带AOF持久化文件的路径下,ls查看当前路径下有哪些文件:  
+```shell
+ls
+appendonly.aof.1.base.rdb  appendonly.aof.1.incr.aof  appendonly.aof.manifest
+```
+其中写Redis的语句会被保存到appendonly.aof.1.incr.aof文件内,再次提醒AOF文件不会记录Redis查询操作.实际上可以直接通过vim命令来编辑该文件,里面存放的就是一条条写入Redis的语句.  
+
+1.现在模拟Redis错误写入  
+在`appendonly.aof.1.incr.aof`文件的末尾随便加上一段乱码字符,然后关闭Redis;  
+再次重启Redis会发现在AOF文件错误的情况下(假设现在不使用RDB文件)Redis服务器根本无法启动.  
+
+2.修复AOF文件  
+查看:基础篇=>附录=>A.Redis基本环境搭建=>4.安装文件说明=>redis-check-aof  
+**作用:**  
+`redis-check-aof --fix [filePath]` 修复破损的AOF文件  
+* `filePath`:修复的文件路径
+
+**举例:**  
+`redis-check-aof --fix appendonly.aof.1.incr.aof` 一般修复就是修复`appendonly.aof.1.incr.aof`这个文件,注意一定要来到`appendonly.aof.1.incr.aof`文件所在的目录下执行该命令 
+
+#### 2.3.5 AOF的优势  
+* 使用AOF的Redis更加持久:  
+  通过`appendfsync`配置来指定不同的fsync策略,如由操作系统决定刷盘、每秒刷盘、每次写入时刷盘.使用每秒fsync的默认策略,写入性能依旧很棒.fsync是使用后台线程执行的,当没有fsync正在进行时,主线程将努力执行写入,因此最多只会丢失一秒钟的写入.  
+* AOF日志文件是追加写入(append),所以不会造成大量的随机磁盘I/O;即使出现某种原因使得写日志出现问题,也可以通过`redis-check-aof `工具来修复AOF文件.  
+* 当AOF变得太大时,Redis能够在后台自动重写AOF,重写是完全安全的,因为当Redis继续附加到旧文件时,会使用创建当前数据集所需的最少操作集生成一个全新的文件,一旦第二个文件准备就绪,Redis就会切换两者并开始附加到新的哪一个(没读懂)  
+* AOF以易于理解和解析的格式依次包含所有操作的日志,您甚至可以轻松导出AOF文件.例如,即使您不小心使用该FLUSHALL命令刷新了所有内容,只要在此期间没有执行日志重写,仍然可以通过停止服务器、删除最新命令并重新启动Redis来恢复数据.  
+
+#### 2.3.6 AOF的劣势  
+* AOF文件通常比相同数据集的等效RDB文件大  
+* 根据确切的fsync策略,AOF可能比RDB慢.一般来说,将fsync设置为每秒写的性能依然非常高,并且在禁用fsync的情况下,即使在高负载下它也应该与RDB一样快.即使在巨大的写入负载的情况下,RDB仍然能够提供关于最大延迟的更多保证.(<font color="#00FF00">AOF运行效率慢于rdb,每秒fsync同步策略效率较高,不同步(交由操作系统刷盘)的效率和rbd相同</font>)  
+
+#### 2.3.7 AOF的重写机制
+*提示:重写是用于瘦身AOF文件过大而提出的,在2.3.5 AOF的优势的第三点提到过,这里做进一步说明*  
+**介绍:**  
+由于AOF持久化是Redis不断将写命令记录到AOF文件中,随着Redis不断的进行,AOF文件会越来越大这会导致服务器占用内存越大以及AOF恢复时间变长.  
+为了解决这个问题,Redis新增了重写机制,当AOF文件的大小超过所设定的峰值时,Redis就会自动启动AOF文件的压缩机制,只保留可以恢复数据的最小数据集.  
+或者手动使用`bgrewriteaof`命令来重写  
+
+**重写的时机:**  
+基础篇=>附录=>A.Redis基本环境搭建=>5.redis.conf=>`auto-aof-rewrite-percentage`和`auto-aof-rewrite-min-size`配置  
+首先配置文件的小写必须满足`auto-aof-rewrite-min-size`的要求,其次本次文件校上次文件膨胀的比例达到`auto-aof-rewrite-percentage`之后才会触发重写.  
+
+**什么叫保留最小数据集?**  
+例如:  
+```shell
+set k1 v1
+set k1 v2
+set k1 v3
+```
+表面上是三条命令,实际上最终的效果只有`set k1 v3`这一条命令.  
+所以只需要保存`set k1 v1`这一条命令即可  
+当然也包括删除过期的Key等等;就是想办法瘦身  
+
+**AOF重写流程:**  
+*实验环境:将`aof-use-rdb-preamble`混合模式设置为no*  
+最开始的时候`appenddirname`目录下有这三个文件`appendonly.aof.1.base.aof  appendonly.aof.1.incr.aof appendonly.aof.manifest`注意这里的文件和之前是不一样的(之前的base文件是rdb文件,这里是aof文件),`appendonly.aof.1.base.aof  appendonly.aof.1.incr.aof`这两个文件的大小都是0;现在开始往Redis中添加添加内容,随着添加的过程,appendonly.aof.1.incr.aof会慢慢膨胀;直到该文件大小膨胀到`auto-aof-rewrite-min-size`指定的大小时;再次查看目录下的文件有`appendonly.aof.2.base.aof  appendonly.aof.2.incr.aof appendonly.aof.manifest`表明此时AOF文件已经<font color="#00FF00">重写</font>过了  
+`appendonly.aof.manifest`文件的大小是不变的,两个文件名本来为1的变为2了,并且appendonly.aof.2.incr.aof的<font color="#00FF00">大小变为0</font>;appendonly.aof.2.base.aof中的内容是刚才appendonly.aof.1.incr.aof文件瘦身后的内容.  
+以此类推,如果`appendonly.aof.2.incr.aof`文件达到了设定的重写大小,并且大小比`appendonly.aof.2.base.aof`的大小膨胀到指定比例时又会发生重写,将文件名2改为3.  
+<font color="#FF00FF">但是重写并不是将appendonly.aof.x.incr.aof文件中的内容进行重写;而是直接读取服务器现有的键值对,然后用一条命令去代替之前记录这个键值对的多条命令,生成一个新的appendonly.aof.x+1.base.aof文件去代替原来的AOF文件</font>
+
+**手动重写:**  
+通过`bgrewriteaof`命令手动重写AOF文件  
+
+**AOF的整体小总结:**  
+![aof小总结](resources/redis/6.png)  
+
+### 2.4 RDB+AOF混合持久化
+1.AOF和RDB同时共存  
+AOF和RDB能够同时共存,默认AOF是不开启的;<font color="#00FF00">如果AOF开启,则在Redis启动阶段会优先加载AOF</font>  
+所以AOF默认不开启,一旦开启就以AOF优先  
+
+2.如果同时开启RDB和AOF文件,启动时只会加载AOF不会加载RDB  
+![AOF和RDB的加载时机](resources/redis/7.png)  
+
+3.选哪个?  
+*提示:这里实际上是做一个小总结,具体的选择还是根据RDB和AOF的优缺点来考量*  
+* RDB持久化方式能够在指定的时间间隔能对你的数据进行快照存储  
+* AOF持久化方式记录每次对服务器写的操作,当服务器重启的时候会重新执行这些命令来恢复原始的数据,AOF命令以redis协议追加保存每次写的操作到文件末尾.
+
+<font color="#FF00FF">推荐还是使用混合的方式使用</font>  
+
+通过`aof-use-rdb-preamble yes`配置来开启混合模式  
+
+**结论:**  
+RDB镜像做全量持久化,AOF做增量持久化  
+先使用RDB进行快照存储,然后使用AOF持久化记录所有的写操作,当重写策略满足或手动触发重写策略时,<font color="#00FF00">将最新的数据存储为RDB记录.</font>这样的话,重启服务器的时候会从RDB和AOF两部分恢复数据,即保证数据的完整性又提高了数据的恢复性能.简单来说:混合持久化方式产生的文件一部分是RDB格式,一部分是AOF格式-><font color="#00FF00">AOF包括了RDB头部+AOF混写</font>.  
+![混合模式](resources/redis/8.png)  
 
 
+### 2.5 纯缓存模式
+**介绍:**  
+通过关闭RDB和AOF的方式,进一步提高Redis的性能(至于如何持久化那不需要Redis考虑).这就是纯缓存模式  
+关闭Redis持久化实际上分为两个步骤:关闭RDB、关闭AOF  
+通过redis.conf文件中设置`save ""`关闭rdb  
+通过redis.conf文件中设置`appendonly no`关闭aof  
 
+## 3.Redis事务
+**目录:**  
 
 
 ## 附录:  
@@ -364,10 +485,16 @@ B.Redis命令大全
 * `maxmemory [bytes]` 设置Redis最大内存限制;如果达到该限制则Redis会尝试清除已经过期的或即将过期的Key;如果清除过后还是不够则Redis将不允许写入,但允许读取;不过现在的Redis会将Key放入内存,将value放入swap(交换区)  
 * `appendonly [yes|no(default)]` 设置Redis是否每次更新数据都写入日志文件;如果设置成yes会造成性能损耗;如果设置成false则由于Redis默认持久化策略是按照上面的`save`策略来保证的;就可能导致Redis宕机时部分数据丢失.  
 * `appendfilename "[fileName(default=appendonly.aof)]"` 指定更新日志文件名  
+* `appenddirname "[filePath(default=appendonlydir)]"` 指定AOF文件的存放路径;注意存放路径是`dir`+`appenddirname`拼接的路径.而`dir`路径下直接存放的是rbd持久化文件
 * `appendfsync [no|always|everysec(default)]` 指定更新日志文件条件;这里和MySQL中持久化是一样的,持久化文件不是直接刷盘,而是写入到内存中的缓冲区;只有当系统调用fsync()时才会真正刷盘(见基础篇=>2. Redis持久化=>2.3 AOF=>2.3.2 AOF文件的持久化流程)
   * no:表示等操作系统进行数据缓存同步到磁盘(块)
   * always:表示每次更新操作后手动调用fsync()将数据写到磁盘(慢,安全)
   * everysec:表示每秒同步一次(折中,默认值)
+* `auto-aof-rewrite-percentage [percent(default=100)]` 当前文件距离上次重写后碰撞[percent倍]才执行重新  
+* `auto-aof-rewrite-min-size [fileSize(default=64mb)]` 重写时满足的文件大小  
+  **注意:** 这里auto-aof-rewrite-percentage和auto-aof-rewrite-min-size是<font color="#00FF00">与</font>的关系,只有这两个同时满足才会触发重写.  
+* `aof-use-rdb-preamble [yes(default)|no]` 是否采用aof-rdb持久化日志的混合模式
+* `no-appendfsync-on-rewrite [yes|no(default)]` aof重写期间是否允许编写aof
 * `activerehashing [yes(default)|no]` 指定是否激活重置哈希  
 * `include [filePath]` 指定包含其它的配置文件,可以在同一主机上多个redis实例之间使用同一份配置文件,而同时各个实例又拥有自已的特定配置文件
 
@@ -745,6 +872,9 @@ B.Redis命令大全
 * `config get [propertiesKey]` 获取系统配置  
   * `propertiesKey`(必填):配置文件的key  
 * `lastsave` 获取最后一次备份的时间戳  
+* `bgrewriteaof` 手动重写AOF  
+* `bgsave` 创建一个子进程持久化写入rdb文件
+* `save` 阻塞持久化rdb文件(不推荐使用该命令)
 
 # 高级篇
 
