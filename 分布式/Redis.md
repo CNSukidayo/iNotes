@@ -418,6 +418,194 @@ RDB镜像做全量持久化,AOF做增量持久化
 
 ## 3.Redis事务
 **目录:**  
+3.1 什么是Redis的事务  
+3.2 用法总结  
+
+
+### 3.1 什么是Redis的事务
+*提示:个人感觉Redis事务的说法有点歧义,其实Redis的事务和传统数据库的事务差别还是很大的,因为Redis只支持单线程,所以多线程中的那些问题并不会发生在Redis上,称之为<font color="#00FF00">Redis命令队列更合适</font>*  
+
+**介绍:**  
+首先Redis是单线程的,每次只能保证一个提交到Redis;所以Redis中的单命令天生就是原子性的.Redis的事务很大程序上说的是Redis事务的原子性(也不是全部),即Redis可以一次性执行多个命令,<font color="#00FF00">本质是一组命令的集合</font>,<font color="#FF00FF">在执行这组命令的时候不允许别的命令插队</font>.  
+虽然单命令是原子性的,但是多个不同的命令直接实际上并不能保障它们的执行顺序,通过Redis的事务可以解决这个问题;它的本质实质上就是,客户端每次向Redis提交命令的时候提交的是一个<font color="#00FF00">队列</font>,这个队列中可以有很多命令,<font color="#FF00FF">即Redis执行的最小单元是队列</font>,只提交一个命令给Redis服务器相当于提交了一个只有一个命令的队列供Redis执行,而队列之间的执行顺序Redis是无法保障的.  
+大概的示意图:  
+![Redis事务](resources/redis/9.png)  
+<font color="#FFC800">一个队列中一次性、顺序性、排他性的执行一系列命令</font>  
+
+Redis事务VS传统数据库的事务:  
+* 单独的隔离操作:Redis实质上没有什么隔离性的说法  
+* 原子性:Redis也没有什么原子性的说法,关于一个队列中如果有命令执行失败的情况,详情见=>3.2 用法总结  
+
+**开启事务(队列)**  
+`multi` 开启一个事务  
+`exec` 提交事务
+```shell
+multi #开启事务
+
+command0
+
+command1
+
+command2
+
+exec #提交事务
+```  
+
+### 3.2 用法总结
+1.正常执行  
+```shell
+multi #开启事务
+
+command0
+
+command1
+
+command2
+
+exec #提交事务
+```  
+
+2.放弃事务  
+`discard` 命令放弃事务  
+```shell
+multi #开启事务
+
+command0
+
+command1
+
+discard #放弃事务,command0和command1丢弃
+
+```
+
+3.全部失败  
+*如果在一个事务还没有exec之前就执行了一条错误的Redis命令,那么当执行exec的时候整个事务(队列)中的命令都不会执行成功*  
+```shell
+multi #开启事务
+
+set k1 v1 #正常命令语法
+
+set k2 v2 #正常命令语法
+
+set k3 #不正常的命令语法
+
+exec #执行事务,报错:整个队列中的命令全部不执行
+
+```
+
+4.成功的成功,失败的失败  
+*如果一个Redis事务中命令的语法检查都是正确的,但是执行时候出现错误了,那么在这个事务中不会造成所有命令全部执行失败,而是能够成功的就成功执行,不能成功的才报错.*  
+```shell 
+multi #开启事务
+
+set k1 v1 #正常命令语法,能够执行成功
+
+set k2 v2 #正常命令语法,能够执行成功
+
+incr email #正常命令语法,不能执行成功(email不是数字)
+
+set k3 v3 #正常命令语法,能够执行成功
+
+exec #执行事务
+
+```
+
+结果:
+```shell
+ok
+ok
+error
+ok
+```
+
+5.watch监控  
+`watch [key0] [key1]...` 监控多个key  
+Redis使用watch来提供乐观锁,如果在Redis事务执行exec之前watch的key发生了修改则当前事务中的所有命令都不会生效.  
+`unwatch` 取消当前连接的监控的所有key  
+
+**锁的释放时机:**  
+* `unwatch`  
+* 一旦执行了exec之前加的监控锁都会被取消
+* 当客户端连接丢失的时候(比如退出连接),该连接监控的所有锁都会被取消监控
+
+redis是单线程的,为什么会有乐观锁的说法?  
+<font color="#00FF00">原因在于Redis的watch命令是执行在事务multi之前的</font>;看例子(括号的数字表示执行的顺序):  
+
+客户端1:
+```shell
+set k1 v1 #初始数据的环境(1)
+
+set balance 100 #初始数据的环境(2)
+
+watch balance #开启key监控(3)
+
+multi #开启事务(5)
+
+set balance 200 #队列中的一条命令(5)
+
+set k1 v1111111 ##队列中的一条命令(5)
+
+exec #提交事务(5)
+
+get balance
+
+get k1
+
+```
+
+客户端2:
+```shell
+set balance 300 #修改balance的值(4)
+```
+
+执行结果:
+```shell
+300
+v1
+```
+
+**解释:**  
+是的,Redis是单线程的没错;但之前说过Redis不能保证每个队列之间的执行顺序,坏就坏在watch命令与multi命令不在一个队列中;于是乎导致客户端1的乐观锁失效,导致客户端1的整个事务执行失败.  
+
+`unwatch`命令也是在`multi`之前执行的,例如:  
+
+客户端1:
+```shell
+set k1 v1 #初始数据的环境(1)
+
+set balance 100 #初始数据的环境(2)
+
+get balance #结果为100(3)
+
+watch balance #开启key监控(4)
+
+unwatch #解除所有watch(7)
+
+multi #开启事务(8)
+
+set balance 300 #队列中的一条命令(8)
+
+set k1 v1111111 ##队列中的一条命令(8)
+
+exec #提交事务(8)
+
+get balance
+
+get k1
+```
+
+客户端2:
+```shell
+set balance 200 #修改balance(5)
+
+get balance #结果为200(6)
+```
+
+执行结果:  
+```shell
+300
+v1111111
+```
 
 
 ## 附录:  
@@ -518,7 +706,8 @@ B.Redis命令大全
 9.GEO类型相关  
 10.Stream类型相关  
 11.BitField类型相关  
-12.其它  
+12.事务相关  
+A.其它  
 
 #### 1. key相关
 * `keys *` 查看当前库所有key  
@@ -868,7 +1057,13 @@ B.Redis命令大全
   * `offset`(自增):从哪里开始增加
   * `increment`(必填):自增的步长  
 
-#### 12. 其它
+#### 12.事务相关  
+* `mulit` 开启事务
+* `exec` 执行事务
+* `discard` 取消事务,放弃执行事务块内的所有命令  
+* `watch [key0] [key1]...` 监视一个或多个Key,如果在事务执行之前这些Key被其他命令所改动,那么事务将被打断.  
+
+#### A. 其它
 * `config get [propertiesKey]` 获取系统配置  
   * `propertiesKey`(必填):配置文件的key  
 * `lastsave` 获取最后一次备份的时间戳  
