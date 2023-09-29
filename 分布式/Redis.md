@@ -9,6 +9,8 @@ C.实战篇
 2.Redis持久化  
 3.Redis事务  
 4.Redis管道  
+5.Redis发布订阅  
+6.Redis复制机制  
 
 **附录:**  
 A.Redis基本环境搭建  
@@ -653,6 +655,43 @@ hset k3 age 18
 直接运行<font color="#00FF00">linux</font>命令:`cat cmd.txt | redis-cli -a [password] --raw --pipe`  
 * --pipe:就代表使用redis管道  
 
+
+## 5. Redis发布订阅
+**本章知识点了解即可**  
+**目录:**  
+5.1 基本介绍  
+5.2 常用命令  
+5.3 发布订阅的缺点  
+
+
+### 5.1 基本介绍
+1.Redis发布订阅是一种消息通信模式,发送者(publish)发送消息,订阅者(subscribe)接收消息,可以实现进程间的消息传递.  
+说白了就是Redis版的消息中间件  
+
+2.和Stream的区别
+其实Redis发布订阅就是早起的消息中间件,这是因为它不够完善,所以才产生了后来的Stream,所以宁可使用Stream也不会使用这里的发布订阅.<font color="#00FF00">所以本章知识只做了解</font>
+
+3.Redis客户端可以订阅任意数量的频道,类似于微信公众号  
+![订阅](resources/redis/12.png)  
+当有新的消息发送到某个频道的时候,所有的client就可以接受到该消息.  
+![消息](resources/redis/13.png)  
+
+![消息队列](resources/redis/14.png)  
+
+### 5.2 常用命令
+* `subscribe [channel0] [channel1]...` 订阅一个或多个频道信息  
+  *提示:频道是不需要创建的,直接订阅就可以了*
+* `publish [channel] [message]` 将[message]发送到指定的[channel] 
+* `psubscribe [pattern]...` 按照模式(pattern的正则表达式)订阅一个或多个频道信息  
+  比如有一个channel的名称为a1,那么这里订阅的时候[pattern]参数可以填写a1,也可以填写a*;说白了就是通过通配符来订阅频道
+* `pubsub [subcommand]` 查看订阅与发布系统状态.[subcommand]处不同的命令有不同的效果 
+* `unsubscribe [channel]` 退订[channel]频道
+* `punsubscribe [pattern]` 退订[pattern]\(正则表达式匹配的频道\)
+
+### 5.3 发布订阅的缺点
+* 发布的消息无法在Redis中做持久化,必须先执行订阅再等待消息发布.如果先发布了消息,则由于消息没有订阅者这条消息就相当于丢失了.  
+* 消息只管发送对于发布者而言消息是即发即失的,不管接收,也没有ACK机制,无法保证消息的消费成功.  
+* 以上的缺点导致Redis的Pub/Sub模式就像个小玩具,在生产环境中几乎无用武之地,为此Redis5.0版本新增了Stream数据结构,不但支持多播,还支持数据持久化,相比pub/Sub更加的强大.
 
 
 
