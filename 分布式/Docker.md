@@ -125,7 +125,8 @@ B. 常用docker镜像大全
 * `docker start [containerId]` 启动一个容器  
 * `docker restart [containerId]` 重启一个容器  
 * `docker container update --mount type=bind,source=[hostPath],target=[containerPath] [containerId]` 挂载已经启动的容器目录(需要先将容器stop);source是宿主机的路径,target是容器内的路径.
-* `docker cp [hostPath] [containerId]:[containerPath]` 将宿主机的文件拷贝到容器中    
+* `docker cp [hostPath] [containerId]:[containerPath]` 将宿主机的文件拷贝到容器中  
+* `docker cp [containerId]:[containerPath] [hostPath]` 将容器中的内容拷贝到宿主机
 
 ### B. 常用docker镜像大全  
 **目录:**  
@@ -188,14 +189,43 @@ docker run -p 7902:6379 --name redis \
 4.设置Redis密码  
 `vim ~/software/redis/conf/redis.conf` 编辑Redis配置文件,设置Redis密码  
 `requirepass [password]` 在配置文件中设置Redis密码  
-`redis-cli -a [password] --raw` 使用密码连接Redis客户局
+`redis-cli -a [password] --raw -h [host] -p [port]` 使用密码连接Redis客户局
 * `-a [password]` 设置密码启动客户端
 * `--raw` 解决中文乱码问题  
+* `-h [host]`(非必填):连接的目标RedisIP  
+* `-p [port]`(非必填):连接的目标Redis的port
 
 **Redis详细配置见:Redis=>B.Redis命令大全=>5.redis.conf**  
 
 5.Redis默认安装路径 /usr/local/bin(可以进入容器中访问)  
 
+6.Redis中sentinel.conf配置文件  
+该配置文件存放的路径应该与redis.conf配置文件中设置的`dir`路径的目录一致;sentinel.conf是Redis负载均衡的配置.  
+如果redis.conf没有指定dir,则将sentinel.conf配置文件放到与redis.conf配置文件相同的目录下.  
+
+7.启动sentinel  
+sentinel的启动和Redis服务的启动是完全不一样的,虽然可以使用同一个镜像来完成  
+```shell
+docker run -p 7903:26379 --name redis-sentinel \
+-v ~/software/redis/data:/data \
+-v ~/software/redis/conf/sentinel.conf:/etc/redis/sentinel.conf \
+-e --sentinel \
+-d redis:7.0 redis-sentinel /etc/redis/sentinel.conf
+```
+**解释:**  
+* -e --sentinel 启动sentinel时需要带上的参数
+
+8.启动集群  
+```shell
+docker run -p 7903:26379 --name redis-sentinel \
+-v ~/software/redis/data:/data \
+-v ~/software/redis/conf/sentinel.conf:/etc/redis/sentinel.conf \
+-e -c \
+-d redis:7.0 redis-sentinel /etc/redis/sentinel.conf
+```
+
+**解释:**  
+* -e -c 代表启动的有路由(这是集群中的概念,详情见Redis.md=>基础篇=>8.Redis集群=>8.3 三主三从集群环境=>8.3.3 主从容错切换迁移案例)
 
 #### 3.Nacos
 1.下载镜像  
