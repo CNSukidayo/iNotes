@@ -9,10 +9,11 @@ C.实战篇
 2.Redis持久化  
 3.Redis事务  
 4.Redis管道  
-5.Redis发布订阅  
+5.~~Redis发布订阅~~(了解)  
 6.Redis主从复制(replica)  
 7.Redis哨兵(sentinel)  
 8.Redis集群(cluster)  
+9.Springboot整合Redis  
 
 **附录:**  
 A.Redis基本环境搭建  
@@ -149,13 +150,13 @@ Redis实际上也可以实现消息中间件的特性,一共有两种方案:
 **结构:**  
 ![Stream结构](resources/redis/3.png)
 
-|        属性        |                                                                                                         解释                                                                                                         |
-| :----------------: | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------: |
-|  Message Content   |                                                                                                       消息内容                                                                                                       |
-|   Consumer Group   |                                                                            消费组,通过XGROUP CREATE 命令创建,同一个消费组可以有多个消费者                                                                            |
-| Last_deliveryed_id |                                                     游标,每个消费组会有一个游标Last_deliveryed_id,任何一个组内成员读取了消息都会使游标Last_deliveryed_id往前移动;<font color="#00FF00">比如一个消费组要消费10条记录,一旦有消费者消费了第1条,那么游标就指向第2条消息</font>                                                     |
-|      Consumer      |                                                                                               消费者,消费组中的消费者                                                                                                |
-|    Pending_ids     | 这是一个数组,用于保存当前组内已经读取过该消息的但还没有ACK确认的消费者的id;如果客户端没有ACK则该数组内的消息id会越来越多,一旦某个记录被ack它就开始减少.它用来确保客户端至少消费了一次,而不会在网络传输的中途丢失处理 |
+|        属性        |                                                                                                          解释                                                                                                          |
+| :----------------: | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------: |
+|  Message Content   |                                                                                                        消息内容                                                                                                        |
+|   Consumer Group   |                                                                             消费组,通过XGROUP CREATE 命令创建,同一个消费组可以有多个消费者                                                                             |
+| Last_deliveryed_id | 游标,每个消费组会有一个游标Last_deliveryed_id,任何一个组内成员读取了消息都会使游标Last_deliveryed_id往前移动;<font color="#00FF00">比如一个消费组要消费10条记录,一旦有消费者消费了第1条,那么游标就指向第2条消息</font> |
+|      Consumer      |                                                                                                消费者,消费组中的消费者                                                                                                 |
+|    Pending_ids     |  这是一个数组,用于保存当前组内已经读取过该消息的但还没有ACK确认的消费者的id;如果客户端没有ACK则该数组内的消息id会越来越多,一旦某个记录被ack它就开始减少.它用来确保客户端至少消费了一次,而不会在网络传输的中途丢失处理  |
 
 个人理解的结构:
 ```java
@@ -1447,6 +1448,332 @@ slot范围:0-16384
 
 4.查看某个键应该放在哪个槽下  
 `cluster keyslot [key]` 查看某个键应该放在哪个槽下 
+
+## 9.Springboot整合Redis
+**目录:**  
+9.1 总体介绍  
+9.2 Jedis  
+9.3 lettuce  
+9.4 RedisTemplate   
+
+
+### 9.1 总体介绍
+1.jedis
+就像java连接数据库一样,java连接Redis也需要一个驱动包;jedis就是java连接Redis的驱动包,地位类似于JDBC中的Connection、Driver、Statement  
+
+2.lettuce  
+就像原生的JDBC不好用一样,出现了lettuce.它相当于jedis的升级版  
+
+3.RedisTemplate(推荐)  
+SpringBoot提供的用于访问Redis的工具;它是基于lettuce的
+
+### 9.2 Jedis 
+**介绍:**  
+jedis client是Redis官网推荐的一个面向java客户端,库文件实现了对各类API进行封装调用.  
+1.引入maven  
+```xml
+<dependency>
+  <groupId>redis.clients</groupId>
+  <artifactId>jedis</artifactId>
+  <version>xxx</version>
+</dependency>
+```
+
+2.创建demo测试类  
+```java
+public class Demo {
+  public static void main(String[] args){
+    // 1 获取connection,指定IP和端口
+    Jedis jedis = new Jedis("192.168.111.185",6379);
+    // 2 指定服务器访问密码
+    jedis.auth("111111");
+    // 3 获得了jedis客户端，可以像jdbc一样，访问我们的redis
+System.out.println(jedis.ping());
+    // keys
+    Set<string> keys = jedis.keys(pattern: "*");
+    System.out.println(keys);
+    // string
+    jedis.set("k3","hello-jedis");
+    system.out.println(jedis.get("k3"));
+    // list
+    jedis.lpush("list","11","13");
+    List<string> list = jedis.lrange("list",0,-1);
+    for (String element : list) {
+      System.out.println(element);
+    }
+  }
+}
+```
+
+### 9.3 lettuce
+1.jedis和lettuce的区别  
+![jedis和lettuce的区别](resources/redis/55.png)  
+主要高并发的情况下需要反复创建和销毁jedis客户端导致性能下降.  
+
+2.引入maven  
+```xml
+<dependency>
+  <groupId>io.lettuce</groupId>
+  <artifactId>lettuce-core</artifactId>
+  <version>xxx</version>
+</dependency>
+```
+
+3.创建demo测试类  
+```java
+public class Demo {
+  public static void main(String[] args){
+    // 1 使用Redis构建器链式编程来builder出RedisURI
+    RedisURI redisUri = RedisURI.builder()
+    .redis("192.168.111.185")
+    .withPort(6379)
+    .withAuthentication("default","111111")
+    .build();
+    // 2 创建连接客户端
+    RedisClient redisClient = RedisClient.create(uri);
+    StateRedisConnection conn = redisClient.connect();
+    // 3 创建操作的command,通过conn创建  
+    RedisCommand commands = conn.sync();
+
+    //========biz==
+    //keys
+    List keys = commands.keys("*");
+    System.out.println(keys);
+    //string
+    commands.set("k5","hello-lettuce");
+    System.out.println(commands.get("k5"));
+    //========biz
+
+    // 4 各种关闭资源
+    conn.close();
+    redisClient.shutdown();
+  }
+}
+```
+
+### 9.4 RedisTemplate  
+**目录:**  
+9.4.1 连接单击  
+9.4.1 连接集群  
+
+
+#### 9.4.1 连接单击
+1.引入maven  
+```xml
+<dependency>
+  <groupId>org.springframework.boot</groupId>
+  <artifactId>spring-boot-starter-data-redis</artifactId>
+</dependency>
+```
+
+2.配置文件yml  
+```yml
+spring:
+  redis:
+    host: localhost # IP
+    port: 6379 # 端口
+    database: 0 # 使用哪个数据库
+    timeout: 1800000
+    password: 111111 # 密码
+    lettuce: # lettuce的连接池
+      pool:
+        max-active: 20 #最大连接数
+        max-wait: -1 #最大阻塞等待时间(负数表示没限制)
+        max-idle: 5    #最大空闲
+        min-idle: 0     #最小空闲
+```
+
+3.编写主启动类  
+
+4.业务类  
+OrderService  
+```java
+@Service
+public class OrderService{
+public static final String ORDER_KEY = "ord:";
+  @Resource
+  private RedisTemplate redisTemplate;
+  public void addorder(){
+    int keyId = ThreadLocalRandom.current().nextInt(bound: 1000)+1;
+    String serialNo = UUID.randomUUID().toString();
+    String key = ORDER_KEY+keyId;
+    String value ="京东订单"+serialNo;
+  redisTemplate.opsForValue().set(key,value);
+  }
+
+  public String getOrder(Integer keyId){
+    return (String)redisTemplate.opsForValue().get(ORDER_KEY + keyId);
+  } 
+
+}
+```
+
+5.controller  
+```java
+public class OrderController{
+  @Resource
+  private OrderService orderService;
+  @ApiOperation("新增订单")
+  @RequestMapping(value ="/order/add",method=RequestMethod.POST)
+  public void addorder(){
+  orderservice.addorder();
+  }
+  @ApiOperation("按照keyId查询订单")
+  @RequestMapping(value = "/order/{keyId}",method=RequestMethod.GET)
+  public String addorder(@PathVariable Integer keyId){
+    return orderService.getOrder(keyId);
+  }
+}
+```
+
+6.不出意外的话就是出意外了  
+现在新增订单没啥问题,但是进入redis中查询数据会出现乱码  
+![序列化问题](resources/redis/56.png)  
+
+7.解决中文序列化问题  
+**方案一:**  
+使用`StringRedisTemplate`替代RedisTemplate;OrderService代码改写如下  
+```java
+@Service
+public class OrderService{
+public static final String ORDER_KEY = "ord:";
+  @Resource
+  private StringRedisTemplate stringRedisTemplate;
+  // ...
+}
+```
+
+**<font color="#00FF00">方案二:(推荐)</font>**  
+为什么使用RedisTemplate会出现乱码问题?  
+![默认的JDK序列化](resources/redis/57.png)  
+使用Spring提供的官方配置  
+```java
+@Configuration
+@EnableCaching
+public class RedisConfig {
+
+    // 使用默认标签做缓存
+    @Bean
+    public KeyGenerator wiselyKeyGenerator() {
+        return (target, method, params) -> {
+            StringBuilder sb = new StringBuilder();
+            sb.append(target.getClass().getName());
+            sb.append(method.getName());
+            for (Object obj : params) {
+                sb.append(obj.toString());
+            }
+            return sb.toString();
+        };
+    }
+
+    // 声明模板
+    /*
+    ref = 表示引用
+    value = 具体的值
+    <bean class="org.springframework.data.redis.core.RedisTemplate" >
+        <property name="defaultSerializer" ref = "">
+    </bean>
+     */
+    //  工具类:
+    @Bean
+    public RedisTemplate<Object, Object> redisTemplate(RedisConnectionFactory redisConnectionFactory) {
+        RedisTemplate<Object, Object> redisTemplate = new RedisTemplate<>();
+        // 设置连接工厂;指定当前RedisTemplate去连接哪个Redis服务器
+        // redisConnectionFactory对象封装了,用户在yml配置文件中填写的RedisIP、端口号等连接信息
+        redisTemplate.setConnectionFactory(redisConnectionFactory);
+        Jackson2JsonRedisSerializer jackson2JsonRedisSerializer = new Jackson2JsonRedisSerializer(Object.class);
+        ObjectMapper objectMapper = new ObjectMapper();
+        objectMapper.setVisibility(PropertyAccessor.ALL, JsonAutoDetect.Visibility.ANY);
+        objectMapper.enableDefaultTyping(ObjectMapper.DefaultTyping.NON_FINAL);
+        jackson2JsonRedisSerializer.setObjectMapper(objectMapper);
+        //  将Redis 中 string ,hash 数据类型,自动序列化！
+        redisTemplate.setKeySerializer(new StringRedisSerializer());
+        redisTemplate.setValueSerializer(jackson2JsonRedisSerializer);
+        redisTemplate.setHashKeySerializer(new StringRedisSerializer());
+        redisTemplate.setHashValueSerializer(jackson2JsonRedisSerializer);
+
+        redisTemplate.afterPropertiesSet();
+        return redisTemplate;
+    }
+
+    @Bean
+    public CacheManager cacheManager(RedisConnectionFactory factory) {
+        RedisSerializer<String> redisSerializer = new StringRedisSerializer();
+        Jackson2JsonRedisSerializer jackson2JsonRedisSerializer = new Jackson2JsonRedisSerializer(Object.class);
+
+        //解决查询缓存转换异常的问题
+        ObjectMapper om = new ObjectMapper();
+        om.setVisibility(PropertyAccessor.ALL, JsonAutoDetect.Visibility.ANY);
+        om.enableDefaultTyping(ObjectMapper.DefaultTyping.NON_FINAL);
+        jackson2JsonRedisSerializer.setObjectMapper(om);
+
+        // 配置序列化(解决乱码的问题),过期时间600秒
+        RedisCacheConfiguration config = RedisCacheConfiguration.defaultCacheConfig()
+                .entryTtl(Duration.ofDays(365))
+                .serializeKeysWith(RedisSerializationContext.SerializationPair.fromSerializer(redisSerializer))
+                .serializeValuesWith(RedisSerializationContext.SerializationPair.fromSerializer(jackson2JsonRedisSerializer))
+                .disableCachingNullValues();
+
+        RedisCacheManager cacheManager = RedisCacheManager.builder(factory)
+                .cacheDefaults(config)
+                .build();
+        return cacheManager;
+    }
+}
+```
+
+#### 9.4.1 连接集群
+*基础环境:启动6台Redis集群*  
+1.改写yml连接Redis集群  
+```yml
+spring:
+  redis:
+    password: 111111 # 密码
+    timeout: 1800000 # 超时时间,单位毫秒
+    cluster: 
+      max-redir: 3 # 获取失败 最大重定向次数
+      nodes: 192.168.111.175:6381,192.168.111.175:6382,192.168.111.172:6383,192.168.111.172:6384,192.168.111.174:6385,192.168.111.174:6386 # 指定集群的所有节点;IP:port 节点之间的配置用逗号隔开
+    lettuce: # lettuce的连接池
+      pool:
+        max-active: 20 #最大连接数
+        max-wait: -1 #最大阻塞等待时间(负数表示没限制)
+        max-idle: 5    #最大空闲
+        min-idle: 0     #最小空闲
+```
+
+2.master宕机后出现问题  
+现在SpringBoot服务启动,和之前一样正常读写;但假设人为宕机master1.按照之前Redis集群的理论,slave1会很快上位并接管master1.此时再linux上用Redis客户端访问一点问题没有.  
+但是现在再拿springboot服务去读写Redis,发现超时异常,<font color="#00FF00">也即默认情况下springboot还是会去找先前的连接,从而导致超时异常</font>  
+<font color="#FF00FF">springboot客户端没有感知到RedisCluster的最新集群信息</font>  
+
+3.<font color="#00FF00">刷新节点集群拓扑动态感应</font>  
+*这是解决方案中官网比较推荐的一种*  
+解决方案:(三选一即可)  
+* 调用RedisClusterClient.reloadPartitions
+* 后台基于时间间隔的周期刷新
+* 后台基于持续的`断开`和`移动`、`重定向`的自适应更新
+
+**修改yml配置文件:**  
+```yml
+spring:
+  redis:
+    password: 111111 # 密码
+    timeout: 1800000 # 超时时间,单位毫秒
+    cluster: 
+      max-redir: 3 # 获取失败 最大重定向次数
+      nodes: 192.168.111.175:6381,192.168.111.175:6382,192.168.111.172:6383,192.168.111.172:6384,192.168.111.174:6385,192.168.111.174:6386 # 指定集群的所有节点;IP:port 节点之间的配置用逗号隔开
+    lettuce: # lettuce的连接池
+      pool:
+        max-active: 20 #最大连接数
+        max-wait: -1 #最大阻塞等待时间(负数表示没限制)
+        max-idle: 5    #最大空闲
+        min-idle: 0     #最小空闲
+      cluster: 
+        refresh:
+          adaptive: true #支持集群拓扑动态感知刷新,自适应拓扑刷新是否使用所有可用的更新,默认false关闭
+          period: 2000 # 定时刷新,单位毫秒
+```
+
 
 ## 附录:  
 A.Redis基本环境搭建  
