@@ -1012,6 +1012,7 @@ master-slave切换后,master_redis.conf、slave_redis.conf、sentinel.conf的内
 8.1 总体介绍  
 8.2 集群算法-分片-槽位slot  
 8.3 3主3从集群环境  
+8.4 小总结  
 
 ### 8.1 总体介绍
 1.为什么引入集群  
@@ -1154,7 +1155,10 @@ Redis哨兵的两个缺陷:一个是选举新slave需要一定时间不能对外
 **目录:**  
 8.3.1 3主3从Redis集群配置  
 8.3.2 启动6台Redis主机实例  
-8.3.3 主从容错切换迁移案例  
+8.3.3 三主三从Redis集群读写  
+8.3.4 主从容错切换迁移案例  
+8.3.5 主从扩容案例  
+8.3.6 主从缩容案例  
 
 
 #### 8.3.1 3主3从Redis集群配置
@@ -1246,7 +1250,7 @@ cluster_stats_messages_received: 1179
 total_cluster_links_buffer_limit_exceeded:o
 ```
 
-#### 8.3.3 主从容错切换迁移案例
+#### 8.3.3 三主三从Redis集群读写
 *提示:现在有3主*  
 1.设置两个key
 在master1上运行命令:  
@@ -1280,6 +1284,169 @@ OK
 
 执行`cluster keyslot [key]` 查看[key]属于哪个槽位
 
+#### 8.3.4 主从容错切换迁移案例
+1.master1宕机  
+master1宕机后与之对应的那个slave会上位  
+
+2.旧的master1重新连接后不会上位,旧master会变为slave  
+并且此时该slave监控的是之前它当master时后面跟着的那个slave  
+
+3.集群不保证数据的一致性,一定会有数据的丢失情况  
+Redis集群不保证强一致性,这意味着在特定的条件下,Redis集群可能会丢掉一些被系统收到的写入请求命令.  
+
+4.手动故障转移(<font color="#00FF00">节点从属调整</font>)  
+**需求:**  
+现在master1宕机后再启动后发现自已成为了slave1,先有需求让slave1还是上位为master1.  
+`cluster failover` 集群节点从属调整  
+在slave1中执行`cluster failover`,一段时间后会发现slave1已经变回为master1  
+
+#### 8.3.5 主从扩容案例
+1.扩容节点  
+假设现在要扩容一个master和与之对应的slave  
+扩容之后原有的<font color="#00FF00">槽位(slot)</font>就需要做重新调整
+![槽位](resources/redis/46.png)  
+
+2.新建这两个节点并启动  
+
+3.将新建的两个节点加入集群  
+将新增的master4加入集群,在master4中执行以下命令  
+`redis cli -a [password] --cluster add-node [selfIP]:[selfPort] [clusterIP]:[clusterPort]`  
+* `selfIP`:是当前要加入集群的节点IP(即master4的IP)  
+* `selfPort`:是当前要加入集群的节点端口(即master4的Port)
+* `clusterIP`:是之前集群中某个节点的IP(例如master1的IP:192.168.111.175)  
+* `clusterPort`:是之前集群中某个节点的端口(例如master1的6381端口)  
+
+*注意该命令执行后同样不会进入到redis节点,会回到linux控制台*  
+
+执行`redis-cli -a [password] --cluster check [clusterIP]:[clusterPort]` 查看集群状态  
+* `clusterIP`:集群中某个节点的IP
+* `clusterPort`:集群中某个节点的Port 
+
+![集群状态](resources/redis/47.png)  
+可以看到新加入的节点并没有被分配槽位,并且它下面也没有slave  
+
+4.槽位的重新分配  
+执行  
+`redis-cli -a [password] --cluster reshard [clusterIP]:[clusterPort]`  
+* `clusterIP`:集群中某个节点的IP
+* `clusterPort`:集群中某个节点的Port  
+
+**注意:**  
+`redis-cli`命令就相当于是连接redis服务器,所以这里填的IP和端口仅仅是连接到redis服务器时需要指定的IP和端口,<font color="#00FF00">并不是说因为我当前是对master4进行重新分配槽的操作就一定要连接master4.</font>
+
+重新分配槽位,实际上这里相当于连接到了cluster指定的主机上,执行成功之后它会询问你要移动多少个槽位给目标节点,这里填<font color="#00FF00">4096</font>  
+![槽位](resources/redis/48.png)  
+接着它会询问要将这些槽位移给哪个节点  
+`what is the receiving node ID?`  
+这里需要填写一个节点的ID,节点的ID可以从上面打印的信息中看到  
+![节点ID](resources/redis/49.png)  
+接着填写all  
+然后再填写yes  
+
+5.再次查看集群状态  
+执行`redis-cli -a [password] --cluster check [clusterIP]:[clusterPort]` 查看集群状态  
+![集群状态](resources/redis/50.png)  
+此时看到之前1、2、3master都各自匀了一点槽位给master4  
+![槽位分配](resources/redis/51.png)  
+并且在分配的时候,只有master1、2、3的槽位是连续的,而master4的槽位是由master1、2、3的槽位组装出来的;为的就是尽量减少以前已经存放的key移动的消耗.  
+
+6.为主节点分配从节点  
+可以看到现在的master下面还是没有slave的  
+执行:  
+`redis-cli -a [password] --cluster add node [slaveIP]:[slavePort] [masterIP]:[masterPort] --cluster-slave --cluster-master-id [masterID]`  
+* `slaveIP`:slave的IP
+* `slavePort`:slave的port
+* `masterIP`:要被同步的主masterIP
+* `masterPort`:要被同步的主masterPort
+* `masterID`:要被同步的主masterID(注意填写的是ID,例如这里master4的ID是<font color="#00FF00">4feb6a7ee0ed2b39ff86474cf4189ab2a554a40f</font>
+)  
+
+此时再查看集群节点状态,发现slave也已经挂载到master上  
+
+#### 8.3.6 主从缩容案例
+*提示:现在的环境是4主4从*  
+![4主4从](resources/redis/52.png)  
+
+现在要缩容回3主3从  
+![缩容](resources/redis/53.png)  
+
+1.首先获取从节点slave4(6388)的节点ID  
+执行:`redis-cli -a [password] --cluster check [clusterIP]:[6388] ` 命令获取slave4节点的ID  
+
+2.从集群中将slave4节点移除  
+执行:  
+`redis-cli -a [password] --cluster del-node [slaveIP]:[slavePort] [slaveID]` 从集群中删除一个节点 
+* `slaveIP`:从机IP  
+* `slavePort`:从机端口  
+* `slaveID`:从机ID
+
+3.再次执行`redis-cli -a [password] --cluster check [clusterIP]:[clusterPort]` 查看节点状态发现slave4已经被移除  
+
+4.将master4的槽位清空,重新分配.本例中将所有清除的槽位全部分配回给master1  
+`redis-cli -a [password] --cluster reshard [targetClusterIP]:[targetClusterPort]`  
+* `clusterIP`:集群中某个节点的IP
+* `clusterPort`:集群中某个节点的IP
+
+**注意:**  
+`redis-cli`命令就相当于是连接redis服务器,所以这里填的IP和端口仅仅是连接到redis服务器时需要指定的IP和端口,<font color="#00FF00">并不是说因为我当前是对master4进行重新分配槽的操作就一定要连接master4.</font>  
+重新分配槽位,执行成功之后它会询问你要移动多少个槽位给目标节点,这里填<font color="#00FF00">4096</font>  
+![槽位](resources/redis/48.png)  
+接着它会询问要将这些槽位移给哪个节点  
+`what is the receiving node ID?`  
+这里需要填写一个节点的ID,节点的ID可以从上面打印的信息中看到  
+![节点ID](resources/redis/49.png)  
+<font color="#00FF00">这里移动到的目标节点是master1,所以填写master1节点的ID</font>  
+
+接着它会询问`Source Node #1:`  
+这一步填写从哪个节点移除槽(也就是这里master4),填写该节点的ID  
+接着它会询问`Source Node #2:`  
+这一步直接填写done表示结束  
+接着填写yes  
+
+5.此时再检查集群节点的状态  
+![集群](resources/redis/54.png)  
+可以看到此时的master4已经消失了,并且master1的slave变成了2台  
+<font color="#00FF00">这是由于将之前master4的所有槽分配给master1之后,master4自动变成了master1的slave.</font>  
+
+6.将master4节点删除  
+此时master4已经变成slave,所以它的删除就和之前删除master4的slave是一样的.  
+`redis-cli -a [password] --cluster del-node [slaveIP]:[slavePort] [slaveID]` 从集群中删除一个节点  
+
+### 8.4 小总结
+1.不在同一个slot槽位下的多建操作不友好  
+在集群环境下执行,这里加了路由所以不同的key会自动重定向
+```shell
+set k1 v1
+set k2 v2
+-> Redirect to slot ...
+set k3 v3
+mget k1 k2 k3 
+(error) CROSSSLOT Keys in request donnot hash to the same slot #报错
+```
+<font color="#00FF00">不在同一个slot槽位下的键值无法使用mset、mget等多键操作</font>  
+
+**解决方法:**  
+可以通过{}来定义同一个组的概念,使key中`{}`内相同内容的键值放到一个slot槽位中去.  
+```shell
+mset k1{x} v1 k2{x} v2 k3{x} v3  
+mget k1 k2 k3 #出现对应的结果
+```
+
+**解释:**  
+由于这三个key的`{}`中的内容都一致,所以它们会放到同一个槽中
+
+2.是否服务完整才能对外提供服务  
+*场景:现在master1有与之对应的slave1,假设master1宕机了,slave1会上位成为master,假设新上位的master也宕机了,那么此时整个Redis集群是否还要对外提供服务呢?*  
+`cluster-require-full-coverage [yes(default)|no]`  
+是否服务完整才能对外提供服务,默认是yes.也就是说一旦服务不完整Redis集群将不再对外暴露服务  
+如果设置成no,则不完整的集群也会对外提供服务,则挂掉的那个节点对应的槽是没办法使用了的,别的槽还是可以正常使用的.  
+
+3.查看某个槽下key的数量  
+`cluster countkeysinslot [slot]` 查看[slot]槽下key的数量  
+slot范围:0-16384  
+
+4.查看某个键应该放在哪个槽下  
+`cluster keyslot [key]` 查看某个键应该放在哪个槽下 
 
 ## 附录:  
 A.Redis基本环境搭建  
@@ -1337,8 +1504,7 @@ B.Redis命令大全
 * `cluster-enabled [yes|no(default)]` 是否开启集群
 * `cluster-config-file nodes-6379.conf` 节点配置
 * `cluster-node-timeout [milliseconds(default=15000)]` 集群超时时间;单位毫秒
-* `cluster nodes` 查看集群之间节点的关系
-* `cluster keyslot [key]` 查看[key]属于哪个槽位
+* `cluster-require-full-coverage [yes(default)|no]` 是否服务完整才能对外提供服务
 * `loglevel [debug|verbose|notice(default)|warning]` 设置redis的日志级别  
 * `logfile "[fileName(default=)]"` 设置日志文件名称,默认就是空的,注意该配置要包含日志的名称,例如:  
   <font color="#00FF00">logfile "/data/redis.log"</font>
@@ -1437,6 +1603,7 @@ B.Redis命令大全
 10.Stream类型相关  
 11.BitField类型相关  
 12.事务相关  
+13.集群相关  
 A.其它  
 
 #### 1. key相关
@@ -1794,6 +1961,17 @@ A.其它
 * `exec` 执行事务
 * `discard` 取消事务,放弃执行事务块内的所有命令  
 * `watch [key0] [key1]...` 监视一个或多个Key,如果在事务执行之前这些Key被其他命令所改动,那么事务将被打断.  
+
+#### 13.集群相关  
+* `info replication` 可以查看复制节点的主从关系和配置信息  
+* `slaveof [masterIP] [masterPort]` 如果没有在Redis.conf配置文件中指定当前从机连接哪个master的信息,则从机每次与master断开之后都需要重新连接.该命令可以指定当前的slave与哪个master进行同步(<font color="#00FF00">是从机与目标主机</font>),如果当前从机原本已经指定了主机,<font color="#00FF00">则该命令会使得从机强制同步新的主机</font>.
+* `slaveof no one` 使当前从机停止同步主机,自已变成master
+* `cluster nodes` 查看集群之间节点的关系
+* `cluster keyslot [key]` 查看[key]属于哪个槽位
+* `cluster failover` 集群节点从属调整
+* `cluster countkeysinslot [slot]` 查看[slot]槽下key的数量
+  * `slot`(必填):槽的值,范围0-16384
+* `cluster keyslot [key]` 查看某个键应该放在哪个槽下
 
 #### A. 其它
 * `config get [propertiesKey]` 获取系统配置  
