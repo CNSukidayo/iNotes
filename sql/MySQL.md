@@ -1003,6 +1003,8 @@ redo log是循环写的方式,相当于一个环形,InnoDB用<font color="#00FF0
 **介绍:**  
 MySQL在完成一条更新操作后,Server层还会生成一条bin log,等之后事务提交的时候,会将该事物执行过程中产生的所有binlog统一写入binlog文件  
 binlog文件是记录了所有数据库表结构变更和表数据修改的日志,不会记录查询类的操作,比如SELECT和SHOW操作  
+执行`show master status`命令查看当前master的binlog状态  
+执行`show variables like 'log_bin';`命令查看binlog是否开启
 
 **bin log和redo log的区别:**  
 bin log和redo log都是记录事务对数据库造成的修改(这两个日志记录的东西实际上是差不多的),它们有四点区别:  

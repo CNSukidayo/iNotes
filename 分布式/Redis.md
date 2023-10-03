@@ -1116,7 +1116,7 @@ HASH_SLOT=CRC16(key) mod 16384,以槽为单位移动数据,因为槽的数目是
 **哈希槽的计算:**  
 Redis集群中内置了16384个哈希槽,redis会根据节点数量大致均等的将哈希槽映射到不同的节点.当需要在Redis集群中放置一个
 key-value时,<font color="#00FF00">redis先对key使用CRC16算法算出一个结果然后用结果对16384求余数</font>`CRC16(key)%16384`,这样每个key都会对应一个编号  
-在0-16383之间的哈希槽,也就是映射到某个节点上.如下代码,key之A、B在Node2，key之C落在Node3上.  
+在0-16383之间的哈希槽,也就是映射到某个节点上.如下代码,key之A、B在Node2,key之C落在Node3上.  
 ![哈希槽计算](resources/redis/35.png)  
 
 5.为什么redis集群的最大槽数是16384?(经典面试题)  
@@ -1487,7 +1487,7 @@ public class Demo {
     Jedis jedis = new Jedis("192.168.111.185",6379);
     // 2 指定服务器访问密码
     jedis.auth("111111");
-    // 3 获得了jedis客户端，可以像jdbc一样，访问我们的redis
+    // 3 获得了jedis客户端,可以像jdbc一样,访问我们的redis
 System.out.println(jedis.ping());
     // keys
     Set<string> keys = jedis.keys(pattern: "*");
@@ -2340,6 +2340,8 @@ A.其它
 1.Redis单线程和多线程  
 2.BigKey  
 3.缓存双写一致性  
+4.bitmap、hyperloglog、geo实战  
+5.布隆过滤器(BloomFilter)  
 
 
 ## 1.Redis单线程和多线程  
@@ -2670,12 +2672,12 @@ java代码示例:
 
 
 ## 3.缓存双写一致性
-*注意:第三章和第四章是强相关的*  
 **目录:**  
 3.1 什么是缓存双写一致性  
 3.2 面试题  
 3.3 缓存双写一致性理解  
 3.4 数据库和缓存一致性的几种更新策略  
+3.5 双写一致性落地工程案例  
 
 
 
@@ -2882,6 +2884,911 @@ public User findUserById(Integer id) {
 
 
 
+### 3.5 双写一致性落地工程案例
+**目录:**  
+3.5.1 面试题  
+3.5.2 canal  
+3.5.3 mysql-canal-redis双写一致性编码  
+
+#### 3.5.1 面试题
+问:mysql有记录改动了(有增删改写操作),立刻同步反应到redis?该如何做?  
+答:通过读取mysql中的binlog日志,一旦binlog日志有改动读取该日志后理解将数据同步到redis.  
+
+<font color="#00FF00">那么就需要有一种技术,能够监听到mysql的变动且能够通知给redis</font>,它就是<font color="#FF00FF">canal</font>  
+
+![canal](resources/redis/84.png)
+
+#### 3.5.2 canal 
+1.介绍  
+canal主要用途是用于mysql数据库增量日志数据的订阅、消费和解析,是阿里巴巴开发并开源的,采用java语言编写.  
+历史背景是早期阿里巴巴因为杭州和美国双机房部署,存在跨机房数据同步的业务需求,实现方式主要是基于业务trigger(触发器)获取增量变更.从2010年开始,阿里巴巴逐步尝试采用解析数据库日志获取增量变更进行同步,由此衍生出了canal项目;
+
+![canal](resources/redis/85.png)  
+
+<font color="#00FF00">canal自已伪装成master的一个slave,当数据库有变动的时候数据库会发送binlog给slave(canal);接着canal再将这些日志发送给下游节点(例如mysql、kakfa、elasticsearch)</font>  
+
+2.基于日志增量订阅和消费的业务包括
+* 数据库镜像
+* 数据库实时备份
+* 索引构建和实时维护(拆分异构索引、倒排索引等)
+* 业务cache刷新
+* 带业务逻辑的增量数据处理
+
+3.下载  
+[canal官方GitHub](https://github.com/alibaba/canal/releases)  
+下载1.1.6版本  
+
+5.传统mysql主从复制工作原理  
+![mysql主从复制原理](resources/redis/86.png)  
+* master上的数据发生改变,将变更内容写入mysql的binlog中  
+* slave从机会每个一段时间对master主机上的二进制日志进行探测,探测其是否发生了改变;如果发生了改变则开始一个I/O线程请求master二进制日志
+* 同时master为每个从机I/O线程启动一个dump线程用于向其发送binlog日志
+* slave从机将接收到的二进制日志保存在自已本地的中继日志文件中  
+* slave从机将启动sql线程从中继日志中读取二进制日志,在本地重放,使得其数据和主服务器保持一致
+
+6.canal工作原理  
+![canal](resources/redis/85.png)  
+* canal模拟mysql slave的交互协议,伪装自已为mysql slave,向mysql master发送dump协议  
+* mysql master收到dump请求,开始推送binlog给slave(即canal)  
+* canal解析binlog对象(原始为byte流)
+
+#### 3.5.3 mysql-canal-redis双写一致性编码
+1.java案例来源出处  
+[https://github.com/alibaba/canal/wiki/ClientExample](https://github.com/alibaba/canal/wiki/ClientExample)  
+
+2.执行`show master status`命令查看当前master的binlog状态
+
+3.执行`show variables like 'log_bin'`命令查看binlog是否开启
+
+4.配置mysql的my.ini配置文件  
+*编写配置文件之前先备份*  
+在[mysqld]配置项下添加如下内容:  
+```shell
+[mysqld]
+# 开启bin-log
+log-bin="DESKTOP-979QMU8-bin"
+# 选择ROW模式
+binlog-fortamt=ROW
+# 配置mysql replication需要定义,不需要和canal的slaveID重复
+server-id=1
+```
+`binlog-fortamt`:  
+* ROW:除了记录sql语句之外,还会记录每个字段的变化情况,能够清楚的记录每行数据的变化历史,但会占用较多的空间.
+* STATEMENT:只记录了sql语句,但是没有记录上下文信息,在进行数据恢复的时候可能会导致数据的丢失情况
+* MIX:比较灵活的记录,理论上说当遇到了表结构变更的时候,就会记录为statement模式.当遇到了数据更新或者删除情况下就会变为row模式
+
+5.重启mysql
+
+6.再次执行`show variables like 'log_bin'`命令查看binlog是否开启  
+<font color="#00FF00">如果显示on代表开启</font>  
+
+7.创建canal用户  
+```sql
+DROP USER IF EXISTS 'canal'@'%';
+CREATE USER 'canal'@'%' IDENTIFIED BY 'canal';
+GRANT ALL PRIVILEGES ON *.* TO 'canal'@'%' IDENTIFIED BY 'canal';
+FLUSH PRIVILEGES;
+```
+
+8.下载  
+[canal官方GitHub](https://github.com/alibaba/canal/releases)  
+下载1.1.6版本的开发者版本  
+canal.deployer-1.1.6.tar.gz  
+
+9.上传到linux,放入~/software/canal路径下  
+解压后的文件结构如下:  
+* bin:二进制
+* conf:配置文件
+* lib:依赖
+* logs:日志文件
+* plugin:插件
+
+10.修改配置  
+修改`~/software/canal/conf/example/instance.properties`  
+配置canal监控的mysql的地址  
+* `canal.instance.master.address=127.0.0.1:3306` 修改master的地址  
+* `canal.instance.dbUsername=[userName]` 修改canal连接mysql时需要的账号和密码
+* `canal.instance.dbPassword=[password]` 修改canal连接mysql时需要的账号和密码
+* `canal.instance.filter.regex=[pattern(default=.*\\..*)]` 配置canal的监听范围(默认是全库全表)  
+* `canal.instance.filter.black.regex=[pattern(default=mysql\\.slave_.)]` 配置canal的监听范围的黑名单
+
+
+
+11.canal启动  
+进入到bin目录下,执行`./startup.sh`  
+
+12.查看canal是否启动成功  
+查看logs/canal/canal.log日志  
+![日志](resources/redis/87.png)  
+如果能够看到这段日志表明启动成功  
+
+查看logs/canal/example.log  
+![日志](resources/redis/88.png)  
+
+13.Java创建模块  
+*大体的思路是,canal监控mysql;将监控到的数据传递给Java,Java再将数据回写到redis*  
+专门编写一个Java的canal模块处理这份工作(一定是springboot模块)  
+
+14.添加pom  
+```xml
+<dependency>
+    <groupId>com.alibaba.otter</groupId>
+    <artifactId>canal.client</artifactId>
+    <version>1.1.0</version>
+</dependency>
+```
+
+15.配置yml文件  
+![yml](resources/redis/89.png)  
+这里配置的数据源是MySQL数据库,不是canal  
+
+16.编写RedisUtils工具类  
+```java
+public class RedisUtils {
+    public static final String REDIS_IP_ADDR = "192.168.111.185";
+    public static final String REDIS_pwd = "111111";
+    public static JedisPool jedisPool;
+
+    static {
+        JedisPoolConfig jedisPoolConfig = new JedisPoolConfig();
+        jedisPoolConfig.setMaxTotal(20);
+        jedisPoolConfig.setMaxIdle(10);
+        jedisPool = new JedisPool(jedisPoolConfig, REDIS_IP_ADDR, port:6379, timeout:10000, REDIS_pwd);
+    }
+
+    public static Jedis getJedis() throws Exception {
+        if (null != jedisPool) {
+            return jedisPool.getResource();
+        }
+        throw new Exception("Jedispool is not ok");
+    }
+}
+```
+
+17.编写RedisCanalClientExample  
+```java
+public class RedisCanalClientExample {
+
+    public static final Integer _60SECONDS = 60;
+    public static final String REDIS_IP_ADDR = "127.0.0.1";
+
+    public static void redisInsert(List<Column> columns) {
+
+        JSONObject jsonObject = new JSONObject();
+        for (Column column : columns) {
+            System.out.println(column.getName() + ": " + column.getValue() + " insert = " + column.getUpdated());
+            jsonObject.put(column.getName(), column.getValue());
+        }
+
+        if (columns.size() > 0) {
+            try (Jedis jedis = RedisUtils.getJedis()) {
+                jedis.set(columns.get(0).getValue(), jsonObject.toJSONString());
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    public static void redisDelete(List<Column> columns) {
+        JSONObject jsonObject = new JSONObject();
+        for (Column column : columns) {
+            System.out.println(column.getName() + ": " + column.getValue() + " delete = " + column.getUpdated());
+            jsonObject.put(column.getName(), column.getValue());
+        }
+
+        if (columns.size() > 0) {
+            try (Jedis jedis = RedisUtils.getJedis()) {
+                jedis.del(columns.get(0).getValue());
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    public static void redisUpdate(List<Column> columns) {
+
+        JSONObject jsonObject = new JSONObject();
+        for (Column column : columns) {
+            System.out.println(column.getName() + ": " + column.getValue() + " update = " + column.getUpdated());
+            jsonObject.put(column.getName(), column.getValue());
+        }
+
+        if (columns.size() > 0) {
+            try (Jedis jedis = RedisUtils.getJedis()) {
+                jedis.set(columns.get(0).getValue(), jsonObject.toJSONString());
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+    }
+    // 官方代码,打印一个节点的信息(监听到的事件信息)
+    public static void printEntry(List<Entry> entrys) {
+        for (Entry entry : entrys) {
+            if (entry.getEntryType() == EntryType.TRANSACTIONBEGIN || entry.getEntryType() == EntryType.TRANSACTIONEND) {
+                continue;
+            }
+
+            RowChange rowChage = null;
+            try {
+              // 获取变更的row数据
+                rowChage = RowChange.parseFrom(entry.getStoreValue());
+            } catch (Exception e) {
+                throw new RuntimeException("ERROR ## parser of eromanga-event has an error , data:" + entry.toString(),
+                        e);
+            }
+            // 获得提交的变动类型,insert、update、delete
+            EventType eventType = rowChage.getEventType();
+            System.out.println(String.format("================&gt; binlog[%s:%s] , name[%s,%s] , eventType : %s",
+                    entry.getHeader().getLogfileName(), entry.getHeader().getLogfileOffset(),
+                    entry.getHeader().getSchemaName(), entry.getHeader().getTableName(),
+                    eventType));
+            // 自已新增的业务逻辑(官方没有)
+            for (RowData rowData : rowChage.getRowDatasList()) {
+                if (eventType == EventType.DELETE) {
+                    redisDelete(rowData.getBeforeColumnsList());
+                } else if (eventType == EventType.INSERT) {
+                    redisInsert(rowData.getAfterColumnsList());
+                } else {
+                    System.out.println("-------&gt; before");
+                    redisUpdate(rowData.getBeforeColumnsList());
+                    System.out.println("-------&gt; after");
+                }
+            }
+        }
+    }
+
+    public static void main(String[] args) {
+        /*
+         创建canal连接
+         args0:需要指定canal的地址和端口号
+         args1:example
+         args2:canal的用户名
+         args2:canal的密码(这里没写代表使用默认的用户名和密码canal)
+         */
+        CanalConnector connector = CanalConnectors.newSingleConnector(new InetSocketAddress(AddressUtils.getHostIp(),
+                11111), "example", "", "");
+        int batchSize = 1000;
+        // 空闲空转监听器
+        int emptyCount = 0;
+        try {
+            // 获得connection
+            connector.connect();
+            // 监听当前库的所有表
+            // connector.subscribe(".*\\..*");
+            // 这里是正则表达式,代表监听哪个库的哪个表([database].[table]这里是jmall库的t_user表)
+            connector.subscribe("jmall.t_user");
+            connector.rollback();
+            int totalEmptyCount = 10 * _60SECONDS;
+            // 这里代表监听10分钟,如果十分钟内都没有监听到数据程序就停止;如果需要一直监听就写true
+            while (emptyCount < totalEmptyCount) {
+                System.out.println("我是canal,每秒监听一次：" + UUID.randomUUID().toString());
+                Message message = connector.getWithoutAck(batchSize); // 获取指定数量的数据
+                long batchId = message.getId();
+                int size = message.getEntries().size();
+                if (batchId == -1 || size == 0) {
+                    // MySQL数据没有变动
+                    emptyCount++;
+                    System.out.println("empty count : " + emptyCount);
+                    try {
+                        Thread.sleep(1000);
+                    } catch (InterruptedException e) {
+                    }
+                } else {
+                    emptyCount = 0;
+                    // System.out.printf("message[batchId=%s,size=%s] \n", batchId, size);
+                    // 打印节点
+                    printEntry(message.getEntries());
+                }
+
+                connector.ack(batchId); // 提交确认
+                // connector.rollback(batchId); // 处理失败, 回滚数据
+            }
+
+            System.out.println("empty too many times, exit");
+        } finally {
+            connector.disconnect();
+        }
+    }
+}
+```
+
+**这段代码实现了什么效果?**  
+该java程序会每隔1s去读取MySQL的binlog日志,它会去监控设定的表;如果表中的数据发生了改变它会实时感知到,并且<font color="#00FF00">当MySQL新增一条数据时它会同步到redis,MySQL更新一条数据时会同步到redis,MySQL删除一条数据时会同步到redis.</font>  
+实际上只要启动这个main方法即可,可以不需要和springboot整合.  
+<font color="#FF00FF">通过这种方法就可以实现双写一致性</font>  
+
+**表的监控问题:**  
+canal是通过`subscribe`方法设置监控范围的,该方法采用正则表达式进行监控,它的规则参考如下:  
+![监控范围](resources/redis/90.png)  
+除了在代码中指定监听范围还可以通过上面讲的`instance.properties`配置文件来指定  
+
+
+## 4.bitmap、hyperloglog、geo实战
+**目录:**  
+4.1 面试题  
+4.2 亿级系统中常见的四种统计  
+4.3 hyperloglog  
+4.4 GEO  
+4.5 bitmap  
+
+
+
+### 4.1 面试题
+* 抖音电商直播,主播介绍的商品有评论,1个商品对应了1系列的评论,排序+展现+取前10条记录  
+* 用户在手机App上的签到打卡信息:1天对应1系列用户的签到记录,新浪微博、钉钉打卡签到,对用户来没来如何统计?
+* 应用网站上的网页访问信息:1个网页对应1系列的访问点击,淘宝网首页,每天有多少人浏览首页?
+* 你们公司系统上线后,说一下UV、PV、DAU分别是多少?  
+* 对集合中的数据进行统计  
+  痛点:类似今日头条、抖音、淘宝这样的额用户访问级别都是亿级的,请问如何处理?  
+  在移动应用中,需要统计每天的新增用户数和第2天的留存用户数
+* 在电商网站的商品评论中,需要统计评论列表中的最新评论
+* 在签到打卡中,需要统计一个月内连续打卡的用户数
+* 在网页访问记录中,需要统计独立访客(unique visitor,UV)量
+
+**需求痛点:**  
+* 亿级数据的收集+清洗+统计+展现
+* 能不能存?能不能取?能不能多维度展现?
+
+### 4.2 亿级系统中常见的四种统计
+**分类:** 聚合统计、排序统计、二值统计、基数统计  
+**聚合统计:**  
+统计多个集合元素的聚合结果,就是前面讲解过的<font color="#00FF00">交差并</font>等集合统计  
+应用场景:聚合统计,用于社交场景;猜你喜欢、你可能认识、你们的共同好友  
+
+**排序统计:**  
+抖音短视频最新评论留言的场景,请你设计一个展现列表.  
+考察你的数据结构和设计思路
+![排序](resources/redis/91.png)  
+我第一个想到的也是<font color="#00FF00">zset</font>  
+在面对需要展示最新列表、排行榜等场景时,如果数据更新频繁或者需要分页显示,建议使用zset  
+
+**二值统计:**  
+适用于集合取值元素只有0和1两种场景.在钉钉上班签到打卡的场景中,我们只要记录有签到(1)或没有签到(0)  
+见bitmap  
+
+**基数统计:**  
+指统计一个集合中不<font color="#00FF00">重复的元素的个数</font>  
+见hyperloglog
+
+### 4.3 hyperloglog 
+**目录:**  
+4.3.1 名词介绍  
+4.3.2 模拟需求  
+4.3.3 hyperloglog原理讲解  
+4.3.4 淘宝首页亿级UV的redis统计方案  
+
+#### 4.3.1 名词介绍
+1.什么是UV  
+UV就是独立访客,例如统计某个文章的访问量,同一个IP多次访问肯定是只算一次的;但是又不需要把每次访问的IP都存到数据库中,直接在Redis中就完成这个操作,所以UV是需要考虑去重的.  
+
+2.什么是PV  
+PageView页面浏览量,不需要去重  
+
+3.什么是DAU  
+DayActivityUser(日活跃用户量)  
+登陆或者使用某个产品的用户数(去重复登陆的用户)  
+常用于反映网站、互联网应用或者网络游戏的运营情况  
+
+4.什么是MAU  
+MountActivityUser(月活跃用户量)  
+
+#### 4.3.2 模拟需求
+很多计数类场景,比如每日注册IP数、每日访问IP数、页面实时访问数PV、访问用户数UV等.  
+因为主要的目标高效、巨量地进行计数,所以对存储的数据的内容并不太关心.  
+也就是说它(hyperloglog)只能用于统计巨量数量,不太涉及具体的统计对象的内容和精准性.  
+统计单日一个页面的访问量(PV)单次访问就算一次.  
+统计单日一个页面的用户访问量(UV),即按照用户为维度计算,单个用户一天内多次访问也只算一次.  
+多个key的合并统计,某个门户网站的所有模块的PV聚合统计就是整个网站的总PV.  
+
+#### 4.3.3 hyperloglog原理讲解
+1.基数统计就是hyperloglog  
+
+2.去重复统计有哪些方式?  
+HashSet、BitMap  
+这两种方式都存在问题,样本元素越多内存消耗急剧增大,难以管控+慢,对于亿级统计不太合适.  
+BitMap在小数据集,百万级都是吃的住的;并且它有一个好处是bitmap的统计是精确的,但bitmap的坏处就是数据集上去之后内存消耗太大.  
+<font color="#00FF00">量变引起质变</font>
+
+3.解决办法(概率算法)  
+<font color="#00FF00">通过牺牲准确率来换取空间</font>,对于不要求<font color="#00FF00">绝对准确率</font>的场景下可以使用,因为<font color="#00FF00">概率算法不直接存储数据本身</font>,通过一定的概率统计方法预估基数值,同时保证误差在一定范围内,由于又不储存数据故此可以大大节约内存.  
+<font color="#00FF00">HyperLogLog就是一种概率算法的实现</font>.
+
+4.原理说明  
+只是进行不重复的基数统计,不是集合也不保存数据,只记录数量而不是具体内容.  
+hyperloglog提供不精确的去重计数方案,<font color="#00FF00">通过牺牲准确率来换取空间,误差仅仅只是0.81%左右</font>  
+为什么是0.81%,理论出处来源:[antirez的博客](http://antirez.com/news/75)  
+
+#### 4.3.4 淘宝首页亿级UV的redis统计方案  
+**需求:**  
+UV的统计需要去重,一个用户一天内的多次访问只能算作一次  
+淘宝、天猫首页的UV,平均每天是1~1.5个亿左右  
+每天存1.5个亿的IP,访问者来了后先去查是否存在,不存在加入  
+
+**方案讨论:**  
+1.使用redis的hash类型  
+每次存储的时候都填写上IP,例如:  
+`hset 20230918 192.168.0.1 1`  
+问题:  
+按照ipv4的结构来说明,每个ipv4的地址最多是15个字节(ip="192.168.111.1",最多xxx.xxx.xxx.xxx)  
+某一天的1.5亿*15个字节=2G,一个月60G,redis死定了(内存吃不住)  
+
+2.使用hyperloglog类型  
+为什么只需要花费12kb?  
+![为什么只需要花费12kb](resources/redis/92.png)  
+
+**java代码**  
+3.HyperLogLogService  
+```java
+@Service
+public class HyperLogLogService {
+
+    private RedisTemplate redisTemplate;
+
+    public HyperLogLogService(RedisTemplate redisTemplate) {
+        this.redisTemplate = redisTemplate;
+    }
+
+    @PostConstruct
+    // PostConstruct注解代表依赖注入完整后会自动调用该方法
+    public void initIP() {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                String ip = null;
+                Random random = new Random();
+                for (int i = 0; i < 200; i++) {
+                    ip = random.nextInt(256) + "." +
+                            random.nextInt(256) + "." +
+                            random.nextInt(256) + "." +
+                            random.nextInt(256);
+                    redisTemplate.opsForHyperLogLog().add("hll", ip);
+                    try {
+                        // 暂停3秒
+                        TimeUnit.SECONDS.sleep(3);
+                    } catch (InterruptedException e) {
+                        throw new RuntimeException(e);
+                    }
+                }
+            }
+        }, "t1").start();
+    }
+
+    /**
+     * 统计UV
+     *
+     * @return 返回数量
+     */
+    public long uv() {
+        return redisTemplate.opsForHyperLogLog().size("hll");
+    }
+
+}
+```
+
+4.HyperLogLogController
+```java
+@RestController
+public class HyperLogLogController {
+
+    private final HyperLogLogService hyperLogLogService;
+
+    public HyperLogLogController(HyperLogLogService hyperLogLogService) {
+        this.hyperLogLogService = hyperLogLogService;
+    }
+    // 获取UV数量
+    @RequestMapping(value = "uv", method = RequestMethod.GET)
+    public long uv() {
+        return hyperLogLogService.uv();
+    }
+
+}
+```
+
+### 4.4 GEO
+**目录:**  
+4.4.1 面试题  
+4.4.2 美团地理位置附近酒店推送  
+
+
+#### 4.4.1 面试题  
+移动互联网时代LBS应用越来越多,交友软件中附近的小姐姐、外卖软件中附近的美食店铺、打车软件附近的车辆等等.  
+那这种附近各种形形色色的XXX地址位置选择是如何实现的?
+
+**会有什么问题?**  
+* 查询性能问题,如果并发高,数据量大这种查询是要搞垮mysql数据库的
+* 一般mysql查询的是一个平面矩形访问,而叫车服务要以我为中心N公里为半径的圆形覆盖
+* 精准度的问题,我们知道地球不是平面坐标系,而是一个圆球,这种矩形计算在长距离计算时会有很大误差,mysql不合适  
+
+#### 4.4.2 美团地理位置附近酒店推送
+**需求分析:**  
+* 美团app附近酒店
+* 摇一摇附近的人
+* 高德地图附近的人或者一公里以内的各种营业厅、加油站、理发店
+* 找个小黄车
+
+1.GeoController(不再赘述)  
+
+2.GeoService(示例代码)
+```java
+public class GeoService{
+
+    public static final String CITY = "city";
+
+    private RedisTemplate redisTemplate;
+
+    // 提供注入的构造方法
+
+    public string geoAdd() {
+        Map<String, point> map = new HashMap<>();
+        map.put("天安门", new Point(116.403963, 39.915119));
+        map.put("故宫", new point(116.403414, 39.924091));
+        map.put("长城", new Point(116.024067, 40.362639));
+        redisTemplate.opsForGeo().add(CITY, map);
+        return map.tostring();
+    }
+
+    public Point position(string member) {
+        // 获取经纬度坐标,这里的member可以有多个,返回的list也可以有多个
+        list<Point> list = redisTemplate.opsForGeo().position(CITY, member);
+        return list.get(0);
+    }
+
+    public string hash(string member) {
+        //geohash算法生成的base32编码值,这里的member可以有多个,返回的list也可以有多个
+        List<string> list = redisTemplate.opsForGeo().hash(CITY, member);
+        return list.get(o);
+    }
+
+    public Distance distance(string member1,string member2) {
+        //获取两个给定位置之间的距离
+        // agrs3:结果的距离单位
+        Distance distance = redisTemplate.opsForGeo().distance(CITY, member1, member2, RedisGeoCommands.DistanceUnit.KILOMETERS);
+        return distance;
+    }
+
+    public GeoResults radiusByxy() {
+        //通过经度,纬度查找附近的,北京王府井位置116.418017, 39.914402
+        Circle circle = new Circle(116.418017, 39.914402, Metrics.KILOMETERS.getMultiplier());
+        //返回50条记录:
+        RedisGeoCommands.GeoRadiusCommandArgs args =
+                RedisGeoCommands.GeoRadiusCommandArgs.newGeoRadiusArgs().includeDistance().includeCoordinates().sortAscending().limit(50);
+        GeoResults<RedisGeoCommands.GeoLocation<String>> geoResults =
+                this.redisTemplate.opsForGeo().radius(CITY, circle, args);
+        return geoResults;
+    }
+
+    public GeoResults radiusByMember() {
+        //通过地方查找附近
+        String member = "天安门";
+        //返回50条
+        RedisGeoCommands.GeoRadiusCommandArgs args = RedisGeoCommands.GeoRadiusCommandArgs.newGeoRadiusArgs().includeDistance().includeCoordinates().sortAscending().limit(5e);
+        //半径10公里内
+        Distance distance = new Distance(10,Metrics.KILOMETERS);
+        GeoResults<RedisbeoCommands.GeoLocation<String>> geoResults = this.redisTemplate.opsForbeol().radius(CITY, member, distance, angs);
+        return geoResults;
+    }
+}
+```
+
+### 4.5 bitmap
+**目录:**  
+4.5.1 面试题  
+4.5.2 京东签到领取京东豆  
+4.5.3 实战案例  
+
+
+#### 4.5.1 面试题  
+* 日活统计
+* 连续签到打卡
+* 最近一周的活跃用户
+* 统计指定用户一年之中的登陆天数
+* 某用户按照一年365天,哪几天登陆过?哪几天没有登陆?全年中登陆的天数共计有多少?  
+
+#### 4.5.2 京东签到领取京东豆
+1.需求说明:  
+![京东豆](resources/redis/93.png)  
+
+2.小厂解决方案:  
+可以使用MySQL  
+**痛点:**  
+方法正确但是难以落地实现  
+签到用户小这么设计能行,但京东这个体量的用户(估算3000W签到用户,一天一条数据,一个月就是9亿数据)  
+对于京东这样的体量,如果一条签到记录对应着当日用记录,那会很恐怖  
+
+**如何解决该痛点?**  
+* 一条签到记录对应一条记录,会占据越来越大的空间.
+* 一个月最多31天,刚好我们的int类型是32位,那这样一个int类型就可以搞定一个月,32位大于31天,当天来了位是1没来就是0. 
+* 一条数据直接存储一个月的签到记录,不再是存储一天的签到记录
+
+3.大厂解决方案  
+基于redis的bitmap实现签到日历  
+
+#### 4.5.3 实战案例
+**案例实战见下一章,bitmap类型签到+<font color="#00FF00">布隆过滤器</font>**
+
+## 5.布隆过滤器(BloomFilter)
+**目录:**  
+5.1 面试题  
+5.2 基本介绍  
+5.3 布隆过滤器原理  
+5.4 布隆过滤器使用场景  
+5.5 尝试手写布隆过滤器    
+
+
+### 5.1 面试题  
+* 已有50亿个电话号码,现有10万个电话号码,如何快速准确判断这10万电话号码是否存在于50亿个当中  
+  **难点:**  
+  通过数据库查询,可以实现但速度很慢  
+  数据预放到内存集合:50亿*8字节大约40GB,内存吃不住
+* 判断是否存在,布隆过滤器了解吗?
+* 安全连接网址,全球数10亿的网址判断
+* 黑名单校验,识别垃圾邮件
+* 白名单校验,识别出合法用户进行后续处理
+
+### 5.2 基本介绍
+布隆过滤器:是由一个初值都为0的bit数组和<font color="#00FF00">多个哈希函数</font>构成,用于快速判断集合中是否存在某个元素.  
+![布隆过滤器设计思想](resources/redis/94.png)  
+布隆过滤器是一种<font color="#00FF00">类似set</font>的数据结构,<font color="#00FF00">只是统计结果在巨量数据下有点小瑕疵,不够完美</font>.  
+它实际上是一个很长的<font color="#00FF00">二进制数组(00000000)+一系列随机hash算法</font>映射函数,主要用于判断一个元素是否在集合中.  
+通常我们会遇到很多要判断一个元素是否在某个集合中的业务场景,一般想到的是将集合中所有元素保存起来,然后通过比较确定.  
+链表、树、哈希表等等数据结构都是这种思路.但是随着集合中元素的增加,我们需要的存储空间也会呈现线性增长,最终达到瓶颈.同时检索速
+度也越来越慢,上述三种结构的检索时间复杂度分别为O(n),O(logn),O(1).这个时候,布隆过滤器(Bloom Filter)就应运而生  
+![布隆过滤器](resources/redis/95.png)  
+
+**布隆过滤器的作用:**  
+* 高效地插入和查询,占用空间少,返回的结果是不确定性(它就很类似bitmap,不保存数据的具体信息,只做逻辑判断)+不够完美
+* <font color="#FF00FF">一个结果如果判定为存在时则该元素不一定存在,如果判定为不存在时则该元素一定不存在</font>  
+  因为是<font color="#00FF00">一系列hash算法</font>,但凡是涉及到hash算法都有可能存在hash冲突.那么就出现一种情况假设某个坑位(某位)已经被之前的判断占用为1;那么对当前这个坑位的判断它是存在的,但具体是哪个值存在就不清楚了(有可能是A也有可能是B)
+* 布隆过滤器可以添加元素,但是<font color="#00FF00">不能删除元素</font>,由于涉及hashcode判断依据,删掉元素会<font color="#FF00FF">导致误判率的增加</font>.  
+  例如上面讲的例子,现在某个坑位是1(判断存在);但这个坑位1是由A、B、C三个元素都存放在这个坑位上的,<font color="#00FF00">假设把A元素删除会导致B和C元素连带删除;即哈希冲突共用坑位</font>.
+
+### 5.3 布隆过滤器原理
+**目录:**  
+5.3.1 布隆过滤器实现原理和数据结构  
+5.3.2 使用3步骤  
+5.3.3 布隆过滤器误判率,为什么不要删除  
+5.3.4 小总结  
+
+
+#### 5.3.1 布隆过滤器实现原理和数据结构  
+**原理:**  
+布隆过滤器(Bloom Filter)是一种专门用来解决去重问题的高级数据结构.  
+实质就是<font color="#00FF00">一个大型位数组和几个不同的无偏hash函数</font>(无偏表示分布均匀;即希望桶/坑位的分配均匀).由一个初值都为零的bit数组和多个个哈希函数构成,用来快速判断某个数据是否存在.但是跟HyperLogLog一样,它也一样有那么一点点不精确,也存在一定的误判概率  
+
+2.添加key、查询key:  
+**添加key**  
+使用多个hash函数对key进行hash运算得到一个整数索引值,对位数组长度进行取模运算得到一个位置,<font color="#00FF00">每个hash函数都会得到一个不同的位置(并且尽量均匀分配到位数组中),将这几个位置都置1就完成了add操作</font>.  
+
+**查询key**  
+只要有其中一位是0就表示这个key不存在,但如果都是1,<font color="#00FF00">则不一定存在对应的key</font>.  
+<font color="#FF00FF">也就是说我可以用一个坑位来表示一个元素是否存在;但我也可以使用多个hash函数多个坑位来表示一个元素是否存在.</font>  
+
+**结论:**  
+有,可能是有  
+无,一定是无  
+
+3.hash冲突导致数据不精准  
+当有变量被加入集合时,通过N个映射函数将这个变量映射成位图中的N个点,把它们置为1(假定有两个变量都通过3个映射函数)
+![hash冲突导致数据不精准](resources/redis/96.png)  
+查询某个变量的时候我们只要看看这些点是不是都是1,就可以大概率知道集合中有没有它了.  
+*通过这个例子,再次说明为啥布隆过滤器不可以删除,假设这里要删除obj1,通过删除坑位3来实现;<font color="#00FF00">但是坑位3既是obj1又是obj2</font>;当删除坑位3时不仅删除了obj1还删除了obj2*  
+如果这些点,有任何一个为0则被查询的对象一定不存在  
+如果都是1,则被查询的变量很可能存在;例如现在有个obj3它从来都没有被添加到过滤器中,但是计算obj3它的映射函数得到的坑位是1、8、12会发现这三个坑都是1,结果就是obj3存在;<font color="#00FF00">而实际上我们知道出现这种情况并不是因为obj3存在而是出现了hash碰撞.</font>  
+正是基于布隆过滤器的快速检测特性,我们可以在把数据写入数据库时,使用布隆过滤器做个标记.当缓存缺失后,应用查询数据库时,可以通过查询布隆过滤器快速判断数据是否存在.如果不存在,就不用再去数据库中查询了.这样一来,即使发生缓存穿透了,大量请求只会查询Redis和布隆过滤器,而不会积压到数据库,也就不会影响数据库的正常运行.<font color="#00FF00">布隆过滤器可以使用Redis实现,本身就能承担较大的并发访问压力.</font>  
+<font color="#FF00FF">也就是说布隆过滤器先档在最前面,当查询一个数据的时候先查询布隆过滤器,如果布隆过滤器判断数据不存在就不需要去请求redis与数据库;从而避免数据既不在redis又不在数据库时发生的缓存穿透.如果查询到有数据,那就去访问数据.</font>
+
+4.再讲hash冲突导致数据不精准  
+**哈希函数:**  
+哈希函数的概念是:将任意大小的输入数据转换成特定大小的输出数据的函数,转换后的数据称为哈希值或哈希编码,也叫散列值.  
+![哈希函数](resources/redis/97.png)  
+图中画红圈的表示哈希冲突了  
+如果两个散列值是不相同的(根据同一函数)那么这两个散列值的原始输入也是不相同的.  
+这个特性是散列函数具有确定性的结果,具有这种性质的散列函数称为单向散列函数.  
+散列函数的输入和输出不是唯一对应关系的,<font color="#00FF00">如果两个散列值相同,两个输入值很可能是相同的,但也可能不同</font>,这种情况称为"散列碰撞(collision)".  
+用hash表存储大数据量时,空间效率还是很低,当只有一个hash函数时,还很容易发生哈希碰撞.
+
+
+#### 5.3.2 使用3步骤
+1.初始化bitmap  
+布隆过滤器本质上是由长度为m的位向量或位列表(仅包含0或1位值列表)组成,最初所有的值均设置为0  
+![初始化bitmap](resources/redis/98.png)  
+
+2.添加占坑位  
+当我们向布隆过滤器中添加数据时,为了尽量地址不冲突,<font color="#00FF00">会使用多个hash函数对key进行运算</font>,算得一个下标索引值,然后对位数组长度进行<font color="#00FF00">取模运算</font>得到一个位置,每个hash函数都会算得一个不同的位置.再把位数组的这几个位置都置为1就完成了add操作.  
+例如,我们添加一个字符串wmyskxz,对字符串进行多次hash(key)->取模运行->得到坑位  
+![添加占坑位](resources/redis/99.png)  
+
+3.判断是否存在  
+向布隆过滤器查询某个key是否存在时,先把这个key通过相同(和放入时相同)的多个hash函数进行运算,查看对应的位置是否都为1,<font color="#00FF00">只要有一个位为零,那么说明布隆过滤器中这个key不存在;</font>  
+<font color="#00FF00">如果这几个位置全都是1,那么说明极有可能存在;</font>  
+因为这些位置的1可能是因为其他的key存在导致的,也就是前面说过的hash冲突  
+例如:  
+我们在add了字符串wmyskxz数据之后,很明显下面1/3/5这几个位置的1是因为第一次添加的wmyskxz而导致的;  
+此时我们查询一个没添加过的不存在的字符串inexistent-key,它有可能计算后坑位也是1/3/5,这就是误判了
+
+#### 5.3.3 布隆过滤器误判率,为什么不要删除
+布隆过滤器的误判是指多个输入经过哈希之后在相同的bit位置1了,这样就无法判断究竟是哪个输入产生的,因此误判的根源在于相同的bit位被多次映射且置1.  
+这种情况也造成了布隆过滤器的删除问题,因为布隆过滤器的每一个bit并不是独占的,很有可能多个元素<font color="#00FF00">共享了某一位</font>.  
+如果我们直接删除这一位的话,会影响其他的元素  
+特性:  
+布隆过滤器可以添加元素,但是不能删除元素.因为删掉元素会导致误判率增加.
+
+
+#### 5.3.4 小总结
+是否存在:  
+有,可能是有  
+无,一定是无  
+
+使用时最好不要让实际元素数量远大于初始化数量,一次给够避免扩容
+
+当实际元素数量超过初始化数量时,应该对布隆过滤器进行重建,
+重新分配一个size更大的过滤器,再将所有的历史元素批量add拷贝进去
+
+### 5.4 布隆过滤器使用场景
+1.解决缓存穿透的问题,和redis结合bitmap使用  
+**缓存穿透是什么?**  
+一般情况下,先查询缓存redis是否有该数据,缓存中没有时再查询数据库  
+当数据库也不存在该条数据时,每次查询都要访问数据库,这就是缓存穿透(即redis名存实亡,并没有挡在MySQL前面)  
+缓存穿透带来的问题是,当有大量请求查询数据库不存在的数据时,就会给数据库带来压力,甚至会拖垮数据库.  
+
+**可以使用布隆过滤器解决缓存穿透问题**  
+把已存在数据的key存在布隆过滤器中,相当于redis前面挡着一个布隆过滤器.  
+当有新的请求时,<font color="#00FF00">先到布隆过滤器中查询是否存在</font>:
+如果布隆过滤器中不存在该条数据则直接返回;
+如果布隆过滤器中已存在,才去查询缓存redis,如果redis里没查询到则再查询Mysql数据库  
+![可以使用布隆过滤器解决缓存穿透问题](resources/redis/100.png)  
+
+2.黑名单校验,识别垃圾邮件  
+发现存在黑名单中的,就执行特定操作.比如:识别垃圾邮件,只要是邮箱在黑名单中的邮件,就识别为垃圾邮件.  
+假设黑名单的数量是数以亿计的,存放起来就是非常耗费存储空间的,布隆过滤器则是一个较好的解决方案.  
+把所有黑名单都放在布隆过滤器中,在收到邮件时,判断邮件地址是否在布隆过滤器中即可.  
+
+3.安全连接网站,全球上10亿的网址判断  
+
+### 5.5 尝试手写布隆过滤器
+**目录:**  
+5.5.1 整体架构  
+5.5.2 步骤设计
+5.5.3 springboot+redis+mybatis环境搭建  
+5.5.4 springboot+redis+mybatis实战编写布隆过滤器  
+
+#### 5.5.1 整体架构  
+![整体架构](resources/redis/101.png)  
+
+#### 5.5.2 步骤设计  
+1.redis的setbit/getbit  
+![setbit](resources/redis/102.png)  
+即这里的<font color="#00FF00">whitelistCustomer</font>就是布隆过滤器(bitmap类型),对customer:11这个key计算hash值它的坑位是1772098756;那么将对应1772098756的值设置为1  
+当查询的时候就查看1772098756对应的坑位是不是1;如果是1则代表大概率是可能存在这个值的.
+
+2.setbit的构建过程  
+* @PostConstruct初始化白名单
+* 计算元素的hash值
+* 通过上一步hash值算出对应的二进制数组的坑位  
+* 将对应坑位的值修改为1,表示存在
+
+3.getbit查询是否存在  
+* 计算元素的hash值
+* 通过上一步hash值算出对应的二进制数组坑位  
+* 返回对应坑位的值,0表示无;1表示存在
+
+#### 5.5.3 springboot+redis+mybatis环境搭建
+1.mybatis通用mapper4  
+* mybatis-generator:[http://mybatis.org/generator/](http://mybatis.org/generator/)  
+* mybatis通用mapper4官网:[https://github.com/abel533/Mapper](https://github.com/abel533/Mapper)  
+
+2.t_customer用户表sql  
+```sql
+CREATE TABLE `t_customer` (
+  `id` int(20) NOT NULL AUTO_INCREMENT,
+  `cname` varchar(50) NOT NULL,
+  `age` int(10) NOT NULL,
+  `phone` varchar(20) NOT NULL,
+  `sex` tinyint(4) NOT NULL,
+  `birth` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_cname` (`cname`)
+) ENGINE=InnoDB AUTO_INCREMENT=10 DEFAULT CHARSET=utf8mb4;
+```
+
+3.创建springboot模块  
+
+4.编写pom  
+```xml
+<dependency>
+  <groupId>tk.mybatis</groupId>
+  <artifactId>mapper</artifactId>
+  <version>${mapper.version}</version>
+</dependency>
+```
+
+5.编写yml
+
+6.mgb配置相关;在src/main/resources路径下新建两个文件  
+`config.properties`  
+```properties
+#t_customer表包名
+# 包名
+package.name = com.atguigu.redis7
+jdbc.driverClass = com.mysql.jdbc.Driver
+jdbc.url = jdbc:mysql://localhost:3306/bigdata
+jdbc.user = root
+jdbc.password =123456
+```
+`generatorConfig.xml`(生成配置)  
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE generatorConfiguration
+        PUBLIC "-//mybatis.org//DTD MyBatis Generator Configuration 1.0//EN"
+        "http://mybatis.org/dtd/mybatis-generator-config_1_0.dtd">
+
+<generatorConfiguration>
+    <!-- 配置文件的路径 -->
+    <properties resource="config.properties"/>
+    <!-- 通用插件 -->
+    <context id= "Mysql" targetRuntime="MyBatis3Simple" defaultModelType="flat" >
+        <property name="beginningDelimiter" value="`" />
+        <property name="endingDelimiter" value="`" />
+
+        <plugin type="tk.mybatis.mapper.generator.MapperPlugin">
+            <property name="mappers" value= "tk.mybatis.mapper.common.Mapper" />
+            <property name="caseSensitive" value="true" />
+        </plugin>
+        <!-- JDBC配置 -->
+        <jdbcConnection driverClass="${jdbc.driverClass}"
+                        connectionURL="${jdbc.url}"
+                        userId="${jdbc.user}"
+                        password="${jdbc.password}">
+        </jdbcConnection>
+        <!-- 根路径的包名(这里从config.properties配置文件中获取) -->
+        <javaModelGenerator targetPackage="${package.name}.entities" targetProject="src/main/java" />
+        <!-- 这两行配置不动 -->
+        <sqlMapGenerator targetPackage="${package.name}.mapper" targetProject="src/main/java" />
+        <javaClientGenerator targetPackage="${package.name}.mapper" targetProject="src/main/java" type="XMLMAPPER" />
+        <!-- 
+          tableName:要生成的目标表名 
+          domainObjectName:生成的实体类名称
+        -->
+        <table tableName="t_customer" domainObjectName="Customer">
+            <generatedKey column="id" sqlStatement="JDBC"/>
+        </table>
+    </context>
+</generatorConfiguration>
+```
+
+7.运行mybatis-generator的maven插件一键生成  
+![一键生成](resources/redis/103.png)  
+
+8.生成的效果  
+![生成效果](resources/redis/104.png)  
+
+9.将生成的类和mapper复制到5.5.4节中创建的redis-bloom模块下对应的目录下
+
+#### 5.5.4 springboot+redis+mybatis实战编写布隆过滤器
+1.创建模块redis-bloom  
+
+2.编写pom  
+一个正常的springboot项目的pom  
+
+3.配置yml  
+这里只列出redis相关的配置,别的配置不再举例;这里没有连接集群  
+```yml
+spring:
+  redis:
+    host: localhost # IP
+    port: 6379 # 端口
+    database: 0 # 使用哪个数据库
+    timeout: 1800000
+    password: 111111 # 密码
+    lettuce: # lettuce的连接池
+      pool:
+        max-active: 20 #最大连接数
+        max-wait: -1 #最大阻塞等待时间(负数表示没限制)
+        max-idle: 5    #最大空闲
+        min-idle: 0     #最小空闲
+```
+
+4.主启动类  
 
 
 
@@ -2889,6 +3796,7 @@ public User findUserById(Integer id) {
 # 实战篇
 **目录:**  
 1.丰富系统功能  
+2.bitmap、hyperloglog、geo实战    
 
 
 ## 1. 丰富系统功能  
@@ -2949,7 +3857,11 @@ public User findUserById(Integer id) {
 采用这种方法又快又省内存又高效!
 
 ### 1.7 利用HyperLogLog类型完成UV统计
-1.统计网站每天的UA、统计某个文章的UA  
+1.统计网站每天的UV、统计某个文章的UV  
 2.用户搜索网站关键词数量  
 3.统计用户每天搜索不同词条个数  
+
+## 2.bitmap、hyperloglog、geo实战 
+详情见:高级篇=>4.bitmap、hyperloglog、geo实战
+
 
