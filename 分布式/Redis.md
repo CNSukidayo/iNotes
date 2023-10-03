@@ -1866,6 +1866,15 @@ B.Redis命令大全
 * `no-appendfsync-on-rewrite [yes|no(default)]` aof重写期间是否允许编写aof
 * `activerehashing [yes(default)|no]` 指定是否激活重置哈希  
 * `include [filePath]` 指定包含其它的配置文件,可以在同一主机上多个redis实例之间使用同一份配置文件,而同时各个实例又拥有自已的特定配置文件
+* `io-threads [threadCount]` io线程数量;默认是未开启的  
+  对于一个实例,如果你又4核CPU,建议使用2~3个IO线程;  
+  如果你有8个核心,可以尝试使用6个io线程  
+* `io-threads-do-reads [yes|no(default)]` 是否启用多线程
+* `rename-command [command] "[renameCommand]"` 重命名命令,该配置项可以配置多个  
+  另外:如果[renameCommand]什么也不写,则代表禁用[command]  
+* `lazyfree-lazy-server-del [yes|no(default)]` 惰性服务器删除
+* `replica-lazy-flush [yes|no(default)]` 惰性刷新
+* `lazyfree-lazy-user-del [yes|no(default)]` 惰性用户删除
 
 *改完配置,重启docker容器*  
 
@@ -1938,7 +1947,7 @@ A.其它
 * `exists [key]` 判断某个key是否存在  
 * `type [key]` 查看某个key的类型
 * `del [key]` 删除指定的key  
-* `unlink [key]` 非阻塞删除,仅仅将key从keyspace元数据中删除,真正的删除会在后续异步中操作
+* `unlink [key]` 非阻塞删除,仅仅将key从keyspace元数据中删除,真正的删除会在后续异步中操作(<font color="#00FF00">Redis多线程</font>)
 * `ttl [key]` 查看还有多次时间过期  
   return -1 代表永不过期  
   return -2 代表已经过期  
@@ -1947,8 +1956,25 @@ A.其它
   默认16个库,范围是[0-15] 可以通过redis.conf配置的`databases`修改库的数量    
 * `select [db_index]` 切换到[db_index]数据库  
 * `dbsize` 查看当前数据库key的数量  
-* `flushdb` 清空当前数据库  
-* `flushall` 清空所有数据库  
+* `flushdb [async|sync(default)]` 清空当前数据库  
+  * `async|sync(default)`:默认不填就是sync同步删除,如果设置成async会使用异步线程来删除
+* `flushall [async|sync(default)]` 清空所有数据库  
+  * `async|sync(default)`:默认不填就是sync同步删除,如果设置成async会使用异步线程来删除
+* `dbsize` 当前数据库key的数量
+* `scan [cursor] [match [pattern]] [count [countNumber]]` 基于游标的迭代器,用于迭代当前数据库中的Key,针对string类型  
+  * `cursor`(必填):游标的值  
+  游标的值从0开始为一次新的迭代,并且执行该命令都会返回一个游标值,该值作为下一次[cursor]的值进行迭代,当游标值跌倒回到0时代表迭代结束
+  * `match`(必填):
+    * `pattern`:匹配Key的表达式  
+  * `count`(必填):
+    * `countNumber`:每次迭代返回的key的个数,返回数量不可控只能说是大概率符合[countNumber]参数  
+  - - -
+  效果大致如下:  
+  ![效果](resources/redis/69.png)
+* `sscan [cursor] [match [pattern]] [count [countNumber]]` 针对set类型 
+* `hscan [cursor] [match [pattern]] [count [countNumber]]` 针对hash类型
+* `zscan [cursor] [match [pattern]] [count [countNumber]]` 针对ZSet类型
+* `memory usage [key]` 查看某个[key]对应的value占多少字节数
 
 #### 2.String类型相关  
 *提示:分割线以下的内容选填*  
@@ -2104,6 +2130,7 @@ A.其它
 * `zsocre [key] [value]` 获取ZSet集合中元素value对应的分数  
 * `zcard [key]` 获取集合中元素的数量
 * `zrem [key] [value]` 删除集合中的[value]元素
+* `zremrangebyrank` 删除集合中的元素(待补充,当时记笔记没记全)
 * `zincrby [key] [increment] [value]` 给ZSet集合中[value]元素的分数增加[increment]  
 * `zcount [key] [min] [max]` 统计指定返回内元素的个数
 * `zmpop [keyCount] [key0] [key...] [min|max] [count [countNumber]]` 弹出[key]对应的ZSet集合中最[min|max]的[countNumber]个元素  
@@ -2309,6 +2336,549 @@ A.其它
 * `save` 阻塞持久化rdb文件(不推荐使用该命令)
 
 # 高级篇
+**目录:**  
+1.Redis单线程和多线程  
+2.BigKey  
+3.缓存双写一致性  
+
+
+## 1.Redis单线程和多线程  
+**目录:**  
+1.1 Redis到底是单线程还是多线程  
+1.2 IO多路复用(入门)  
+1.3 Redis为什么快  
+1.4 Redis默认是否开启了多线程    
+
+
+### 1.1 Redis到底是单线程还是多线程  
+答:首先这个问题就不够严谨  
+Redis有很多版本,不同的版本架构也是不同的.Redis4之后才开始慢慢支持多线程,直到Redis6/7才趋于稳定.  
+* Redis3.x最早的版本,Redis确确实实是单线程的  
+* Redis4.x严格来说也不是单线程,而是负责处理客户端请求的线程是单线程,但开始引入了一些多线程的特性(如异步删除、异步持久化aof、rdb)  
+* Redis6.x及Redis7采用<font color="#00FF00">全新的多线程</font>来解决问题  
+
+![发展历史](resources/redis/58.png)  
+
+**通常所述的Redis单线程是什么意思?**  
+主要是指Redis的网络IO和键值对读写是由一个线程来完成的,Redis在处理客户端的请求时包括获取(socket读)、解析、执行、内容返回(socket写)等都由一个顺序串行的主线程处理,这就是所谓的"单线程".这也是Redis对外提供键值对存储服务的主要流程.<font color="#00FF00">这也是为什么Redis中的命令都是原子性的原因(没有多线程自然就没有别的线程来争抢,并且也不需要加锁)</font>  
+![线程模型](resources/redis/59.png)  
+但Redis的其它功能,<font color="#00FF00">比如持久化RDB、AOF、异步删除、集群数据同步等等,其实是由额外的线程执行的.</font>  
+<font color="#FF00FF">Redis命令工作线程是单线程的,整体是多线程的.</font> 
+
+**为什么在Redis3.x采用单线程依旧很快?**  
+* 基于内存操作:Redis的所有数据都存在内存中,因此所有的运算都是内存级别的,所以他的性能比较高  
+* 数据结构简单:Redis的数据结构是专门设计的,而这些简单的数据结构的查找和操作的时间大部分复杂度都是O(1),因此性能较高
+* 多路复用和非阻塞I/O:<font color="#00FF00">Redis使用I/O多路复用功能来监听多个socket连接客户端</font>,这样就可以<font color="#00FF00">使用一个线程来连接处理多个请求</font>,减少线程切换带来的开销,同时也避免了I/O阻塞的操作
+* 避免上下文切换:因为是单线程模型,因此就避免了不必要的上下文切换和多线程竞争,这就省去了多线程切换带来的时间和性能上的消耗,而且单线程不会导致死锁问题的发生
+
+**Redis是单线程,如何利用多个CPU/内核?**  
+这是以前官网上的一个问题(现在已经没有了)  
+即在Redis3.x时代,<font color="#00FF00">Redis认为CPU并不是Redis性能的瓶颈</font>;造成瓶颈的很有可能是机器的内存或者网络的带宽而非CPU,既然CPU不是瓶颈那贸然引入多线程反而会造成多线程下的很多问题.<font color="#00FF00">所以Redis不利用多个CPU.</font>  
+更何况现代的Redis也已经支持多线程了,所以这个问题就被移除了;Redis会越来越多地引入多线程.  
+
+**为什么又引入多线程?**  
+例子:  
+正常情况下Redis的`del`命令可以很快地删除数据,而当被删除的key是一个big key的时候;例如包含成千上万个元素的hash集合时,那么单线程下`del`就会造成Redis主线程的卡顿.  
+<font color="#00FF00">这就是Redis3.x单线程时代最经典的故障,big key删除问题.</font>  
+*提示:这里所说的big key不是说key很大,而是该key对应的那个value类型存放了很多的数据*  
+<font color="#00FF00">使用惰性删除可以有效避免该问题</font>  
+在Redis4.0中引入了多线程模块,<font color="#00FF00">此版本中使用多线程主要是为了解决删除数据效率较低的问题.</font>  
+例如像`unlink [key]`、`flushdb async`、`flushall async`等命令使用的都是多线程异步删除  
+
+### 1.2 IO多路复用(入门)
+*<font color="#00FF00">Redis认为CPU并不是Redis性能的瓶颈</font>;造成瓶颈的很有可能是机器的内存或者网络的带宽而非CPU*  
+
+1.Redis的瓶颈可以初步认定为网络I/O  
+**Redis6/7真正的多线程**  
+*tips:Redis4还不算真正的多线程*  
+<font color="#00FF00">从Redis6/7开始全面支持多线程,</font>随着网络硬件性能的提升,Redis的性能瓶颈有时会出现在网络IO的处理上,也就是说单个主线程处理网络请求的速度跟不上底层网络硬件的速度.  
+为了应对这个问题,<font color="#00FF00">Redis6/7采用了多个IO线程来处理网络请求,提高网络请求处理的并行度.</font>  
+但Redis的多线程IO仅仅是用于处理网络请求的(因为网络处理经常是瓶颈),<font color="#00FF00">对于读写操作命令Redis仍然使用单线程来处理</font>,继续使用单线程执行命令操作,就不用为了lua脚本、事务的原子性<font color="#00FF00">额外开发多线程互斥加锁机制了</font>,从而使得Redis线程模型实现更简单了.
+
+**主线程和IO线程怎么协作完成一条命令的请求处理的-四个阶段**  
+![四个阶段](redis/../resources/redis/60.png)  
+![四个阶段](redis/../resources/redis/61.png)  
+
+* 阶段一:服务端和客户端建立socket连接,并分配处理线程  
+  首先,<font color="#00FF00">主线程</font>负责接收建立连接请求.当有客户端请求和实例建立Socket连接时,主线程会创建和客户端的连接,并把Socket放入全局等待队中.紧接着,主线程通过轮询方法把Socket连接分配给IO线程.
+* 阶段二:IO线程读取并解析请求  
+  主线程一旦把Socket分配给IO线程,就会进入阻塞状态,等待IO线程完成客户端请求读取和解析.因为有多个IO线程在并行处理,所以这个过程很快就可以完成.  
+* 阶段三:主线程执行请求操作  
+  等到IO线程解析完请求,主线程还是会以<font color="#00FF00">单线程</font>的方式执行这些命令操作.  
+* 阶段四:IO线程回写Socket和主线程清空全局队列  
+  当主线程执行完请求操作后,会把需要返回的结果写入缓冲区,然后主线程会阻塞等待IO线程,<font color="#00FF00">IO线程把这些结果回写到Socket中</font>,并返回给客户端.和IO线程读取和解析请求一样,IO线程回写Socket时,也是有多个线程在并发执行,所以回写Socket的速度也很快.等到IO线程回写Socket完毕,主线程会清空全局队列,等待客户端的后续请求.  
+
+### 1.3 Redis为什么快 
+Redis为什么这么快?  
+答:主要是IO多路复用和epoll函数的使用;而不仅仅是单线程命令+Redis是内存数据库  
+
+1.Unix网络编程中的五种IO模型  
+* BlockingIO-阻塞IO  
+* NoneBlockingIO-BIO非阻塞IO
+* IO Multiplexing-IO多路复用  
+* Signal Driven IO-信号驱动IO
+* Asynchronous IO-异步IO
+
+2.IO Multiplexing-IO多路复用  
+**Linux中一切皆文件**  
+文件描述符、简称FD(句柄)、FileDescriptor:  
+文件描述符(File descriptor)是计算机科学中的一个术语,是一个用于表述<font color="#00FF00">指向文件的引用</font>的抽象化概念.文件描述符在形式上是一个非负整数,实际上,<font color="#00FF00">它是一个索引值</font>,指向内核为每一个进程所维护的该进程打开文件的记录表.<font color="#00FF00">当程序打开一个现有文件或者创建一个新文件时,内核向进程返回一个文件描述符</font>.在程序设计中,文件描述符这一概念往往只适用于UNIX、Linux这样的操作系统.  
+那么每当客户端与Redis服务器建立一次连接时,Redis服务端都会返回一个<font color="#00FF00">fd(文件句柄)</font>,通过该文件句柄就能对应上每个客户端.后续的客户端就有命令时就带上这个fd进行后续操作.  
+**IO多路复用**  
+一种同步的IO模型,<font color="#FF00FF">实现一个线程监视多个文件句柄</font>,<font color="#00FF00">一旦某个文件句柄就绪就能够通知到对应应用程序进行相应的读写操作</font>,没有文件句柄就绪时就会阻塞应用程序,从而释放CPU资源.
+* I/O:网络I/O,尤其在操作系统层面指数据在内核态和用户态之间的读写操作
+* 多路:多个客户端连接(连接就是套接字描述符,即socket或者channel)  
+* 复用:复用一个或几个线程
+* IO多路复用:一个或一组线程就可以处理多个TCP连接,使用单进程就能够实现同时处理多个客户端连接,<font color="#00FF00">无需创建或者维护过多的进程/线程</font>  
+* 小总结:一个服务端进程可以同时处理多个套接字描述符  
+  实现IO多路复用的模型有三种:可以分select->poll-><font color="#00FF00">epoll</font>三个阶段来描述  
+
+**epoll概念的引入**  
+![epoll](resources/redis/62.png)  
+<font color="#00FF00">这个知识点在计算机组成原理=>吃糖的例子中讲过;也是在IO那一章</font>  
+
+<font color="#FF00FF">IO复用模型</font>(这张图里的每句话都很重要)  
+![IO复用模型](resources/redis/64.png)  
+
+这里的概念有点类似于字节多路通道?(操作系统的知识)  
+![字节多路通道](resources/redis/63.png)  
+
+**小总结:**  
+只使用一个服务端进程可以同时处理多个套接字描述符连接  
+![小总结](resources/redis/65.png)  
+
+![IO多路复用](resources/redis/66.png)  
+首先是引入了多IO线程(成为多线程),为的是将主线程中的IO操作独立出去;主线程只负责读写操作命令;其次对于每个IO线程又采用了IO多路复用技术,为的是可以让单个线程高效地处理多个连接请求.
+
+![IO多路复用](resources/redis/67.png)  
+
+### 1.4 Redis默认是否开启了多线程
+如果在实际应用中,发现Redis实例的<font color="#00FF00">CPU开销不大但吞吐量却没有提升</font>,可以考虑使用Redis7的多线程机制,加速网络处理,进而提升实例的吞吐量.  
+Redis7将所有数据放在内存中,内存的响应时长大约为100纳秒,对于小数据包,Redis服务器可以处理8W到10W的QPS,这也是Redis处理的极限了,<font color="#00FF00">对于80%的公司来说,单线程的Redis已经足够使用了</font>.  
+在Redis6/7后,多线程机制默认是关闭的,如果需要使用多线程功能,需要在redis.conf中完成两个设置  
+* `io-threads [threadCount]` io线程数量;默认是未开启的  
+  对于一个实例,如果你又4核CPU,建议使用2~3个IO线程;  
+  如果你有8个核心,可以尝试使用6个io线程  
+* `io-threads-do-reads [yes|no(default)]` 是否启用多线程
+
+## 2.BigKey
+**目录:**  
+2.1 面试题  
+2.2 MoreKey案例  
+2.3 BigKey案例  
+2.4 BigKey生产调优  
+
+
+### 2.1 面试题
+* 阿里广告平台,海量数据里查询某一固定前缀的key  
+* 小红书,你如何生产上限制key */flushdb/flushall等危险命令以防止误删误用?  
+* 美团`memory usage`命令使用过吗
+* BigKey问题,多大算big?你如何发现?如何删除?如何处理?
+* BigKey你做过调优吗?惰性释放lazyfree了解过吗?
+* MoreKey(大量Key)问题,生产上redis数据库有1000W条记录,你如何遍历?key * 可以吗?
+
+### 2.2 MoreKey案例
+1.向redis中插入100W条数据模拟多key  
+* linux bash执行脚本生成redis插入命令  
+  `for((i=1;i<=100*10000;i++)); do echo "set k$i v$i" >> /tmp/redisTest.txt ;done;`  
+  在linux下执行该脚本,生成插入语句的文本
+* 通过redis提供的管道--pipe命令插入100w条数据  
+  `cat /tmp/redisTest. txt | redis-cli -h 127.0. 0. 1 -p 6379 -a 111111 –-pipe`  
+
+2.执行dbsize命令查看redis中的数据量  
+`dbsize`  
+
+3.顺丰P0级生产事故  
+![顺丰redis](resources/redis/68.png)
+
+4.头铁执行keys *  
+数据库花费33s执行该命令,在这期间所有读写Redis的其它的指令都会被延后甚至会超时报错,可能会引起缓存雪崩甚至数据库宕机.  
+**<font color="#FF00FF">生产上绝对不可以使用keys \*/flushdb/flushall这样的危险命令的</font>**
+
+5.生产上限制keys */flushdb/flushall等危险命令以防止误删误用?  
+修改redis.conf配置文件:  
+* `rename-command keys ""` 禁用keys命令
+* `rename-command flushdb ""` 禁用flushdb命令
+* `rename-command flushall ""` 禁用flushall命令
+  
+6.不能使用keys * 遍历,那用什么?  
+*本小节也解释了阿里广告平台,海量数据里查询某一固定前缀的key这个条面试题*  
+
+* `scan [cursor] [match [pattern]] [count [countNumber]]` 基于游标的迭代器,用于迭代当前数据库中的Key,针对string类型  
+  * `cursor`(必填):游标的值  
+  游标的值从0开始为一次新的迭代,并且执行该命令都会返回一个游标值,该值作为下一次[cursor]的值进行迭代,当游标值跌倒回到0时代表迭代结束
+  * `match`(必填):
+    * `pattern`:匹配Key的表达式  
+  * `count`(必填):
+    * `countNumber`:每次迭代返回的key的个数,返回数量不可控只能说是大概率符合[countNumber]参数  
+  - - -
+  效果大致如下:  
+  ![效果](resources/redis/69.png)
+* `sscan` 针对set类型 
+* `hscan` 针对hash类型
+* `zscan` 针对ZSet类型
+
+**注意:**  
+redis的游标并不是从第一纬数组的第零位一直遍历到末尾,而是采用了高位进位加法来遍历,之所以采用这种方法是考虑到字典的扩容和缩容时避免槽位的遍历重复和遗留.  
+
+### 2.3 BigKey案例
+**多大算BigKey?**  
+<font color="#00FF00">String类型控制在10kb以内,hash、list、set、zset元素个人不要超过5000.</font>  
+所以超过这个限定的都算BigKey  
+非字符串的BigKey不要使用del删除,使用hscan、sscan、zscan方式<font color="#00FF00">渐进式删除</font>,同时要注意防止bigkey过期时间自动删除问题,自动删除走的是`del`命令,如果是大key则会造成Redis阻塞.  
+
+**哪些危害?**  
+* 内存不均匀,集群迁移困难  
+* 超时删除,大key删除阻塞
+* 网络流量阻塞
+
+**如何产生**  
+* 王心凌粉丝列表,典型案例粉丝逐步递增  
+* 某个报表,月日年积年累月地增加  
+
+**如何发现大key**  
+1.`redis-cli --bigkeys -i 0.1`  
+* `-i 0.1` 如果不加则Redis直接扫描,但是会造成ops剧增;-i 0.1的意思代表每隔100条scan指令就会休眠0.1s
+
+使用--bigkeys的好处是,<font color="#00FF00">它会给出每种数据结构Top 1 bigkey,同时给出每种数据类型的键值个数+平均大小</font>  
+执行结果如下  
+![大key](resources/redis/70.png)  
+
+2.`memory usage`  
+执行:  
+`memory usage [key]` 查看某个key对应的value占多少字节数
+
+**如何删除**  
+什么叫渐进式删除?  
+假设对于hash类似,它下面有n个key  
+删除的时候不使用`del`删除整个hash类型,而是先使用`hdel` 删除这个hash下面的部分key,再接着删除部分key;每次删一部分最终再调用`del`命令删除整个hash.  
+<font color="#00FF00">这个时候就可以搭配之前讲到的scan命令,先迭代得到一部分key后删除这部分key(因为你不知道有哪些key),然后再接着迭代</font>
+
+3.删除string类型  
+一般使用`del`删除,如果过于庞大可以使用`unlink`删除  
+
+4.删除hash类型  
+`hscan`+`sdel`渐进式删除  
+java示例代码:
+```java
+public void delBigHash(String host, int port, String password, String bigHashKey) {
+    Jedis jedis = new Jedis(host, port);
+    if (password != null && !"".equals(password)) {
+        jedis.auth(password);
+    }
+    ScanParams scanParams = new ScanParams().count(100);
+    String cursor = "0";
+    do {
+        ScanResult<Entry<String, String>> scanResult = jedis.hscan(bigHashKey, cursor, scanParams)
+        List<Entry<String, String>> entryList = scanResult.getResult();
+        if (entryList != null && !entryList.isEmpty()) {
+            for (Entry<String, String> entry : entryList) {
+                jedis.hdel(bigHashKey, entry.getKey());
+            }
+        }
+        cursor = scanResult.getStringCursor();
+    } while (!"0".equals(cursor));
+    //删除bigkey
+    jedis.del(bigHashKey);
+}
+```
+
+5.删除list类型  
+利用`ltrim`命令删除,可以每次删除100个  
+java示例代码:  
+```java
+    public void delBiglist(String host, int port, String password, String biglistKey) {
+        Jedis jedis = new Jedis(host, port);
+        if (password != null && !"".equals(password)) {
+            jedis.auth(password);
+        }
+        long llen = jedis.llen(biglistKey);
+        int counter = 0;
+        int left = 100;
+        while (counter < llen) {
+        //每次从左侧裁掠100个
+            jedis.ltrim(biglistKey, left, llen);
+            counter += left;
+        }
+        //最终删除key
+        jedis.del(bigListKey);
+    }
+
+```
+
+6.删除set类型  
+利用`sscan`+`srem`渐进式删除  
+java示例代码:
+```java
+    public void delBigSet(String host, int port, String password, String bigSetkey) {
+        Jedis jedis = new Jedis(host, port);
+        if (password != null && !"".equals(password)) {
+            jedis.auth(password);
+        }
+        ScanParams scanParams = new ScanParams().count(100);
+        String cursor = "0";
+        do {
+            ScanResult<String> scanResult = jedis.sscan(bigSetKey, cursor, scanParams);
+            List<String> memberList = scanResult.getResult();
+            if (memberList != null && !memberList.isEmpty()) {
+                for (String member : memberList) {
+                    jedis.srem(bigSetKey, member);
+                }
+            }
+            cursor = scanResult.getStringCursor();
+        } while (!"8".equals(cursor));
+        //删除bigkey
+        jedis.del(bigSetKey);
+    }
+```
+
+7.删除ZSet类型  
+利用`zscan`+`zremrangebyrank`
+java代码示例:  
+```java
+    public void delBigZset(String host, int port, String password, String bigZsetKey) {
+        Jedis jedis = new Jedis(host, port);
+        if (password != null && !"".equals(password)) {
+            jedis.auth(password);
+        }
+        ScanParams scanParams = new ScanParams().count(100);
+        String cursor = "o";
+        do {
+            ScanResult<Tuple> scanResult = jedis.zscan(bigZsetKey, cursor, scanParams);
+            List<Tuple> tupleList = scanResult.getResult();
+            if (tupleList != null && !tupleList.isEmpty()) {
+                for (Tuple tuple : tuplelist) {
+                    jedis.zrem(bigZsetKey, tuple.getElement());
+                }
+            }
+            cursor = scanResult.getStringCursor();
+        } while (!"o".equals(cursor));
+        //删除bigkey
+        jedis.del(bigZsetKey);
+    }
+```
+
+### 2.4 BigKey生产调优
+*本节是对BigKey你做过调优吗?惰性释放lazyfree了解过吗?问题的解答*  
+1.阻塞和非阻塞删除命令  
+![阻塞和非阻塞删除命令](resources/redis/71.png)  
+2.打开redis.conf配置文件,找到lazy freeing相关说明
+![惰性优化](resources/redis/72.png)  
+* `lazyfree-lazy-server-del no` 惰性服务器删除
+* `replica-lazy-flush no` 惰性刷新
+* `lazyfree-lazy-user-del no` 惰性用户删除
+
+
+## 3.缓存双写一致性
+*注意:第三章和第四章是强相关的*  
+**目录:**  
+3.1 什么是缓存双写一致性  
+3.2 面试题  
+3.3 缓存双写一致性理解  
+3.4 数据库和缓存一致性的几种更新策略  
+
+
+
+### 3.1 什么是缓存双写一致性  
+![什么是双写一致性](resources/redis/73.png)  
+在上面的这张图中分为以下三种情况:  
+* java访问redis,如果有数据直接返回  
+* java访问redis,如果没有数据则查询数据库,数据库返回数据
+* 数据库返回数据的同时把本次查询的内容写入到redis
+
+那么如何保证redis和数据库中的数据之间的匹配度尽量是接近完整的?  
+<font color="#00FF00">这就是双写一致性问题</font>
+
+### 3.2 面试题
+* 有这么一种情况,微服务查询redis无数据,mysql有数据;为保证数据双写一致性回写redis你需要注意什么?<font color="#00FF00">双检加锁</font>策略你了解过吗?如何尽量避免缓存击穿?  
+* 你只要用缓存,就可能会涉及到redis缓存与数据库双存储双写.你只要是双写,就一定会有数据一致性问题,<font color="#00FF00">那么你如何解决一致性问题</font>?  
+* 双写一致性,你先动缓存redis还是数据库mysql?为什么?  
+  * 先更新redis再更新mysql?
+  * 先更新mysql再更新redis?
+  * 先删除redis再删除mysql?
+  * 先删除mysql再删除redis?
+* <font color="#00FF00">延时双删</font>你做过吗?会有哪些问题?
+* redis和mysql双写100%会出纰漏,做不到强一致性,你如何保证<font color="#00FF00">最终一致性</font>?
+
+### 3.3 缓存双写一致性理解
+* 如果redis中有数据,需要和数据库中值相等
+* 如果redis中无数据,数据库中的值要是最新值,且准备写回redis
+* 缓存按照操作分为两种  
+  * 只读缓存:redis只有读操作,mysql中的数据不写回到redis  
+    这种适合业务场景简单,并且也不会出错(因为没有回写的过程)  
+  * 读写缓存:
+    * 同步直写策略:  
+      也即完成上图第二步(即从mysql中查询到数据后立即写回给redis)  
+      对于读写缓存而言,要想保证缓存和数据库的一致就要采用同步直写策略
+    * 异步缓写策略(推荐):  
+      正常业务运行中,mysql数据变动了,但是可以在业务上容许出现一定时间后才作用于redis,比如仓库、物流系统  
+      出现异常情况,不得不将失败的动作重新修补,有可能需要借助kafka或者rabbitMQ等消息中间件,实现重试重写
+
+**如何用<font color="#0000FF">java代码实现上面那张图的业务逻辑?(即如何实现回写)</font>**  
+*该代码解决了:有这么一种情况,微服务查询redis无数据,mysql有数据;为保证数据双写一致性回写redis你需要注意什么?<font color="#00FF00">双检加锁</font>策略你了解过吗?如何尽量避免缓存击穿?*
+<font color="#00FF00">*双检加锁就是双重检查锁*</font>  
+
+先看错误的写法:
+```java
+public User findUserById(Integer id) {
+    User user = null;
+    String key = "user:" + id;
+    // 先从redis中查询数据,如果有数据直接返回没有必要从redis中查询数据
+    user = (User) redisTemplate.opsForValue().get(key);
+    if (user == null) {
+        // redis中没有,继续查询mysql
+        user = userMapper.selectById(id);
+        if (user == null) {
+            // 具体再细化,防止多次穿透,我们业务规定,记录下这个null值的key,列入黑名单或者记录或者异常
+            return user;
+        } else {
+            // mysql有数据需要将数据写回redis,保证下一次缓存命中率
+            redisTemplate.opsForValue().set(key, user);
+        }
+    }
+    return user;
+}
+```
+上面这段代码的写法有什么问题?  
+因为在高并发的系统下,可能一瞬间有很多请求过来;由于这些请求之间的间隔很小,它们可能全部去请求mysql导致mysql瞬时的压力过大,并且mysql查询到数据之后;这些请求多次回写了redis库(最后一行代码);主要是因为mysql查询语句和写redis不是一个原子操作.  
+
+双检加锁:
+```java
+public User findUserById(Integer id) {
+    User user = null;
+    String key = "user:" + id;
+    // 先从redis中查询数据,如果有直接返回,如果没有再去查询mysql
+    user = (User) redisTemplate.opsForValue().get(key);
+    // 缓存存在直接返回
+    if (user == null) {
+        // 对于高QPS的优化,进来就先加锁,保证一个请求操作,让外面的redis等待一下,避免击穿mysql
+        synchronized (YourService.class) {
+            // 再查一次redis
+            user = (User) redisTemplate.opsForValue().get(key);
+            // 二次查询redis还是null,可以查询mysql了
+            if (user == null) {
+                // 有数据直接返回
+                user = userMapper.selectById(id);
+                if (user == null) {
+                    return null;
+                } else {
+                    // mysql中有数据,需要回写redis,完成数据一致性同步
+                    redisTemplate.opsForValue().setIfAbsent(key, user, 7L, TimeUnit.DAYS);
+                }
+            }
+        }
+    }
+    return user;
+}
+```
+多个线程同时去查询数据库的这条记录时,我们可以在第一个查询数据的请求上使用一个互斥锁来锁住它.其它的线程走到这一步等待拿锁,等第一个线程查询到了数据,然后做缓存.<font color="#00FF00">后面的线程进入临界区时发现已经有缓存了直接拿走缓存即可</font>.
+
+### 3.4 数据库和缓存一致性的几种更新策略
+1.这一章解决剩下的所有面试题  
+* *你只要用缓存,就可能会涉及到redis缓存与数据库双存储双写.你只要是双写,就一定会有数据一致性问题,<font color="#00FF00">那么你如何解决一致性问题</font>?*  
+* *双写一致性,你先动缓存redis还是数据库mysql?为什么?*  
+* *<font color="#00FF00">延时双删</font>你做过吗?会有哪些问题?*  
+* *redis和mysql双写100%会出纰漏,做不到强一致性,你如何保证<font color="#00FF00">最终一致性</font>?*
+
+*提示:*  
+*先动数据库=>引出延时双删*  
+*先动redis=>引出最终一致性*
+
+**目标:** 达到最终一致性  
+<font color="#00FF00">给缓存设置过期时间,定期清理缓存并回写缓存,是保证最终一致性的解决方案.</font>  
+我们可以对存入缓存的数据设置过期时间,所有的<font color="#FF00FF">写操作以数据库为准</font>,对缓存操作只是尽最大努力即可.也就是说如果数据库写成功,缓存更新失败,那么只要到达过期时间,则后面的读请求自然会从数据库中读取新值然后回填缓存,达到一致性,<font color="#00FF00">切记,如果redis与mysql数据库不一致,要以mysql的数据库写入库为准.</font>
+
+
+2.可以停机的更新策略  
+夜间运维上线,系统暂停对外服务;在此期间运维人员负责完成数据的双写一致性.  
+
+3.不可停机的更新策略  
+* 先更新mysql,再更新redis
+* 先更新redis,再更新mysql
+* 先删除redis,再更新mysql
+* 先更新mysql,再删除redis
+
+**先更新mysql,再更新redis(不行)**  
+异常1:  
+先更新mysql的某商品库存,当前商品的库存是100,更新为99个  
+先更新mysql修改为99成功,然后更新redis  
+此时假设异常出现,更新redis失败了,这导致mysql里面的库存是99而redis里面的还是100  
+这种情况会造成数据库和redis中的数据不一致问题,读到redis脏数据  
+
+异常2:  
+![异常情况](resources/redis/74.png)  
+
+**先更新redis,再更新mysql(不行)**  
+不推荐:  
+业务上一般把mysql作为底单数据库,保证最后解释  
+
+异常:  
+![异常情况](resources/redis/75.png)  
+此时mysql和redis数据不一致  
+
+**先删除redis,再更新mysql(不推荐)**  
+<font color="#00FF00">巧用回写机制</font>  
+异常问题:以下模拟一个多线程并发操作  
+1 A线程先成功删除了redis中的数据,然后再去更新mysql,<font color="#00FF00">此时mysql正在更新中但还没有结束</font>(由于网络延时)  
+<font color="#00FF00">B突然出现要来读取缓存中的数据</font>  
+![先更新redis](resources/redis/76.png)  
+
+2 此时redis中的数据是空的(因为被A线程删除了),B线程来读取redis中的数据;此时会出现两个问题:  
+2.1 B无法从redis中读取数据,于是从mysql中读取数据,但此时的数据还没有被A线程更新,<font color="#00FF00">所以读到的是旧值</font>  
+2.2 B会把读取到的旧值写回到redis  
+<font color="#00FF00">获得旧值数据后返回前台并回写进redis(刚被A线程删除的旧数据有极大可能又被写回了)</font>  
+
+![先删除redis,在更新mysql](resources/redis/77.png)  
+
+3 A线程更新完mysql,发现redis里面的缓存是脏数据,A线程直接懵逼  
+两个并发操作,一个是更新操作.一个是查询操作  
+<font color="#00FF00">A删除缓存后,B查询操作没有命中缓存,B先把老数据读出来后放到缓存中,然后A更新操作更新了数据库.  
+于是,在缓存中的数据还是老的数据,导致缓存中的数据是脏的,而且还一直这样脏下去了.</font>
+
+4 总结流程  
+![总结流程](resources/redis/78.png)  
+
+5 为了解决上述问题,引入延时<font color="#00FF00">双删策略</font>  
+![延时双删](resources/redis/79.png)  
+说白了就是当A线程更新完数据库之后<font color="#FF00FF">主动延迟一段时间后</font>再执行一次删除redis的操作,<font color="#00FF00">那么只要能够保证A线程在B线程写入redis缓存之后再删除redis就可以了</font>.
+
+5.1 <font color="#00FF00">那么这个延时的时间应该设置为多少?</font>  
+* 方法一:在业务程序运行的时候,统计下线程读数据和写缓存的操作时间,自行评估自己的项目的读数据业务逻辑的耗时,以此为基础来进行估算.然后写数据的休眠时间则在读数据业务逻辑的耗时基础上加<font color="#00FF00">百毫秒</font>即可.  
+  这么做的目的就是确保读请求结束,<font color="#00FF00">写请求可以删除读请求造成的缓存脏数据</font>
+* 方法二:新启动一个后台监控程序,比如后面要讲的WatchDog监控程序会加时  
+
+5.2 <font color="#00FF00">手动延迟造成的吞吐量降低如何解决?</font>  
+![吞吐量降低](resources/redis/80.png)  
+<font color="#00FF00">通过Future在第二次删除的时候异步删除,不影响主线程的执行流程.</font>  
+
+**先更新数据库,再删除redis(推荐)**  
+*这种方案也不是最完美的,它同样也有问题只是比较推荐这种方式*  
+异常:
+![异常问题](resources/redis/81.png)  
+<font color="#00FF00">这种方式可能会读取到缓存旧值</font>  
+*此外还有一个问题,有没有可能删除缓存失败?*  
+*由此就引入了最后一个问题*  
+*redis和mysql双写100%会出纰漏,做不到强一致性,你如何保证<font color="#00FF00">最终一致性</font>?*  
+
+<font color="#FF00FF">最终一致性解决方案:</font>  
+流程图:  
+![流程图](resources/redis/82.png)  
+
+* 可以把要删除的缓存值或者是要更新的数据库值暂存到消息队列中(例如使用Kafka/RabbitMQ等)  
+* 当程序没有能够成功地删除缓存值或者是更新数据库值时,可以从消息队列中重新读取这些值,然后再次进行删除或更新.
+* 如果能够成功地删除或更新,我们就要把这些值从消息队列中去除,以免重复操作,此时我们也可以保证数据库和缓存的数据一致了,否则还需要再次进行重试
+* 如果重试超过的一定次数后还是没有成功,我们就需要向业务层发送报错信息了,通知运维人员
+
+**如何选择方案?利弊如何?**  
+大多数业务场景下,优先使用<font color="#00FF00">先更新数据库,再删除redis(先更库->后删存)</font>,理由如下:  
+* 先删除缓存值再更新数据库,有可能导致请求因缓存缺失而访问数据库,给数据库带来压力导致打满mysql(感觉这不是原因啊...不是有双检方案么)  
+* 如果业务应用中读取数据库和写缓存的时间不好估算,<font color="#00FF00">那么延迟双删中的等待时间就不好设置(即之前说的延时双删如何确定延时时长)</font>  
+
+如果使用先更新数据库再删除缓存的方案  
+如果业务要求必须读写一致性的数据,那么我们就需要在更新数据库时,先在redis缓存客户端暂停并发读请求,等数据库更新完、缓存值删除后,再读取数据,从而保证数据一致性,这是理论可以达到的效果,但实际不推荐,因为真实生产环境中,分布式下很难做到实时一致性,<font color="#00FF00">一般都是最终一致性</font>,请大家参考.  
+
+**一图总结:**  
+![一图总结](resources/redis/83.png)  
 
 
 
