@@ -1924,7 +1924,8 @@ B.Redis命令大全
 
 *help:命令可以帮助我们获取帮助*  
 *help @[type]* 获取一个类型的帮助命令,其中type是Redis十大类型  
-*help [command]* 获取一个命令的帮助信息
+*help [command]* 获取一个命令的帮助信息  
+**<font color="#FF00FF">实战使用的时候key一定要设置缓存过期时间!!!</font>**
 
 **目录:**  
 1.key相关  
@@ -2342,6 +2343,8 @@ A.其它
 3.缓存双写一致性  
 4.bitmap、hyperloglog、geo实战  
 5.布隆过滤器(BloomFilter)  
+6.缓存预热、缓存雪崩、缓存击穿、缓存穿透  
+7.手写Redis分布式锁  
 
 
 ## 1.Redis单线程和多线程  
@@ -2718,7 +2721,7 @@ java代码示例:
 
 **如何用<font color="#0000FF">java代码实现上面那张图的业务逻辑?(即如何实现回写)</font>**  
 *该代码解决了:有这么一种情况,微服务查询redis无数据,mysql有数据;为保证数据双写一致性回写redis你需要注意什么?<font color="#00FF00">双检加锁</font>策略你了解过吗?如何尽量避免缓存击穿?*
-<font color="#00FF00">*双检加锁就是双重检查锁*</font>  
+*<font color="#00FF00">双检加锁就是双重检查锁</font>*  
 
 先看错误的写法:
 ```java
@@ -3161,7 +3164,7 @@ public class RedisCanalClientExample {
             int totalEmptyCount = 10 * _60SECONDS;
             // 这里代表监听10分钟,如果十分钟内都没有监听到数据程序就停止;如果需要一直监听就写true
             while (emptyCount < totalEmptyCount) {
-                System.out.println("我是canal,每秒监听一次：" + UUID.randomUUID().toString());
+                System.out.println("我是canal,每秒监听一次:" + UUID.randomUUID().toString());
                 Message message = connector.getWithoutAck(batchSize); // 获取指定数量的数据
                 long batchId = message.getId();
                 int size = message.getEntries().size();
@@ -3512,7 +3515,8 @@ public class GeoService{
 5.2 基本介绍  
 5.3 布隆过滤器原理  
 5.4 布隆过滤器使用场景  
-5.5 尝试手写布隆过滤器    
+5.5 尝试手写布隆过滤器  
+5.6 布谷鸟过滤器  
 
 
 ### 5.1 面试题  
@@ -3789,14 +3793,834 @@ spring:
 ```
 
 4.主启动类  
+主启动类上标注的`@MapperScan`注解得是tk.mybatis.spring.annotation.MapperScan包下注解.不是mybatis官方的  
+
+5.业务类  
+CustomerService:  
+```java
+@Service
+@Slf4j
+public class CustomerService {
+
+    public static final String CACHE_KEY_CUSTOMER = "customer:";
+
+    @Resource
+    private CustomerMapper customerMapper;
+    @Autowired
+    private RedisTemplate redisTemplate;
+
+    public void addCustomer(Customer customer) {
+        int i = customerMapper.insertSelective(customer);
+        if (i > 0) {
+            // mysql插入成功,需要重新查询一次将数据捞出来,写进Redis
+            Customer result = customerMapper.selectByPrimaryKey(customer.getId());
+            // redis 缓存key
+            String key = CACHE_KEY_CUSTOMER + result.getId();
+            redisTemplate.opsForValue().set(key, result);
+        }
+    }
+
+    public Customer findCustomerById(Integer customerId) {
+        Customer customer = null;
+        // 缓存redis的key名称
+        String key = CACHE_KEY_CUSTOMER + customerId;
+        // 查看redis是否存在
+        customer = (Customer) redisTemplate.opsForValue().get(key);
+
+        // redis 不存在,取MySQL中查找
+        if (null == customer) {
+            // 双检加锁
+            synchronized (CustomerService.class) {
+                customer = (Customer) redisTemplate.opsForValue().get(key);
+                if (null == customer) {
+                    customer = customerMapper.selectByPrimaryKey(customerId);
+                    if (null == customer) {
+                        // 数据库没有放入redis设置缓存过期时间
+                        redisTemplate.opsForValue().set(key, customer, 60, TimeUnit.SECONDS);
+                    } else {
+                        redisTemplate.opsForValue().set(key, customer);
+                    }
+                }
+            }
+
+        }
+
+        return customer;
+    }
+}
+```
+
+CustomerController:  
+```java
+@Api(tags = "客户Customer接口+布隆过滤器讲解")
+@RestController
+@Slf4j
+public class CustomerController {
+
+    @Autowired
+    private CustomerService customerService;
+
+    @ApiOperation("数据库初始化两条Customer记录")
+    @PostMapping(value = "/customer/add")
+    public void addCustomer() {
+        for (int i = 0; i < 2; i++) {
+            Customer customer = new Customer();
+            customer.setCname("customer" + i);
+            customer.setAge(new Random().nextInt(30) + 1);
+            customer.setPhone("139546556");
+            customer.setSex((byte)new Random().nextInt(2));
+            customer.setBirth(Date.from(LocalDateTime.now().atZone(ZoneId.systemDefault()).toInstant()));
+
+            customerService.addCustomer(customer);
+        }
+    }
+
+    @ApiOperation("单个customer查询操作")
+    @PostMapping(value = "/customer/{id}")
+    public Customer findCustomerById(@PathVariable int id) {
+        return customerService.findCustomerById(id);
+    }
+
+}
+
+```
+
+6.添加布隆过滤器  
+**主要编写四个类:** BloomFilterInit、CheckUtils、CustomerController、CustomerService  
+
+BloomFilterInit(白名单):  
+```java
+/**
+ * 布隆过滤器白名单初始化工具类,一开始就设置一部分数据为白名单所有
+ * 白名单业务默认规定:布隆过滤器有,Redis是极大可能有
+ * 白名单:whitelistCustomer
+ */
+@Component
+@Slf4j
+public class BloomFilterInit {
+
+    @Autowired
+    private RedisTemplate redisTemplate;
+
+    @PostConstruct
+    public void init() {
+        // 1 白名单客户加载到布隆过滤器
+        String key = "customer:12";
+        // 2 计算hashvalue,由于存在计算出来负数的可能,需要取绝对值
+        int hashValue = Math.abs(key.hashCode());
+        // 3 通过hashValue和2^32取余,获得对应的下标坑位
+        long index = (long) (hashValue % Math.pow(2, 32));
+        log.info(key + "对应的坑位index:{}", index);
+        // 4 设置Redis 里面的bitmap对应白名单类型的坑位,并设置为1
+        redisTemplate.opsForValue().setBit("whitelistCustomer", index, true);
+    }
+}
+```
+
+CheckUtils:
+```java
+@Component
+@Slf4j
+public class CheckUtils {
+
+    @Autowired
+    private RedisTemplate redisTemplate;
+    
+    public boolean checkWithBloomFilter(String checkItem, String key) {
+        int hashValue = Math.abs(key.hashCode());
+        long index = (long) (hashValue % Math.pow(2, 32));
+        Boolean exitOk = redisTemplate.opsForValue().getBit(checkItem, index);
+        log.info("---> key：{}对应坑位下标index：{}是否存在：{}", key, index, exitOk);
+        return exitOk;
+    }
+}
+```
+
+CustomerController:  
+```java
+@ApiOperation("BloomFilter, 单个customer查询操作")
+@PostMapping(value = "/customerBloomFilter/{id}")
+public Customer findCustomerByIdWithBloomFilter(@PathVariable int id) {
+    return customerService.findCustomerByIdWithBloomFilter(id);
+}
+```
+
+CustomerService:  
+```java
+    /**
+     * BloomFilter -> redis -> mysql
+     * @param customerId
+     * @return
+     */
+public Customer findCustomerByIdWithBloomFilter(Integer customerId) {
+    Customer customer = null;
+    // 缓存redis的key名称
+    String key = CACHE_KEY_CUSTOMER + customerId;
+
+    // 布隆过滤器check
+    if (!checkUtils.checkWithBloomFilter("whitelistCustomer", key)) {
+        log.info("白名单无此顾客，不可以访问，{}", key);
+        return null;
+    }
+
+    // 查看redis是否存在
+    customer = (Customer) redisTemplate.opsForValue().get(key);
+    // redis 不存在，取MySQL中查找
+    if (null == customer) {
+        // 双端加锁策略
+        synchronized (CustomerService.class) {
+            customer = (Customer) redisTemplate.opsForValue().get(key);
+            if (null == customer) {
+                customer = customerMapper.selectByPrimaryKey(customerId);
+                if (null == customer) {
+                    // 数据库没有放入redis设置缓存过期时间
+                    redisTemplate.opsForValue().set(key, customer, 60, TimeUnit.SECONDS);
+                } else {
+                    redisTemplate.opsForValue().set(key, customer);
+                }
+            }
+        }
+
+    }
+    return customer;
+}
+```
+此时查询分三种情况:  
+* 布隆过滤器有,redis有(直接从redis中查询数据)
+* 布隆过滤器有,redis无(先从redis中查询发现没有后查询数据库,数据库查询结果回写进入redis)
+* 布隆过滤器无,直接返回,不再继续执行
+
+### 5.6 布谷鸟过滤器
+**由来:**  
+解决了<font color="#00FF00">布隆过滤器不能删除元素的问题</font>  
+[布谷鸟过滤器官方文档](https://www.cs.cmu.edu/~binfan/papers/conext14_cuckoofilter.pdf)  
 
 
+## 6.缓存预热、缓存雪崩、缓存击穿、缓存穿透
+**目录:**  
+6.1 面试题  
+6.2 缓存预热  
+6.3 缓存雪崩  
+6.4 缓存穿透  
+6.5 缓存击穿  
+
+### 6.1 面试题
+* 缓存预热、雪崩、穿透、击穿分别是什么?你遇到过那几个情况? 
+* 缓存预热你是怎么做的?
+* 如何避免或者减少缓存雪崩?
+* 穿透和击穿有什么区别?他两是一个意思还是截然不同?
+* 穿透和击穿你有什么解决方案?如何避免?
+* 假如出现了缓存不一致,你有哪些修补方案?
+
+### 6.2 缓存预热
+**介绍:**  
+msyql假如新增100条记录,一般默认以mysql为准作为底单数据,如何同步给redis(布隆过滤器)这100条合法数据?  
+方案一:  
+什么也不做,MySQL有新增数据,利用redis回写机制,让它逐步实现100条新增记录的同步.  
+最好在发布前的晚上,由运维把这些数据同步到redis,不要把这个问题留给用户.  
+方案二:  
+通过中间件或者程序自动完成  
+
+### 6.3 缓存雪崩
+**介绍:**  
+redis主机挂了,redis全盘崩溃,偏硬件运维  
+<font color="#00FF00">redis中有大量key同时过期大面积失效</font>,偏软件开发(重要)  
+
+**如何解决和预防(大量key失效场景)**  
+1.加钱加硬件(最推荐)  
+[使用阿里云-云数据库Redis版](https://www.aliyun.com/product/redis)  
+
+2.redis中key设置为永不过期或过期时间错开  
+
+3.redis缓存集群实现高可用
+* 主从+哨兵
+* Redis集群
+* 开启redis持久化机制aof/rdb,尽快恢复缓存集群  
+
+简而言之这种实现方式,就是不要让挂掉的一台redis影响整个对外提供服务的redis集群
+
+4.多缓存结合预防雪崩  
+通过ehcache本地缓存(客户端缓存)+redis缓存  
+
+5.服务降级  
+sentinel完成服务的限流或降级  
+![限流或降级](resources/redis/105.png)
+
+
+### 6.4 缓存穿透
+**目录:**  
+6.4.1 介绍  
+6.4.2 空对象缓存  
+6.4.3 Guava布隆过滤器(推荐)  
+
+
+#### 6.4.1 介绍  
+请求去查询一条记录,先查redis无,后查mysql无,<font color="#00FF00">都查询不到该条记录</font>,但是请求每次都会打到数据库上面去,导致后台数据库压力暴增,这种现象我们称为缓存穿透,这个redis变成了一个摆设.  
+既不在Redis缓存库,也不在mysql,数据库存在被多次暴击风险  
+那么如果不做相关的措施,就可能被别人恶意攻击从而导致MySQL崩溃  
+![介绍](resources/redis/106.png)  
+
+**解决方案:**  
+空对象缓存、Guava布隆过滤器  
+
+#### 6.4.2 空对象缓存(回写增强)  
+如果发生了缓存穿透,可以针对要查询的数据与业务部门商定出一个缺省值(比如-1、0、null等)  
+一个请求查询Redis和MySQL都没有(发生一次缓存穿透),<font color="#00FF00">此时需要在Redis中存入刚才查询的key,value为缺省值</font>  
+那么相同的请求再来查询的时候就能从Redis中查询到数据库了,这种方案就能<font color="#00FF00">避免大量相同的请求</font>把MySQL打爆了  
+但是此方法无法避免恶意攻击,<font color="#FF00FF">只能解决key相同的情况</font>;并且Redis中无关紧要的key也会越来越多(<font color="#00FF00">记得设计key的过期时间</font>)  
+
+#### 6.4.3 Guava布隆过滤器(推荐)
+**介绍:**  
+为了解决空对象缓存方案带来的只能对相同key有效的问题;提出了使用布隆过滤器  
+布隆过滤器的基本介绍详情见(高级篇=>5.布隆过滤器(BloomFilter))  
+本节主要介绍 **<font color="#00FF00">Google-Guava</font>**  
+之前在高级篇=>5.布隆过滤器=>5.5 尝试手写布隆过滤器中有手写一个布隆过滤器.  
+
+实际上Google-Guava提供了一个权威的布隆过滤器组件,可以直接使用.  
+[Guava's BloomFilter 源码出处](https://github.com/google/guava/blob/master/guava/src/com/google/common/hash/BloomFilter.java)  
+
+
+**案例:白名单过滤器**  
+1.架构说明  
+![架构说明](resources/redis/107.png)  
+
+2.存在误判率问题,但是概率较小可以接受;不能从布隆过滤器中删除  
+
+3.全部合法的key都需要放入Guava版布隆过滤器+Redis里面,不然数据返回就是null  
+
+4.创建java-springboot模块  
+
+5.修改pom  
+```xml
+<!--guava Google 开源的 Guava 中带的布隆过德器-->
+<dependency>
+    <groupId>com.google.guava</groupId>
+    <artifactId>guava</artifactId>
+    <version>23.0</version>
+</dependency>
+```
+
+编写主启动类、编写yml配置文件(正常写就行没有什么额外的东西)
+
+6.创建guava版布隆过滤器,入门演示案例  
+```java
+@Test 
+public void testGuava() { 
+  // 1 创建Guava 版本布隆过滤器 
+  /*
+  args0:指定Key的类型
+  args1:布隆过滤器里存放的样本数据量大小(这里假设为100即布隆过滤器中存放100数据量)
+  */
+  BloomFilter bloomFilter = BloomFilter.create(Funnels.integerFunnel(), 100); 
+  // 2 判断指定的元素是否存在 
+  System.out.println(bloomFilter.mightContain(1));
+  // false 
+  System.out.println(bloomFilter.mightContain(2));
+  // false 
+  System.out.println("======================="); 
+  // 3 将元素新增进入布隆过滤器 
+  bloomFilter.put(1); 
+  bloomFilter.put(2); 
+  System.out.println(bloomFilter.mightContain(1));
+  // true 
+  System.out.println(bloomFilter.mightContain(2));
+  // true 
+}
+```
+
+7.guava实战  
+GuavaBloomFilterController:  
+```java
+@Api(tags = "google工具Guava处理布隆过滤器")
+@RestController
+@Slf4j
+public class GuavaBloomFilterController {
+
+    @Autowired
+    private GuavaBloomFilterService guavaBloomFilterService;
+
+    @ApiOperation("guava布隆过滤器插入100万样本数据并额外10万测试是否存在")
+    @GetMapping("/guavafilter")
+    public void guavaBloomFIlterService() {
+        guavaBloomFilterService.guavaBloomFilterService();
+    }
+}
+```
+
+GuavaBloomFilterService:  
+```java
+@Service
+@Slf4j
+public class GuavaBloomFilterService {
+
+    public static final int _1w = 10000;
+    public static final int SIZE = 100 * _1w;
+    // 误判率，它越小误判的个数也就越少(是否可以无限小?没有误判率岂不是更好)
+    public static double fpp = 0.03;
+    // 创建Guava 版本布隆过滤器
+    /*
+    args0:int类型
+    args1:guava大小'
+    args2:误判率
+    */
+    BloomFilter<Integer> bloomFilter = BloomFilter.create(Funnels.integerFunnel(), SIZE, fpp);
+
+    public void guavaBloomFilterService() {
+        // 1 先让bloomFilter加入100w白名单数据
+        for (int i = 0; i < SIZE; i++) {
+            bloomFilter.put(i);
+        }
+        // 2 故意去10w不在合法范围内的数据，来进行误判率演示
+        ArrayList<Integer> list = new ArrayList<>(10 * _1w);
+        // 3 验证
+        for (int i = SIZE; i < SIZE + (10 * _1w); i++) {
+            if(bloomFilter.mightContain(i)) {
+                log.info("被误判了：{}", i);
+                list.add(i);
+            }
+        }
+        log.info("误判的总数量：{}", list.size());
+    }
+}
+// 运行之后，结果为:误判的总数量:3033;正好和上面的误判率0.03对应
+```
+
+**误判率不是越小越好?**  
+debug进入源码观察  
+![源码](resources/redis/108.png)  
+**解释:**  
+现在样本数据为100W  
+误判率为0.03  
+guava准备的坑位(bitmap)大小位数为7298440  
+使用hash函数的个数为5  
+- - -
+![误判率](resources/redis/109.png)  
+**解释:**  
+现在样本数据为100W  
+误判率为0.01  
+guava准备的坑位(bitmap)大小位数为9585058  
+使用hash函数的个数为7  
+
+**<font color="#FF00FF">即误判率越低占用的可坑位大小就越多,hash函数也会越多.</font>**  
+<font color="#00FF00">为什么是0.03?因为guava默认的误判率就是0.03;如果不写误判率则值就是0.03</font>  
+
+8.布隆过滤器说明  
+![布隆过滤说明](resources/redis/110.png)  
+**注意:**  
+<font color="#00FF00">布隆过滤器还是需要和空对象缓存同时使用的;否则恶意攻击者一旦找到一个key是能通过布隆过滤器的,那么它就可以利用这个key打崩MySQL</font>  
+
+
+### 6.5 缓存击穿
+**目录:**  
+6.5.1 介绍  
+6.5.2 解决方案  
+6.5.3 缓存击穿案例  
+6.5.4 springboot+Redis实现高并发的聚划算业务    
+
+
+#### 6.5.1 介绍
+**介绍:**  
+大量的请求同时查询一个key时,此时这个key正好失效了,就会导致大量的请求都打到数据库上面去  
+<font color="#00FF00">简单来说就是热点key突然失效了,全部落入了MySQL</font>  
+这个问题其实在之前讲双写一致性时提到过(<font color="#FF00FF">双检加锁</font>)  
+
+**区别:**  
+缓存击穿和缓存穿透的区别,从表象上来看它们<font color="#00FF00">最终的效果都是一样的;都是打崩MySQL</font>  
+缓存穿透是一直持续干MySQL  
+缓存击穿是一瞬间猛干MySQL  
+
+**什么场景会出现缓存击穿**  
+* 高频访问的key到期失效了
+* delete老key,换上新的key;`del`动作发生的同时,key失效了;还没来得及换上新key时,大量请求访问该key
+
+**危害:**  
+会造成某一时刻数据库请求量过大,压力剧增  
+一般技术部门<font color="#00FF00">需要知道热点key是哪些</font>,防止缓存被击穿.  
+
+
+#### 6.5.2 解决方案
+方案一:差异失效时间,对于访问频繁的热点key,干脆就不设置过期时间  
+<font color="#00FF00">方案二:互斥更新,采用双检加锁策略</font>  
+
+#### 6.5.3 缓存击穿案例
+1.天猫聚划算功能实现+防止缓存击穿  
+![天猫聚划算](resources/redis/111.png)  
+天猫聚划算网页的这些商品信息一定是存放在redis中的  
+
+现在商品折扣信息显示的都是`限时折扣 品牌正品`  
+![商品信息](resources/redis/112.png)  
+
+而以前是显示还有多长时间折扣结束  
+![商品信息](resources/redis/113.png)  
+
+为什么现在这么设计?  
+为的就是防止有恶意攻击者,在时间结束的一瞬间(即redis的key过期时)下单导致打崩MySQL;现在就是前端给限制了不让你看到什么时候过期  
+
+2.分析过程  
+* 100%高并发,绝对不可以用MySQL实现  
+* 先把MySQL里面参加活动的数据抽取进redis,一般采用定时器扫描来决定上线活动还是下线取消
+* 支持分页功能,一页20条记录
+
+问:Redis中什么数据类型支持上述功能?  
+<font color="#00FF00">高并发+定时任务+分页显示</font>  
+答:用list;一般list就是用于分页显示;虽然zset也可以,但zset一般用于带排行榜的场景  
+
+#### 6.5.4 springboot+Redis实现高并发的聚划算业务
+1.创建springboot模块、pom、yml、主启动类  
+
+2.实体类  
+```java
+@ApiModel(value="聚划算活动Product信息")
+public class Product {
+
+    // 产品id
+    private Long id;
+    // 产品名称
+    private String name;
+    // 产品价格
+    private Integer price;
+    // 产品详情
+    private String detail;
+
+}
+```
+
+3.采用定时器将参与聚划算活动的特价商品新增进入redis中  
+JHSTaskService:  
+```java
+@Service
+@Slf4j
+public class JHSTaskService {
+
+    public static final String JHS_KEY = "jhs";
+    public static final String JHS_KEY_A = "jhs:a";
+    public static final String JHS_KEY_B = "jhs:b";
+
+    @Autowired
+    private RedisTemplate redisTemplate;
+
+    /**
+     * 假设此处是从数据库读取
+     * @return
+     */
+    private List<Product> getProductsFromMysql() {
+        ArrayList<Product> list = new ArrayList<>();
+        for (int i = 0; i < 20; i++) {
+            Random random = new Random();
+            int id = random.nextInt(10000);
+            Product product = new Product((long) id, "product" + i, i, "detail");
+            list.add(product);
+        }
+        return list;
+    }
+
+    @PostConstruct
+    public void initJHS() {
+        log.info("模拟定时任务从数据库中不断获取参加聚划算的商品");
+        // 1 用多线程模拟定时任务，将商品从数据库刷新到redis
+        new Thread(() -> {
+            while(true) {
+                // 2 模拟从数据库查询数据,用于加载到Redis并给聚划算页面显示
+                List<Product> list = this.getProductsFromMysql();
+                // 3 删除原来的数据
+                redisTemplate.delete(JHS_KEY);
+                // 4 加入最新的数据给Redis参加活动;采用lpush命令来实现存储
+                redisTemplate.opsForList().leftPushAll(JHS_KEY, list);
+                // 5 暂停1分钟，模拟聚划算参加商品下架上新等操作
+                try {
+                    Thread.sleep(60000);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+        }, "t1").start();
+    }
+}
+```
+
+4.JHSTaskController  
+```java
+@Api(tags = "模拟聚划算商品上下架")
+@RestController
+public class JHSTaskController {
+
+    public static final String JHS_KEY = "jhs";
+    public static final String JHS_KEY_A = "jhs:a";
+    public static final String JHS_KEY_B = "jhs:b";
+
+    @Autowired
+    private RedisTemplate redisTemplate;
+
+    @ApiOperation("聚划算案例，每次1页，每页5条数据")
+    @GetMapping("/product/find")
+    public List<Product> find(int page, int size) {
+        long start = (page - 1) * size;
+        long end = start + size - 1;
+        // 先去Redis中查询
+        List list = redisTemplate.opsForList().range(JHS_KEY, start, end);
+        if (CollectionUtils.isEmpty(list)) {
+            // todo Redis找不到，去数据库中查询(存在安全隐患)
+        }
+        log.info("参加活动的商家: {}", list);
+        return list;
+    }
+}
+```
+
+5.上面这些代码在高并发场景下的生产问题  
+热点key突然失效,导致可怕的缓存击穿  
+导致的原因是service层中的`delete`和`leftPushAll`这两个方法不是原子的.
+![生产问题](resources/redis/114.png)  
+![生产问题](resources/redis/115.png)  
+
+**解决方案:** 6.5.2 解决方案
+
+6.互斥更新  
+见:高级篇=>3.缓存双写一致性=>3.3 缓存双写一致性理解
+
+7.差异失效时间  
+![差异失效时间](resources/redis/116.png)  
+同一份数据对应两个key  
+
+8.代码更新  
+JHSTaskService:  
+```java
+// 双缓存
+@PostConstruct
+public void initJHSAB() {
+    log.info("模拟定时任务从数据库中不断获取参加聚划算的商品");
+    // 1 用多线程模拟定时任务，将商品从数据库刷新到redis
+    new Thread(() -> {
+        while(true) {
+            // 2 模拟从数据库查询数据
+            List<Product> list = this.getProductsFromMysql();
+            // 3 先更新B缓存且让B缓存过期时间超过A缓存，如果突然失效还有B兜底，防止击穿
+            redisTemplate.delete(JHS_KEY_B);
+            redisTemplate.opsForList().leftPushAll(JHS_KEY_B, list);
+            // 设置过期时间为1天+10秒
+            redisTemplate.expire(JHS_KEY_B, 86410L, TimeUnit.SECONDS);
+            // 4 在更新缓存A
+            redisTemplate.delete(JHS_KEY_A);
+            redisTemplate.opsForList().leftPushAll(JHS_KEY_A, list);
+            redisTemplate.expire(JHS_KEY_A, 86400L, TimeUnit.SECONDS);
+            // 5 暂停1分钟，模拟聚划算参加商品下架上新等操作
+            try {
+                Thread.sleep(60000);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+    }, "t1").start();
+}
+```
+
+JHSTaskController:
+```java
+@ApiOperation("聚划算案例，AB双缓存，防止热key突然失效")
+@GetMapping("/product/findab")
+public List<Product> findAB(int page, int size) {
+    List<Product> list = null;
+    long start = (page - 1) * size;
+    long end = start + size - 1;
+    list = redisTemplate.opsForList().range(JHS_KEY_A, start, end);
+    if (CollectionUtils.isEmpty(list)) {
+        //  Redis找不到，去数据库中查询
+        log.info("A缓存已经失效或活动已经结束");
+        list = redisTemplate.opsForList().range(JHS_KEY_B, start, end);
+        if (CollectionUtils.isEmpty(list)) {
+            // todo Redis找不到，去数据库中查询
+        }
+    }
+    log.info("参加活动的商家: {}", list);
+    return list;
+}
+```
+
+说白了就是同一份数据用两个key来保存,一个是正常过期时间;另一个在正常过期时间上加上一点时间.  
+查询的时候如果查询不到正常时间的key,说明已经过期;<font color="#00FF00">但为了防止本次查询打入数据库(因为可能是海量查询)</font>;让本次查询去查询时间长一点的key.
+
+## 7.手写Redis分布式锁
+*本章和第8章强关联*  
+**目录:**  
+7.1 面试题  
+7.2 介绍  
+7.3 基础案例  
+7.4 分布式锁实现  
+
+
+
+### 7.1 面试题  
+* Redis除了拿来做缓存,你还见过基于Redis的什么用法  
+* Redis做分布式锁的时候需要注意什么问题
+* 你们公司自己实现的分布式锁是否用的setnx命令实现?
+  这个是最合适的吗?你如何考虑分布式锁的可重入问题?  
+* 如果是Redis是单点部署的,会带来什么问题?
+* Redis集群模式下,比如主从模式,CAP方面有没有什么问题呢?
+* 那你简单的介绍一下Redlock吧?你简历上写redisson,你谈谈
+* Redid分布式锁如何续期?看门狗知道吗?
+
+- [x] 问:Redis除了拿来做缓存,你还见过基于Redis的什么用法  
+答(这个问题就是Redis实战的所有场景):  
+* 数据共享,分布式session
+* 分布式锁
+* 全局ID
+* 计算器、点赞
+* 位统计
+* 购物车
+* 轻量消息队列(list、stream)
+* 抽奖
+* 点赞、签到、打卡
+* 差集交集并集,用户关注、可能认识的人
+* 热点新闻、热搜排行榜、延迟写
+
+- [x] 问:如果是Redis是单点部署的,会带来什么问题?  
+(单点部署的意思是只有一台主机,但可以有主从复制与哨兵)  
+答:  
+因为之前说过Redis是不能保证一致性的,因为Redis是AP(基础篇=>8.Redis集群=>8.2集群算法-分片-槽位slot=>6.Redis集群不保证强一致性)  
+假设使用Redis完成分布式锁,锁的信息存放到一台master上,当master正要向它的slave同步信息时,master突然宕机了;按照哨兵模式,会有slave上位变为master;但是之前的<font color="#00FF00">锁信息就丢失了</font>(因为Redis不保证一致性);这种情况就是比较严重的  
+
+### 7.2 介绍
+1.锁的种类  
+* 单机版同一个JVM内,synchronize或者Lock接口
+* 分布式不同的JVM虚拟机,单击的线程锁机制不再起作用,资源类在不同的服务器之间共享了  
+
+分布式锁原理:  
+一个JVM虚拟机向Redis中获取锁;调用setnx命令;如果获取成功那么它就有权利执行后续的代码.如果没有获取成功则该JVM只能重试获取.  
+
+2.分布式锁具备的特性  
+* 独占性:任何时刻,只能有且仅有一个线程持有
+* 高可用:  
+  若Redis集群环境,不能因为某一个节点挂了而出现获取锁和释放锁失败的情况  
+  高并发请求下,依旧性能良好
+* 防死锁:杜绝死锁,必须有超时控制机制或者撤销操作,有个兜底的终止跳出方案
+* 不乱抢:不能unlock其它JVM的锁,只能自已加锁自已释放
+* 重入性:同一个节点的同一个线程如果获得锁后,它可以再次获得这把锁
+
+3.分布式锁  
+* `set [key] [value] [ex [second]] [px [milliSecond]] [nx|xx]`  
+  * `nx`:当key不存在时,才创建key,效果等同于setnx
+  * `xx`:当key存在的时候,覆盖key 
+* `setnx [key] [value]`  
+  **问题:**  
+  setnx + expire不安全,两条命令<font color="#00FF00">非原子性</font>  
+
+4.参考JUC中AQS的规范+可重入锁+lua脚本+Redis命令一步步实现分布式锁
+
+### 7.3 基础案例
+1.使用场景  
+多个服务间保证同一时刻同一时间段内同一用户只能有一个请求(防止关键业务出现并发攻击)  
+
+2.建立模块  
+建立两个模块,分别演示不同的JVM进程(但内容是一致的,都是扣减库存的模块,以此来模拟不同的微服务扣减库存竞争分布式锁)  
+
+3.修改pom、编写yml、主启动类(都是常规写法)  
+这里配置的是Redis单机  
+这里暂时不配置mybatis
+
+4.业务类  
+InventoryController:  
+```java
+@RestController
+@Api(tags = "redis分布式锁测试")
+public class InventoryController {
+    @Autowired
+    private InventoryService inventoryService;
+
+    @GetMapping("/inventory/sale")
+    @ApiOperation("扣减库存，一次卖一个")
+    public void sale() {
+        inventoryService.sale();
+    }
+}
+```
+InventoryService:  
+```java
+@Service
+public class InventoryService {
+    
+    @Autowired
+    private StringRedisTemplate stringRedisTemplate;
+    @Value("${server.port}")
+    private String port;
+
+    private Lock lock = new ReentrantLock();
+
+    public String sale() {
+        String resMessgae = "";
+        lock.lock();
+        try {
+            // 1 查询库存信息
+            String result = stringRedisTemplate.opsForValue().get("inventory01");
+            // 2 判断库存书否足够
+            Integer inventoryNum = result == null ? 0 : Integer.parseInt(result);
+            // 3 扣减库存，每次减少一个库存
+            if (inventoryNum > 0) {
+                stringRedisTemplate.opsForValue().set("inventory01", String.valueOf(--inventoryNum));
+                resMessgae = "成功卖出一个商品，库存剩余：" + inventoryNum;
+                log.info(resMessgae + "\t" + "，服务端口号：" + port);
+            } else {
+                resMessgae = "商品已售罄。";
+                log.info(resMessgae + "\t" + "，服务端口号：" + port);
+            }
+        } finally {
+            lock.unlock();
+        }
+        return resMessgae;
+    }
+}
+```
+
+### 7.4 分布式锁实现
+**目录:**  
+7.4.1 模拟微服务集群  
+7.4.2 分布式部署  
+7.4.3 Redis分布式锁  
+
+
+#### 7.4.1 模拟微服务集群
+*在7.3的基础案例上慢慢配置成以下这张图的架构*  
+![架构图](resources/redis/117.png)
+将7.3 基础案例中的模块中的代码完全拷贝到另外一个模块中(模拟两台JVM微服务)  
+
+#### 7.4.2 分布式部署
+模拟出7.4.1的效果后会发现,<font color="#00FF00">单击锁会出现超卖问题</font>,需要分布式锁  
+
+1.nginx配置负载均衡+反向代理  
+不再赘述,简单来说就是访问nginx,nginx会反向代理+负载均衡到两个微服务下.nginx的配置可以见尚上优选.  
+
+2.启动两个微服务  
+通过访问nginx来访问微服务  
+高并发访问`http://[nginx]/inventory/sale`地址  
+![jmeter](resources/redis/118.png)  
+通过jmeter并发访问nginx  
+
+3.访问结果  
+理论上此时redis中`inventory01`这个key对应的value应该是0;但实际并不是0,例如这里测试的结果为12  
+<font color="#FF00FF">超卖了</font>  
+
+4.为什么加了synchronize或者Lock还是没有控制住?  
+在单机环境下,可以使用synchronized或Lock来实现.  
+但是在分布式系统中,因为竞争的线程可能不在同一个节点上(同一个jvm中),所以需要一个让所有进程都能访问到的锁来实现(<font color="#00FF00">比如redis或者zookeeper来构建</font>)  
+不同进程jvm层面的锁就不管用了,那么可以利用第三方的一个组件,来获取锁,未获取到锁,则阻塞当前想要运行的线程
+
+5.分布式锁的应用  
+* 跨进程+跨服务
+* 解决超卖
+* 防止缓存击穿
+
+6.解决方法  
+利用Redis的`setnx`命令
+
+#### 7.4.3 Redis分布式锁
 
 
 # 实战篇
 **目录:**  
 1.丰富系统功能  
-2.bitmap、hyperloglog、geo实战    
+2.bitmap、hyperloglog、geo实战  
+
+
+
 
 
 ## 1. 丰富系统功能  
