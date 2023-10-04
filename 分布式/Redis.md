@@ -2335,6 +2335,11 @@ A.其它
 * `bgrewriteaof` 手动重写AOF  
 * `bgsave` 创建一个子进程持久化写入rdb文件
 * `save` 阻塞持久化rdb文件(不推荐使用该命令)
+* `eval "[luaScript]" [numkeys] [key [key]...] [arg [arg]...]`  
+  * `luaScript`:lua脚本语句
+  * `numkeys`:key的数量
+  * `key`:`luaScript`脚本中指定的key占位符的值
+  * `arg`:`luaScript`脚本中指定的agr占位符的值
 
 # 高级篇
 **目录:**  
@@ -3959,13 +3964,13 @@ public Customer findCustomerByIdWithBloomFilter(Integer customerId) {
 
     // 布隆过滤器check
     if (!checkUtils.checkWithBloomFilter("whitelistCustomer", key)) {
-        log.info("白名单无此顾客，不可以访问，{}", key);
+        log.info("白名单无此顾客,不可以访问,{}", key);
         return null;
     }
 
     // 查看redis是否存在
     customer = (Customer) redisTemplate.opsForValue().get(key);
-    // redis 不存在，取MySQL中查找
+    // redis 不存在,取MySQL中查找
     if (null == customer) {
         // 双端加锁策略
         synchronized (CustomerService.class) {
@@ -4155,7 +4160,7 @@ public class GuavaBloomFilterService {
 
     public static final int _1w = 10000;
     public static final int SIZE = 100 * _1w;
-    // 误判率，它越小误判的个数也就越少(是否可以无限小?没有误判率岂不是更好)
+    // 误判率,它越小误判的个数也就越少(是否可以无限小?没有误判率岂不是更好)
     public static double fpp = 0.03;
     // 创建Guava 版本布隆过滤器
     /*
@@ -4170,7 +4175,7 @@ public class GuavaBloomFilterService {
         for (int i = 0; i < SIZE; i++) {
             bloomFilter.put(i);
         }
-        // 2 故意去10w不在合法范围内的数据，来进行误判率演示
+        // 2 故意去10w不在合法范围内的数据,来进行误判率演示
         ArrayList<Integer> list = new ArrayList<>(10 * _1w);
         // 3 验证
         for (int i = SIZE; i < SIZE + (10 * _1w); i++) {
@@ -4182,7 +4187,7 @@ public class GuavaBloomFilterService {
         log.info("误判的总数量：{}", list.size());
     }
 }
-// 运行之后，结果为:误判的总数量:3033;正好和上面的误判率0.03对应
+// 运行之后,结果为:误判的总数量:3033;正好和上面的误判率0.03对应
 ```
 
 **误判率不是越小越好?**  
@@ -4317,7 +4322,7 @@ public class JHSTaskService {
     @PostConstruct
     public void initJHS() {
         log.info("模拟定时任务从数据库中不断获取参加聚划算的商品");
-        // 1 用多线程模拟定时任务，将商品从数据库刷新到redis
+        // 1 用多线程模拟定时任务,将商品从数据库刷新到redis
         new Thread(() -> {
             while(true) {
                 // 2 模拟从数据库查询数据,用于加载到Redis并给聚划算页面显示
@@ -4326,7 +4331,7 @@ public class JHSTaskService {
                 redisTemplate.delete(JHS_KEY);
                 // 4 加入最新的数据给Redis参加活动;采用lpush命令来实现存储
                 redisTemplate.opsForList().leftPushAll(JHS_KEY, list);
-                // 5 暂停1分钟，模拟聚划算参加商品下架上新等操作
+                // 5 暂停1分钟,模拟聚划算参加商品下架上新等操作
                 try {
                     Thread.sleep(60000);
                 } catch (InterruptedException e) {
@@ -4351,7 +4356,7 @@ public class JHSTaskController {
     @Autowired
     private RedisTemplate redisTemplate;
 
-    @ApiOperation("聚划算案例，每次1页，每页5条数据")
+    @ApiOperation("聚划算案例,每次1页,每页5条数据")
     @GetMapping("/product/find")
     public List<Product> find(int page, int size) {
         long start = (page - 1) * size;
@@ -4359,7 +4364,7 @@ public class JHSTaskController {
         // 先去Redis中查询
         List list = redisTemplate.opsForList().range(JHS_KEY, start, end);
         if (CollectionUtils.isEmpty(list)) {
-            // todo Redis找不到，去数据库中查询(存在安全隐患)
+            // todo Redis找不到,去数据库中查询(存在安全隐患)
         }
         log.info("参加活动的商家: {}", list);
         return list;
@@ -4389,12 +4394,12 @@ JHSTaskService:
 @PostConstruct
 public void initJHSAB() {
     log.info("模拟定时任务从数据库中不断获取参加聚划算的商品");
-    // 1 用多线程模拟定时任务，将商品从数据库刷新到redis
+    // 1 用多线程模拟定时任务,将商品从数据库刷新到redis
     new Thread(() -> {
         while(true) {
             // 2 模拟从数据库查询数据
             List<Product> list = this.getProductsFromMysql();
-            // 3 先更新B缓存且让B缓存过期时间超过A缓存，如果突然失效还有B兜底，防止击穿
+            // 3 先更新B缓存且让B缓存过期时间超过A缓存,如果突然失效还有B兜底,防止击穿
             redisTemplate.delete(JHS_KEY_B);
             redisTemplate.opsForList().leftPushAll(JHS_KEY_B, list);
             // 设置过期时间为1天+10秒
@@ -4403,7 +4408,7 @@ public void initJHSAB() {
             redisTemplate.delete(JHS_KEY_A);
             redisTemplate.opsForList().leftPushAll(JHS_KEY_A, list);
             redisTemplate.expire(JHS_KEY_A, 86400L, TimeUnit.SECONDS);
-            // 5 暂停1分钟，模拟聚划算参加商品下架上新等操作
+            // 5 暂停1分钟,模拟聚划算参加商品下架上新等操作
             try {
                 Thread.sleep(60000);
             } catch (InterruptedException e) {
@@ -4416,7 +4421,7 @@ public void initJHSAB() {
 
 JHSTaskController:
 ```java
-@ApiOperation("聚划算案例，AB双缓存，防止热key突然失效")
+@ApiOperation("聚划算案例,AB双缓存,防止热key突然失效")
 @GetMapping("/product/findab")
 public List<Product> findAB(int page, int size) {
     List<Product> list = null;
@@ -4424,11 +4429,11 @@ public List<Product> findAB(int page, int size) {
     long end = start + size - 1;
     list = redisTemplate.opsForList().range(JHS_KEY_A, start, end);
     if (CollectionUtils.isEmpty(list)) {
-        //  Redis找不到，去数据库中查询
+        //  Redis找不到,去数据库中查询
         log.info("A缓存已经失效或活动已经结束");
         list = redisTemplate.opsForList().range(JHS_KEY_B, start, end);
         if (CollectionUtils.isEmpty(list)) {
-            // todo Redis找不到，去数据库中查询
+            // todo Redis找不到,去数据库中查询
         }
     }
     log.info("参加活动的商家: {}", list);
@@ -4527,7 +4532,7 @@ public class InventoryController {
     private InventoryService inventoryService;
 
     @GetMapping("/inventory/sale")
-    @ApiOperation("扣减库存，一次卖一个")
+    @ApiOperation("扣减库存,一次卖一个")
     public void sale() {
         inventoryService.sale();
     }
@@ -4553,14 +4558,14 @@ public class InventoryService {
             String result = stringRedisTemplate.opsForValue().get("inventory01");
             // 2 判断库存书否足够
             Integer inventoryNum = result == null ? 0 : Integer.parseInt(result);
-            // 3 扣减库存，每次减少一个库存
+            // 3 扣减库存,每次减少一个库存
             if (inventoryNum > 0) {
                 stringRedisTemplate.opsForValue().set("inventory01", String.valueOf(--inventoryNum));
-                resMessgae = "成功卖出一个商品，库存剩余：" + inventoryNum;
-                log.info(resMessgae + "\t" + "，服务端口号：" + port);
+                resMessgae = "成功卖出一个商品,库存剩余：" + inventoryNum;
+                log.info(resMessgae + "\t" + ",服务端口号：" + port);
             } else {
                 resMessgae = "商品已售罄。";
-                log.info(resMessgae + "\t" + "，服务端口号：" + port);
+                log.info(resMessgae + "\t" + ",服务端口号：" + port);
             }
         } finally {
             lock.unlock();
@@ -4575,6 +4580,10 @@ public class InventoryService {
 7.4.1 模拟微服务集群  
 7.4.2 分布式部署  
 7.4.3 Redis分布式锁  
+7.4.4 防止死锁  
+7.4.5 防止误删key  
+7.4.6 判断+删除原子操作(lua)  
+<font color="#00FF00">7.4.7 可重入锁</font>  
 
 
 #### 7.4.1 模拟微服务集群
@@ -4583,7 +4592,7 @@ public class InventoryService {
 将7.3 基础案例中的模块中的代码完全拷贝到另外一个模块中(模拟两台JVM微服务)  
 
 #### 7.4.2 分布式部署
-模拟出7.4.1的效果后会发现,<font color="#00FF00">单击锁会出现超卖问题</font>,需要分布式锁  
+模拟出7.4.1的效果后会发现,<font color="#00FF00">单机锁会出现超卖问题</font>,需要分布式锁  
 
 1.nginx配置负载均衡+反向代理  
 不再赘述,简单来说就是访问nginx,nginx会反向代理+负载均衡到两个微服务下.nginx的配置可以见尚上优选.  
@@ -4612,15 +4621,447 @@ public class InventoryService {
 利用Redis的`setnx`命令
 
 #### 7.4.3 Redis分布式锁
+1.修改InventoryService实现分布式锁  
+```java
+public String sale() {
+    String resMessgae = "";
+    String key = "luojiaRedisLocak";
+    String uuidValue = IdUtil.simpleUUID() + ":" + Thread.currentThread().getId();
+
+    Boolean flag = stringRedisTemplate.opsForValue().setIfAbsent(key, uuidValue);
+    // flase=false,抢不到的线程继续重试
+    if (!flag) {
+        // 线程休眠20毫秒,进行递归重试
+        try {
+            TimeUnit.MILLISECONDS.sleep(20);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        sale();
+    } else {
+      // 抢锁成功的请求线程,进行正常的业务逻辑操作,扣减库存
+        try {
+            // 1 抢锁成功,查询库存信息
+            String result = stringRedisTemplate.opsForValue().get("inventory01");
+            // 2 判断库存书否足够
+            Integer inventoryNum = result == null ? 0 : Integer.parseInt(result);
+            // 3 扣减库存,每次减少一个库存
+            if (inventoryNum > 0) {
+                stringRedisTemplate.opsForValue().set("inventory01", String.valueOf(--inventoryNum));
+                resMessgae = "成功卖出一个商品,库存剩余：" + inventoryNum + "\t" + ",服务端口号：" + port;
+                log.info(resMessgae);
+            } else {
+                resMessgae = "商品已售罄。" + "\t" + ",服务端口号：" + port;
+                log.info(resMessgae);
+            }
+        } finally {
+            stringRedisTemplate.delete(key);
+        }
+    }
+    return resMessgae;
+}
+```
+
+2.开始测试  
+设置Redis中`inventory01`对应的value为5000  
+利用jmeter进行测试  
+运行成功,发现值为0  
+
+3.这一版代码存在的问题  
+通过递归重试的方法,在真正高并发的请求情况下,很容易导致<font color="#00FF00">StackOverFlowError</font>,即递归方法不停地去重试,导致栈溢出  
+高并发唤醒后推荐用while判断而不是if  
+
+4.修改InventoryService防止栈溢出  
+```java
+public String sale() {
+    String resMessgae = "";
+    String key = "luojiaRedisLocak";
+    String uuidValue = IdUtil.simpleUUID() + ":" + Thread.currentThread().getId();
+
+    // 不用递归了,高并发容易出错,我们用自旋代替递归方法重试调用；也不用if,用while代替
+    while (!stringRedisTemplate.opsForValue().setIfAbsent(key, uuidValue)) {
+        // 线程休眠20毫秒,进行递归重试
+        try {TimeUnit.MILLISECONDS.sleep(20);} catch (InterruptedException e) {e.printStackTrace();}
+    }
+
+    try {
+        // 1 抢锁成功,查询库存信息
+        String result = stringRedisTemplate.opsForValue().get("inventory01");
+        // 2 判断库存书否足够
+        Integer inventoryNum = result == null ? 0 : Integer.parseInt(result);
+        // 3 扣减库存,每次减少一个库存
+        if (inventoryNum > 0) {
+            stringRedisTemplate.opsForValue().set("inventory01", String.valueOf(--inventoryNum));
+            resMessgae = "成功卖出一个商品,库存剩余：" + inventoryNum + "\t" + ",服务端口号：" + port;
+            log.info(resMessgae);
+        } else {
+            resMessgae = "商品已售罄。" + "\t" + ",服务端口号：" + port;
+            log.info(resMessgae);
+        }
+    } finally {
+        stringRedisTemplate.delete(key);
+    }
+    return resMessgae;
+}
+```
+
+#### 7.4.4 防止死锁
+**问题:**  
+由于目前<font color="#00FF00">微服务对设置的key是没有加过期时间的</font>,假如一个微服务获取到锁了,但是在执行业务代码的过程中宕机了;那么就不会执行到`delete`删除key的方法,所以别的微服务想获取到这把锁就一直无法获取到,造成程序死锁.  
+<font color="#00FF00">所以需要给key加一个过期时间</font>  
+
+1.修改InventoryService加锁的同时设置过期时间  
+```java
+public String sale() {
+    String resMessgae = "";
+    String key = "luojiaRedisLocak";
+    String uuidValue = IdUtil.simpleUUID() + ":" + Thread.currentThread().getId();
+
+    // 不用递归了,高并发容易出错,我们用自旋代替递归方法重试调用；也不用if,用while代替;注意加锁和设置过期时间必须调用原子性的方法,否则还是会出现问题
+    while (!stringRedisTemplate.opsForValue().setIfAbsent(key, uuidValue, 30L, TimeUnit.SECONDS)) {
+        // 线程休眠20毫秒,进行递归重试
+        try {TimeUnit.MILLISECONDS.sleep(20);} catch (InterruptedException e) {e.printStackTrace();}
+    }
+
+    try {
+        // 1 抢锁成功,查询库存信息
+        String result = stringRedisTemplate.opsForValue().get("inventory01");
+        // 2 判断库存书否足够
+        Integer inventoryNum = result == null ? 0 : Integer.parseInt(result);
+        // 3 扣减库存,每次减少一个库存
+        if (inventoryNum > 0) {
+            stringRedisTemplate.opsForValue().set("inventory01", String.valueOf(--inventoryNum));
+            resMessgae = "成功卖出一个商品,库存剩余：" + inventoryNum + "\t" + ",服务端口号：" + port;
+            log.info(resMessgae);
+        } else {
+            resMessgae = "商品已售罄。" + "\t" + ",服务端口号：" + port;
+            log.info(resMessgae);
+        }
+    } finally {
+        stringRedisTemplate.delete(key);
+    }
+    return resMessgae;
+}
+```
+*<font color="#FF00FF">加锁和过期时间设置必须同一个方法完成,保证原子性</font>*  
+也就是说不能先获取锁,再设置过期时间;必须获取锁的同时设置过期时间
+
+#### 7.4.5 防止误删key
+**问题:**  
+现在还是有一个问题,假设服务A获取到锁(并且锁的时间是30s);但是它执行的时间超过了30s,那么此时key过期了;被服务B获取到,服务B刚开始执行没多长时间,<font color="#00FF00">结果服务A执行完毕了把key删除了</font>.此时造成系统数据<font color="#00FF00">不一致</font>了.  
+![误删key](resources/redis/119.png)  
+
+1.修改InventoryService只能删除自已的key  
+```java
+public String sale() {
+    String resMessgae = "";
+    String key = "luojiaRedisLocak";
+    String uuidValue = IdUtil.simpleUUID() + ":" + Thread.currentThread().getId();
+
+    // 不用递归了,高并发容易出错,我们用自旋代替递归方法重试调用；也不用if,用while代替;注意加锁和设置过期时间必须调用原子性的方法,否则还是会出现问题
+    while (!stringRedisTemplate.opsForValue().setIfAbsent(key, uuidValue, 30L, TimeUnit.SECONDS)) {
+        // 线程休眠20毫秒,进行递归重试
+        try {TimeUnit.MILLISECONDS.sleep(20);} catch (InterruptedException e) {e.printStackTrace();}
+    }
+
+    try {
+        // 1 抢锁成功,查询库存信息
+        String result = stringRedisTemplate.opsForValue().get("inventory01");
+        // 2 判断库存书否足够
+        Integer inventoryNum = result == null ? 0 : Integer.parseInt(result);
+        // 3 扣减库存,每次减少一个库存
+        if (inventoryNum > 0) {
+            stringRedisTemplate.opsForValue().set("inventory01", String.valueOf(--inventoryNum));
+            resMessgae = "成功卖出一个商品,库存剩余：" + inventoryNum + "\t" + ",服务端口号：" + port;
+            log.info(resMessgae);
+        } else {
+            resMessgae = "商品已售罄。" + "\t" + ",服务端口号：" + port;
+            log.info(resMessgae);
+        }
+    } finally {
+      // 改进点,判断加锁与解锁是不同客户端,自己只能删除自己的锁,不误删别人的锁;
+      if (stringRedisTemplate.opsForValue().get(key).equalsIgnoreCase(uuidValue)) {
+            stringRedisTemplate.delete(key);
+      }
+    }
+    return resMessgae;
+}
+```
+因为在添加key的时候设置了对应的value为当前方法生成的UUID,<font color="#00FF00">而这个UUID只有当前方法持有</font>,所以在删除的时候可以判断这个UUID是否相等,如果相等则删除.  
+
+#### 7.4.6 判断+删除原子操作(lua)
+**问题:**  
+```java
+if (stringRedisTemplate.opsForValue().get(key).equalsIgnoreCase(uuidValue)) {
+      stringRedisTemplate.delete(key);
+}
+```
+这段代码还是有问题,原因是判断和删除是两步操作,而非原子操作.  
+假如服务A判断key是吻合的,准备要删除key了(还没有删除);<font color="#00FF00">但此时key正好过期了,那么服务B就获取到这个key</font>;接着服务A把服务B刚获取到的key删除了,造成了不一致.
+
+**lua脚本解决:**  
+1.lua脚本  
+lua是一种轻量小巧的脚本语言,用标准C语言编写并以源代码形式开放,其设计目的是<font color="#00FF00">为了嵌入应用程序中,从而为应用程序提供灵活的扩展和定制功能</font>.  
+
+2.脚本浅谈  
+* Redis调用lua脚本通过eval命令保证代码执行的原子性,直接用return返回脚本执行后的结果值
+* `eval "[luaScript]" [numkeys] [key [key]...] [arg [arg]...]`  
+  * `luaScript`:lua脚本语句
+  * `numkeys`:key的数量
+  * `key`:`luaScript`脚本中指定的key占位符的值
+  * `arg`:`luaScript`脚本中指定的agr占位符的值
+
+3.执行案例  
+* Redis中执行`eval "return 'hello world'" 0` 输出HelloWorld  
+* Redis中执行`eval "redis.call('set','k1','v1') redis.call('expire','k1','30' redis.call('get','k1')) 0` 执行了三条redis命令  
+* Redis中执行`eval "return redis.call('mset', KEYS[1],ARGV[1],KEYS[2],ARGV[2])" 2 k1 k2 lua1 lua2`  
+  **解释:**  
+  `numkeys`:有多少个key,这里就填多少  
+  `KEYS[1]`:占位符;和后面的k1对应(lua下标从1开始)  
+  `ARGV[1]`:占位符;和后面的arg对应(注意arg的数量可以超过`numkeys`因为本质上是占位符,它和keys没什么关系)
+
+4.原子删除的脚本  
+这段脚本来源于官网  
+`eval "if redis.call('get',KEYS[1]) == ARGV[1] then return redis.call('del',KEYS[1]) else return 0 end" 1 redisson UUID-s13x-ad33`  
+这段脚本的内容就是上面原子删除的脚本  
+
+5.条件判断语法  
+```shell
+if(operation) then
+  xxxx
+elseif(operation) then
+  xxx
+else
+  xxx
+end
+```
+很像linux的shell脚本  
+
+6.条件判断案例  
+执行:  
+`EVAL "if KEYS[1] > KEYS[ 2] then return ARGV[1] elseif KEYS[1] < KEYS[2] then return ARGV[2] else return ARGV[3]end" 2 8 8 1 2 3`  
+输出的结果为3  
+![条件判断案例](resources/redis/120.png)
+
+**编写java代码:**  
+7.修改InventoryService使用lua脚本原子判断+删除
+```java
+public String sale() {
+    String resMessgae = "";
+    String key = "luojiaRedisLocak";
+    String uuidValue = IdUtil.simpleUUID() + ":" + Thread.currentThread().getId();
+
+    // 不用递归了,高并发容易出错,我们用自旋代替递归方法重试调用；也不用if,用while代替;注意加锁和设置过期时间必须调用原子性的方法,否则还是会出现问题
+    while (!stringRedisTemplate.opsForValue().setIfAbsent(key, uuidValue, 30L, TimeUnit.SECONDS)) {
+        // 线程休眠20毫秒,进行递归重试
+        try {TimeUnit.MILLISECONDS.sleep(20);} catch (InterruptedException e) {e.printStackTrace();}
+    }
+
+    try {
+        // 1 抢锁成功,查询库存信息
+        String result = stringRedisTemplate.opsForValue().get("inventory01");
+        // 2 判断库存书否足够
+        Integer inventoryNum = result == null ? 0 : Integer.parseInt(result);
+        // 3 扣减库存,每次减少一个库存
+        if (inventoryNum > 0) {
+            stringRedisTemplate.opsForValue().set("inventory01", String.valueOf(--inventoryNum));
+            resMessgae = "成功卖出一个商品,库存剩余：" + inventoryNum + "\t" + ",服务端口号：" + port;
+            log.info(resMessgae);
+        } else {
+            resMessgae = "商品已售罄。" + "\t" + ",服务端口号：" + port;
+            log.info(resMessgae);
+        }
+    } finally {
+      // 改进点,判断加锁与解锁是不同客户端,自己只能删除自己的锁,不误删别人的锁;
+      // 使用lua脚本原子判断+删除
+ String luaScript =
+            "if redis.call('get',KEYS[1]) == ARGV[1] then " +
+            "return redis.call('del',KEYS[1]) " +
+            "else " +
+            "return 0 " +
+            "end";
+            /*
+            args0:(luaScript) lua脚本
+            args1:(Long.class) 返回值类型,这里既可以写Long.class也可以写Boolean.class
+            args2:key 占位符key对应的值
+            args3...:可变参数arg对应的占位符
+            */
+        stringRedisTemplate.execute(new DefaultRedisScript(luaScript, Long.class), Arrays.asList(key), uuidValue);
+    }
+    return resMessgae;
+}
+```
+
+8.测试运行  
+
+#### 7.4.7 可重入锁
+**问题:**  
+如何兼顾锁的可重入性?  
+
+1.可重入锁的概念复习  
+是指同一个线程在外层方法获取锁时,再进入该线程的内层方法会自动获取锁(获取的锁是同一个对象).  
+例如被synchronize修饰的方法递归调用自已  
+所以java中的synchronize和ReentrantLock都是可冲入锁  
+<font color="#00FF00">每个锁对象拥有一个锁计数器和一个指向持有该锁的线程的指针.</font>  
+当执行monitorenter时,如果目标锁对象的计数器为零,那么说明它没有被其他线程所持有,Java虚拟机会将该锁对象的持有线程设置为当前线程,并且将其计数器加1.  
+在目标锁对象的计数器不为零的情况下,如果锁对象的持有线程是当前线程,那么Java虚拟机可以将其计数器加1,否则需要等待,直至持有线程释放该锁.  
+当执行monitorexit时,Java虚拟机则需将锁对象的计数器减1.计数器为零代表锁已被释放.  
+
+2.lock/unlock配合可重入锁进行AQS源码分析讲解  
+*包括ReentrantLock这个对象,调用了多少次lock;就要与之对应调用多少次unlock*  
+<font color="#00FF00">即lock了几次就要unlock几次</font>  
+
+3.为了实现上述所说的可重入锁的计数问题,Redis中的哪个类型可以替代?  
+可以使用hsha类型来代替  
+K K V  
+* 第一个K:代表目标锁;通过它来判断目标锁是否有线程已经获得(判断K对应的hash元素个数)  
+* 第二个K:代表某个线程已经获取到的锁;通过它来获取当前线程得到目标锁后lock的计数
+* 第三个V:代表当前线程获取到目标锁后lock的计数量
+
+<font color="#00FF00">第一个K目标锁,第二个K哪个线程获取到了目标锁,第三个V获取到这把锁的线程重入了几次</font>
+
+![hsha](resources/redis/121.png)  
+大致的结构如上图所示  
+
+4.`hset`和`setnx`的区别  
+* `setnx`:只能解决有无问题,够用但是不够完美  
+* `hset`:不但解决有无,还解决可重入问题  
+
+5.设计  
+要保证同一时间只有一个线程持有锁进入Redis完成扣减库存的动作  
+一是要保证加锁/解锁(lock/unlock)  
+二是扣减库存Redis命令原子性  
+![设计](resources/redis/122.png)  
+<font color="#00FF00">因为lock和unlock涉及到很多判断,所以需要使用lua脚本来完成</font>  
+
+6.加锁流程  
+<font color="#00FF00">加锁流程图:</font>    
+![加锁流程图](resources/redis/123.png)  
+
+**加锁lua脚本lock设计**  
+先判断Redis分布式锁这个key是否存在  
+`exists [key]` 命令来判断key是否存在,<font color="#00FF00">如果返回0则代表不存在</font>;hset新建属于当前线程的锁 UUID:ThreadID  
+![新建锁](resources/redis/124.png)  
+如果返回1则表明已经有锁(和上面步骤3的思想一致),需要进一步判断是不是当前线程的锁(通过`hexistis`来判断),如果返回0则说明这把锁不是自已的;如果返回1则说明这把锁是当前线程的锁,自增1表示重入  
+
+**编写lua脚本lock**  
+版本一:  
+```lua
+// 加锁的Lua脚本，对标我们的lock方法
+// 先判断key存不存在(判断有没有线程获取到目标锁);
+if redis.call('exists', 'key') == 0 then
+  // 如果没有则创建这个key并放入获得到这把锁的线程表示(流水号+UUID)设置锁的可重入为1
+	redis.call('hset', 'key', 'uuid:threadid', 1)
+  // 设置过期时间
+	redis.call('expire', 'key', 50)
+	return 1
+elseif redis.call('hexists', 'key', 'uuid:threadid') == 1 then
+  // 如果这把锁已经被获取了,并且是当前线程获取的,则锁的可重入+1
+	redis.call('hincrby', 'key', 'uuid:threadid', 1)
+	redis.call('expire', 'key', 50)
+	return 1
+else
+	return 0
+end
+```
+这段代码不够简洁,实际上`hincrby`这条命令;如果目标hash的key是不存在的则会自动创建hash的key(指的是Redis-hash类型的key)  
+
+版本二:  
+当key不存在的时候,`hincrby`可以自动创建这个key并且自增
+```lua
+// V2 合并相同的代码，用hincrby替代hset，精简代码
+if redis.call('exists', 'key') == 0 or redis.call('hexists', 'key', 'uuid:threadid') == 1 then
+	redis.call('hincrby', 'key', 'uuid:threadid', 1)
+	redis.call('expire', 'key', 50)
+	return 1
+else
+	return 0
+end
+```
+
+版本三:  
+脚本OK,换上参数替代  
+![参数](resources/redis/125.png)  
+```lua
+// V3 脚本OK,换上参数来替代写死的key,value
+if redis.call('exists', KEYS[1]) == 0 or redis.call('hexists', KEYS[1], ARGV[1]) == 1 then
+	redis.call('hincrby', KEYS[1], ARGV[1], 1)
+	redis.call('expire', KEYS[1], ARGV[2])
+	return 1
+else
+	return 0
+end
+```
+
+测试:  
+```shell
+eval "if redis.call('exists', KEYS[1]) == 0 or redis.call('hexists', KEYS[1], ARGV[1]) == 1 then redis.call('hincrby', KEYS[1], ARGV[1], 1) redis.call('expire', KEYS[1], ARGV[2]) return 1 else return 0 end" 1 luojiaRedisLock 001122:1 50
+```
+![测试结果](resources/redis/126.png)  
+
+*注意锁每次重入的时候都会重新设置过期时间,这点还是不错的!*
+
+7.解锁流程  
+**解锁lua脚本unlock设计**  
+先判断`hexistis [key] [uuid:ThreadId]` 当前线程是否获取到了目标锁;如果返回0说明根本没有锁,程序块返回nil  
+不是0,说明有锁并且这把锁是当前线程的锁,直接调用`hincrby -1`表示每次减一unlock;直到该值变为0表示可以删除该[key],删除获取到的目标锁  
+
+<font color="#00FF00">解锁流程图</font>
+![解锁流程图](resources/redis/127.png)
+
+**编写lua脚本unlock**  
+版本一:  
+```lua
+// 解锁的Lua脚本,对标我们的lock方法
+// 判断当前线程是否已经加锁了
+if redis.call('hexists', 'key', uuid:threadid) == 0 then
+	// 如果没有则返回nil
+  return nil
+  // 否则代表有锁并且是当前线程的锁
+  // unlock之后判断结果是不是0
+elseif redis.call('hincrby', key, uuid:threadid, -1) ==0 then
+    // 如果是0则代表要删除锁
+    return redis.call('del', key)
+else 
+    return 0
+end
+```
+
+版本二:  
+脚本OK,换上参数占位符  
+```lua
+if redis.call('hexists', KEYS[1], ARGV[1]) == 0 then
+	return nil
+elseif redis.call('hincrby', KEYS[1], ARGV[1], -1) == 0 then
+    return redis.call('del', KEYS[1])
+else 
+    return 0
+end
+```
+
+测试:  
+```shell
+eval "if redis.call('hexists', KEYS[1], ARGV[1]) == 0 then return nil elseif redis.call('hincrby', KEYS[1], ARGV[1], -1) == 0 then return redis.call('del', KEYS[1]) else return 0 end " 1 luojiaRedisLock 001122:1
+```
+
+8.修改InventoryService整合lua脚本,完成lock&unlock  
+
+
+
+
+
+
+
+
+
+
+
 
 
 # 实战篇
 **目录:**  
 1.丰富系统功能  
 2.bitmap、hyperloglog、geo实战  
-
-
-
 
 
 ## 1. 丰富系统功能  
