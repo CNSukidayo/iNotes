@@ -1875,6 +1875,18 @@ B.Redis命令大全
 * `lazyfree-lazy-server-del [yes|no(default)]` 惰性服务器删除
 * `replica-lazy-flush [yes|no(default)]` 惰性刷新
 * `lazyfree-lazy-user-del [yes|no(default)]` 惰性用户删除
+* `lazyfree-lazy-eviction [yes|no(default)]` 是否启用惰性删除
+* `maxmemory-policy [policy(default=noeviction)]` 设置Redis的默认内存淘汰策略  
+  * `policy`:过期策略
+    * `volatile-lru` 对所有设置了过期时间的key使用LRU算法进行删 除
+    * `allkeys-lru` 对所有key使用LRU算法进行删除,优先删除掉最近 最 不经常使用的key,用以保存新数据
+    * `volatile-lfu` 对所有设置了过期时间的key使用LFU算法进行删 除
+    * `allkeys-lfu` 对所有key使用LFU算法进行删除
+    * `volatile-random` 对所有设置了过期时间的key随机删除
+    * `allkeys-random`对所有设置了过期时间的key随机删除
+    * `volatile-ttl` 删除马上要过期的key
+    * `noeviction` 不会驱逐任何key,表示即使内存达到上限也不进行置换,所有能引起内存增加的命令都会返回error
+* `enable-debug-command [local|no(default)]` 开启debug命令;注意开启是设置为`local`不是yes
 
 *改完配置,重启docker容器*  
 
@@ -1947,6 +1959,8 @@ A.其它
 * `keys *` 查看当前库所有key  
 * `exists [key]` 判断某个key是否存在  
 * `type [key]` 查看某个key的类型
+* `object encoding [key]` 查看某个[key]对应的value的编码类型
+* `debug object [key]` 调试一个key(详情见10.Redis经典5大类型源码及底层实现=>10.4.4 RedisObject结构的作用=>4.`debug object key`命令)
 * `del [key]` 删除指定的key  
 * `unlink [key]` 非阻塞删除,仅仅将key从keyspace元数据中删除,真正的删除会在后续异步中操作(<font color="#00FF00">Redis多线程</font>)
 * `ttl [key]` 查看还有多次时间过期  
@@ -1976,6 +1990,7 @@ A.其它
 * `hscan [cursor] [match [pattern]] [count [countNumber]]` 针对hash类型
 * `zscan [cursor] [match [pattern]] [count [countNumber]]` 针对ZSet类型
 * `memory usage [key]` 查看某个[key]对应的value占多少字节数
+
 
 #### 2.String类型相关  
 *提示:分割线以下的内容选填*  
@@ -2331,6 +2346,9 @@ A.其它
 #### A. 其它
 * `config get [propertiesKey]` 获取系统配置  
   * `propertiesKey`(必填):配置文件的key  
+  propertiesKey的取值情况:  
+    * `maxmemory`:获取当前Redis的默认内存占用量,默认为0  
+  - - -
 * `lastsave` 获取最后一次备份的时间戳  
 * `bgrewriteaof` 手动重写AOF  
 * `bgsave` 创建一个子进程持久化写入rdb文件
@@ -2340,6 +2358,8 @@ A.其它
   * `numkeys`:key的数量
   * `key`:`luaScript`脚本中指定的key占位符的值
   * `arg`:`luaScript`脚本中指定的agr占位符的值
+* `config set maxmemory [bytes]` 手动设置Redis的内存占用量为[bytes]  
+* `info memory` 显示内存的使用情况
 
 # 高级篇
 **目录:**  
@@ -2351,6 +2371,8 @@ A.其它
 6.缓存预热、缓存雪崩、缓存击穿、缓存穿透  
 7.手写Redis分布式锁  
 8.RedLock算法和底层源码分析  
+9.Redis缓存过期策略  
+10.Redis经典5大类型源码及底层实现  
 
 
 ## 1.Redis单线程和多线程  
@@ -2392,7 +2414,7 @@ Redis有很多版本,不同的版本架构也是不同的.Redis4之后才开始�
 正常情况下Redis的`del`命令可以很快地删除数据,而当被删除的key是一个big key的时候;例如包含成千上万个元素的hash集合时,那么单线程下`del`就会造成Redis主线程的卡顿.  
 <font color="#00FF00">这就是Redis3.x单线程时代最经典的故障,big key删除问题.</font>  
 *提示:这里所说的big key不是说key很大,而是该key对应的那个value类型存放了很多的数据*  
-<font color="#00FF00">使用惰性删除可以有效避免该问题</font>  
+<font color="#00FF00">使用惰性删除可以有效避免该问题</font>(惰性删除见9.Redis缓存过期策略)  
 在Redis4.0中引入了多线程模块,<font color="#00FF00">此版本中使用多线程主要是为了解决删除数据效率较低的问题.</font>  
 例如像`unlink [key]`、`flushdb async`、`flushall async`等命令使用的都是多线程异步删除  
 
@@ -4566,7 +4588,7 @@ public class InventoryService {
                 resMessgae = "成功卖出一个商品,库存剩余：" + inventoryNum;
                 log.info(resMessgae + "\t" + ",服务端口号：" + port);
             } else {
-                resMessgae = "商品已售罄。";
+                resMessgae = "商品已售罄.";
                 log.info(resMessgae + "\t" + ",服务端口号：" + port);
             }
         } finally {
@@ -4654,7 +4676,7 @@ public String sale() {
                 resMessgae = "成功卖出一个商品,库存剩余：" + inventoryNum + "\t" + ",服务端口号：" + port;
                 log.info(resMessgae);
             } else {
-                resMessgae = "商品已售罄。" + "\t" + ",服务端口号：" + port;
+                resMessgae = "商品已售罄." + "\t" + ",服务端口号：" + port;
                 log.info(resMessgae);
             }
         } finally {
@@ -4698,7 +4720,7 @@ public String sale() {
             resMessgae = "成功卖出一个商品,库存剩余：" + inventoryNum + "\t" + ",服务端口号：" + port;
             log.info(resMessgae);
         } else {
-            resMessgae = "商品已售罄。" + "\t" + ",服务端口号：" + port;
+            resMessgae = "商品已售罄." + "\t" + ",服务端口号：" + port;
             log.info(resMessgae);
         }
     } finally {
@@ -4737,7 +4759,7 @@ public String sale() {
             resMessgae = "成功卖出一个商品,库存剩余：" + inventoryNum + "\t" + ",服务端口号：" + port;
             log.info(resMessgae);
         } else {
-            resMessgae = "商品已售罄。" + "\t" + ",服务端口号：" + port;
+            resMessgae = "商品已售罄." + "\t" + ",服务端口号：" + port;
             log.info(resMessgae);
         }
     } finally {
@@ -4778,7 +4800,7 @@ public String sale() {
             resMessgae = "成功卖出一个商品,库存剩余：" + inventoryNum + "\t" + ",服务端口号：" + port;
             log.info(resMessgae);
         } else {
-            resMessgae = "商品已售罄。" + "\t" + ",服务端口号：" + port;
+            resMessgae = "商品已售罄." + "\t" + ",服务端口号：" + port;
             log.info(resMessgae);
         }
     } finally {
@@ -4871,7 +4893,7 @@ public String sale() {
             resMessgae = "成功卖出一个商品,库存剩余：" + inventoryNum + "\t" + ",服务端口号：" + port;
             log.info(resMessgae);
         } else {
-            resMessgae = "商品已售罄。" + "\t" + ",服务端口号：" + port;
+            resMessgae = "商品已售罄." + "\t" + ",服务端口号：" + port;
             log.info(resMessgae);
         }
     } finally {
@@ -5064,7 +5086,7 @@ public String sale() {
             resMessgae = "成功卖出一个商品,库存剩余：" + inventoryNum + "\t" + ",服务端口号：" + port;
             log.info(resMessgae);
         } else {
-            resMessgae = "商品已售罄。" + "\t" + ",服务端口号：" + port;
+            resMessgae = "商品已售罄." + "\t" + ",服务端口号：" + port;
             log.info(resMessgae);
         }
     } finally {
@@ -5197,7 +5219,7 @@ public String sale() {
             resMessgae = "成功卖出一个商品,库存剩余：" + inventoryNum + "\t" + ",服务端口号：" + port;
             log.info(resMessgae);
         } else {
-            resMessgae = "商品已售罄。" + "\t" + ",服务端口号：" + port;
+            resMessgae = "商品已售罄." + "\t" + ",服务端口号：" + port;
             log.info(resMessgae);
         }
     } finally {
@@ -5262,7 +5284,7 @@ public String sale() {
             // 测试锁的可重入
             testReEntry();
         } else {
-            resMessgae = "商品已售罄。" + "\t" + ",服务端口号：" + port;
+            resMessgae = "商品已售罄." + "\t" + ",服务端口号：" + port;
             log.info(resMessgae);
         }
     } finally {
@@ -5661,7 +5683,7 @@ public String saleByRedisson() {
             resMessgae = "成功卖出一个商品,库存剩余：" + inventoryNum + "\t" + ",服务端口号：" + port;
             log.info(resMessgae);
         } else {
-            resMessgae = "商品已售罄。" + "\t" + ",服务端口号：" + port;
+            resMessgae = "商品已售罄." + "\t" + ",服务端口号：" + port;
             log.info(resMessgae);
         }
     } finally {
@@ -5692,7 +5714,7 @@ public String saleByRedisson() {
             resMessgae = "成功卖出一个商品,库存剩余：" + inventoryNum + "\t" + ",服务端口号：" + port;
             log.info(resMessgae);
         } else {
-            resMessgae = "商品已售罄。" + "\t" + ",服务端口号：" + port;
+            resMessgae = "商品已售罄." + "\t" + ",服务端口号：" + port;
             log.info(resMessgae);
         }
     } finally {
@@ -6042,7 +6064,573 @@ public class RedLockController {
 ![结论](resources/redis/152.png)  
 
 
+## 9.Redis缓存过期策略  
+**目录:**  
+9.1 面试题  
+9.2 Redis内存模型  
+9.3 Redis的key是怎么删除的?   
+9.4 Redis内存淘汰策略   
+9.5 Redis内存淘汰策略配置性能建议   
 
+
+### 9.1 面试题
+* 生产上你们的redis内存设置多少?
+* 如何配置、修改redis的内存大小
+* 如果内存满了你怎么办
+* redis清理内存的方式?定期删除和惰性删除了解过吗
+* redis缓存淘汰策略有哪些?分别是什么?你用那个?
+* [x] redis的LRU了解过吗?请手写LRU  
+  答:算法手写code见阳哥大厂第3季视频
+* LRU和LFU算法的区别是什么
+
+### 9.2 Redis内存模型  
+`maxmemory [bytes(default=0)]` Redis的内存占用量配置  
+`config get maxmemory` 获取当前Redis的默认内存占用量,默认为0  
+`config set maxmemory [bytes]` 手动设置Redis的内存占用量  
+`info memory` 显示内存的使用情况
+
+
+如果不设置最大内存大小或者设置最大内存大小为0,在64位操作系统下不限制内存大小,在32位操作系统下最多使用3GB内存(因为32位操作系统寻址量最多只有4G)
+
+一般生产上推荐设置内存为最大物理内存的<font color="#00FF00">四分之三</font>  
+
+1.如果Redis超出了内存上限  
+![Redis超出内存上限](resources/redis/153.png)  
+<font color="#00FF00">会产生OOM异常</font>  
+
+2.内存淘汰策略  
+为了避免key没有填写过期时间而导致出现OOM异常,Redis提出了<font color="#00FF00">内存淘汰策略</font>
+
+### 9.3 Redis的key是怎么删除的?
+1.Redis过期键的删除策略  
+<font color="#00FF00">如果一个键过期了,它并不会被立即删除</font>  
+
+2.三种不同的删除策略  
+**分类:** 立即删除、惰性删除、定期删除
+
+**立即删除:**  
+Redis不可能时时刻刻遍历所有被设置了生存时间的key,来检测数据是否已经到达过期时间,然后对它进行删除.  
+立即删除能保证内存中数据的最大新鲜度,因为它保证过期键值会在过期后马上被删除,其所占用的内存也会随之释放.<font color="#00FF00">但是立即删除对cpu是最不友好的</font>.因为删除操作会占用cpu的时间,如果刚好碰上了cpu很忙的时
+候,比如正在做交集或排序等计算的时候,就会给cpu造成额外的压力,让CPU心累,时时需要删除,忙死.
+<font color="#00FF00">这会产生大量的性能消耗,同时也会影响数据的读取操作</font>.  
+
+总结:对CPU不友好,用处理器性能换取存储空间(拿时间换空间)  
+
+**惰性删除:**  
+数据到达过期时间时,不做处理;得到下次访问数据的时候判断该数据是否过期了,如果未过期则返回数据;否则删除数据返回不存在  
+<font color="#00FF00">惰性删除的缺点是对内存非常不友好</font>  
+如果一个键已经过期,而这个键又仍然保留在redis中,那么只要这个过期键不被删除,它所占用的内存就不会释放.  
+在使用惰性删除策略时,如果数据库中有非常多的过期键,而这些过期键又恰好没有被访问到的话,那么它们也许永远也不会被删除(除非用户手动执行FLUSHDB),我们甚至可以将这种情况看作是一种内存泄漏-无用的垃圾数据占用了大量的内存,而服务器却不会自己去释放它们,这对于运行状态非常依赖于内存的Redis服务器来说,肯定不是一个好消息.  
+
+`lazyfree-lazy-eviction [yes|no(default)]` 是否启用惰性删除
+
+**定期删除:**  
+定期删除策略是前两种策略的折中:  
+定期删除策略<font color="#00FF00">每隔一段时间执行一次删除过期键操作</font>并通过限制删除操作执行时长和频率来减少删除操作对CPU时间的影响.
+周期性轮询redis库中的时效性数据,采用随机抽取的策略,利用过期数据占比的方式控制删除频度  
+特点1:CPU性能占用设置有峰值,检测频度可自定义设置  
+特点2:内存压力不是很大,长期占用内存的冷数据会被持续清理  
+总结:周期性抽查存储空间(随机抽查,重点抽查)  
+
+举例:  
+redis默认每隔100ms检查是否有过期的key,有过期key则删除.注意:<font color="#00FF00">redis不是每隔100ms将所有的key检查一次而是随机抽取进行检查</font>;因此,如果只采用定期删除策略,会导致很多key到时间没有删除.    
+定期删除策略的难点是确定删除操作执行的时长和频率:如果删除操作执行得太频繁或者执行的时间太长,定期删除策略就会退化成立即删除策略,以至于将CPU时间过多地消耗在删除过期键上面.如果删除操作执行得太少,或者执行的时间太短,定期删除策略又会和惰性删除策略一样,出现浪费内存的情况.因此,如果采用定期删除策略的话,服务器必须根据情况.<font color="#00FF00">合理地设置删除操作的执行时长和执行频率</font>.
+
+<font color="#00FF00">这种策略的问题是可能存在一些key永远没有被扫描到</font>  
+<font color="#FF00FF">所以惰性删除和定期删除都有可能造成大量的key堆积在内存中,导致Redis内存空间紧张或者很快耗尽.由此引入Redis的过期淘汰策略</font> 
+
+
+### 9.4 Redis内存淘汰策略 
+1.配置文件配置Redis的淘汰策略
+* `maxmemory-policy [policy(default=noeviction)]` 设置Redis的默认内存淘汰策略  
+  * `policy`:过期策略
+    * `volatile-lru` 对所有设置了过期时间的key使用LRU算法进行删 除
+    * `allkeys-lru` 对所有key使用LRU算法进行删除,优先删除掉最近 最 不经常使用的key,用以保存新数据
+    * `volatile-lfu` 对所有设置了过期时间的key使用LFU算法进行删 除
+    * `allkeys-lfu` 对所有key使用LFU算法进行删除
+    * `volatile-random` 对所有设置了过期时间的key随机删除
+    * `allkeys-random`对所有设置了过期时间的key随机删除
+    * `volatile-ttl` 删除马上要过期的key
+    * `noeviction` 不会驱逐任何key,表示即使内存达到上限也不进行置换,所有能引起内存增加的命令都会返回error
+
+
+2.LRU和LFU算法的区别  
+* LRU:最近最少使用页面置换算法,淘汰最长时间未被使用的页面,看页面最后一次被使用到发生调度的时间长短,首先淘汰最长时间未被使用的页面.(偏时间)  
+* LFU:最近最不常用页面置换算法,淘汰一定时期内被访问次数最少的页,看一定时间段内页面被使用的频率,淘汰一定时期内被访问次数最少的页(偏使用频率)
+
+3.淘汰策略总结  
+2*4=8  
+2个纬度:要么从过期key中删除、要么从所有key中删除  
+4个方面:LRU、LFU、random、ttl  
+8个选项  
+
+4.选择哪一种?
+* 在所有的key都是最近最经常使用,那么就需要选择allkeys-lru进行置换最近最不经常使用的key,如果你不确定使用哪种策略,那么推荐使用allkeys-lru  
+* 如果所有的key的访问概率都是差不多的,那么可以选用allkeys-random策略去置换数据
+* 如果对数据有足够的了解,能够为key指定hint(通过expire/ttI指定),那么可以选择volatile-ttl进行置换
+
+
+### 9.5 Redis内存淘汰策略配置性能建议
+1.避免存储bigkey  
+2.开启惰性淘汰``lazyfree-lazy-eviction yes`
+
+
+
+## 10.Redis经典5大类型源码及底层实现
+**目录:**  
+10.1 面试题  
+10.2 如何学习源码包?  
+10.3 平时所说的RedisK-V键值对数据库到底是什么  
+10.4 传统5大类型C语言源码分析  
+
+
+### 10.1 面试题
+* Redis的跳表了解吗?这个数据结构有什么缺点?  
+* Redis项目里面怎么用?Redis的数据结构有哪些?布隆过滤器怎么用?  
+* Redis的多路IO复用如何理解,为什么单线程还可以扛着那么高的QPS?
+* Redis的ZSet底层实现;说说它的优点和缺点  
+* Redis跳表说一下,解决了哪些问题,时间复杂度和空间复杂度.  
+
+1.Redis底层的数据类型  
+* SDS动态字符串
+* 双向链表
+* 压缩列表ziplist
+* 哈希表hashtable
+* 跳表skiplist
+* 整数集合intset
+* 快速列表quicklist
+* 紧凑列表listpack
+
+2.本章的意义  
+普通人背八股  
+大牛看技术,定制化Redis  
+
+3.Redis源码  
+[Redis7.0源码:https://github.com/redis/redis/tree/7.0/src](https://github.com/redis/redis/tree/7.0/src)  
+
+4.推荐两本书深入学习Redis  
+《Redis设计与实现》
+《Redis5设计与源码分析》
+
+### 10.2 如何学习源码包?
+1.github官方说明  
+![github官方说明](resources/redis/154.png)  
+结合官网着重关注以下几个源码:  
+* Redis对象 object.c
+* 字符串t_string.c
+* 列表t_list.c
+* 字典t_hash.c
+* 集合及有序集合t_set.c和t_zset.c
+* 数据流t_stream.c  
+  底层的实现结构是listpack.c和rax.c(了解即可)
+
+2.基本数据结构骨架  
+* 简单动态字符串sds.c
+* 整数集合intset.c
+* 压缩列表ziplist.c
+* 快速链表quicklist.c
+* listpack
+* 字典dict.c
+
+
+3.object.c  
+其实Redis中的类型都是基于RedisObject的,Redis高度抽象之后可以用一个对象表示即RedisObject  
+
+4.dict.c  
+字典dict.c也是贯穿始终的一个类型  
+
+5.Redis数据库的实现  
+* 数据库的底层实现db.c
+* 持久化rdb.c和aof.c
+
+6.Redis服务端和客户端的实现  
+* 事件驱动ae.c和ae_epoll.c
+* 网络连接anet.c和networking.c
+* 服务端程序server.c
+* 客户端程序redis-cli.c
+
+7.其它  
+* 主从复制replication.c
+* 哨兵sentinel.c
+* 集群cluster.c
+* 其他数据结构,如hyperloglog.c、geo.c等
+* 其他功能,如pub/sub、Lua脚本
+
+### 10.3 平时所说的RedisK-V键值对数据库到底是什么
+1.Redis是如何实现键值对数据库的?  
+key一般是String类型的字符串对象  
+<font color="#00FF00">value类型则是Redis对象(RedisObject)</font>  
+value可以是字符串对象,也可以是集合数据类型的对象,比如List对象、Hash对象、Set对象和ZSet对象  
+![Redis类型](resources/redis/155.png)  
+
+2.传统的5大类型  
+* String
+* List
+* Hash
+* Set
+* ZSet
+
+3.新增的5大类型  
+* BitMap-实质是String
+* Hyperloglog-实质是String
+* GEO-实质是ZSet
+* Stream-实质是Stream
+* BitField-看具体是什么类型(因为BitField就是操作它的二进制)
+
+4.上帝视角  
+![上帝视角](resources/redis/156.png)  
+
+5.Redis定义了RedisObject结构体来表示string、hash、list、set、zset等数据结构  
+
+**C语言struct结构体语法说明**  
+![C语言结构体](resources/redis/157.png)  
+![C语言结构体](resources/redis/158.png)  
+
+**Redis中每个对象都是一个RedisObject结构**  
+
+**字典、KV是什么**  
+* 每个键值对都会有一个dictEntry
+* 源码dict.h文件(C语言中.h是定义(头文件),与之对应的是.c实现)  
+  ![源码](resources/redis/159.png)  
+* <font color="#00FF00">从dictEntry到RedisObject</font>
+  ![RedisObject](resources/redis/160.png)  
+  ![RedisObject](resources/redis/161.png)  
+
+**这些键值对是如何保存进Redis并进行读取操作,O(1)时间复杂度**  
+![上帝视角](resources/redis/156.png)  
+首先RedisServer启动加载Redisdb,Redisdb加载进入内存形成数据库,形成数据库后立即去读取字典dict,形成字典之后马上去找hash;hash其中的一个就是K-V键值对dictEntry;每个K-V键值对形成实体dictEntry;每个dictEntry的K-V键值对封装了之后形成的是RedisObject对象  
+
+**redisObject +Redis数据类型+Redis 所有编码方式(底层实现)三者之间的关系**
+![关系对象](resources/redis/162.png)
+<font color="#00FF00">其中\*prt这个指针指向的是真正的Redis类型(字符串、跳表、压缩列表;这些和10.1 面试题=>1.Redis底层的数据类型都对应上了)</font>
+![关系对象](resources/redis/163.png)
+<font color="#00FF00">所以第二节说的传统5大类型,只是对外而言暴露的;它的底层实际上是后面跳表、压缩列表、字段这些数据类型.</font>  
+
+### 10.4 传统5大类型C语言源码分析
+**目录:**  
+10.4.1 Redis数据类型总纲  
+10.4.2 源码分析总体数据结构大纲  
+10.4.3 从set hello world开始分析  
+10.4.4 RedisObject结构的作用  
+10.4.5 各个类型的数据结构的编码映射和定义  
+10.4.6 String数据结构介绍  
+10.4.7 Hash数据结构介绍  
+10.4.8 List数据结构介绍  
+10.4.9 Set数据结构介绍  
+10.4.10 ZSet数据结构介绍  
+10.4.11 小总结
+
+#### 10.4.1 Redis数据类型总纲
+1.源码分析总体数据结构大纲  
+* SDS动态字符串
+* 双向链表
+* 压缩列表ziplist
+* 哈希表hashtable
+* 跳表skiplist
+* 整数集合intset
+* 快速列表quicklist
+* 紧凑列表listpack
+
+2.Redis6版本下-Redis数据类型(外部使用的)与数据结构(内部实现的)之间的关系  
+![数据结构](resources/redis/164.png)  
+
+redis6相关的底层模型和结构
+* String = SDS
+* Set = intset + hashtable
+* ZSet = skipList + ziplist(压缩列表)
+* List = quickList + ziplist
+* Hash = hashtable + ziplist
+
+3.<font color="#00FF00">Redis7版本下-Redis数据类型(外部使用的)与数据结构(内部实现的)之间的关系</font>
+![数据结构](resources/redis/165.png)
+
+redis7相关的底层模型和结构
+* String = SDS
+* Set = intset + hashtable
+* ZSet = skipList + listpack(紧凑列表)
+* List = quickList 
+* Hash = hashtable + listpack(紧凑列表)
+
+<font color="#00FF00">Redis7之后不再使用ziplist(压缩列表);但是为了兼容性还是保留了这个数据结构</font>
+
+
+#### 10.4.2 源码分析总体数据结构大纲
+*交互逻辑图,外部使用与内部实现*
+![使用-底层](resources/redis/166.png)  
+
+*这些内部实现的类型在何处定义的?*  
+![何处定义](resources/redis/167.png)  
+
+#### 10.4.3 从set hello world开始分析
+1.设置hello world  
+`set hello world` 设置一个K-V  
+
+2.看看类型  
+`type hello` 查看hello的类型,结果是string  
+
+3.看看编码  
+`object encoding hello` 查看hello的编码,结果是embstr
+
+4.<font color="#00FF00">每个键值对都会有一个dictEntry</font>  
+![dictEntry](resources/redis/168.png)  
+<font color="#00FF00">即一切value都是RedisObject</font>  
+
+#### 10.4.4 RedisObject结构的作用
+![RedisObject](resources/redis/169.png)  
+
+1.RedisObject各个字段的含义  
+![各个字段的含义](resources/redis/170.png)  
+`embstr`
+* LRU字段表示当内存超限时采用LRU算法清除内存中的对象
+* refcount表示对象的引用计数
+* \*ptr指针指向真正的底层数据结构的指针
+
+2.什么叫同一个类型有不同的编码方式?  
+```shell
+set hello world
+type hello # 输出string
+object encoding hello #输出embstr
+
+set age 17
+type age #输出string
+object encoding age #输出int
+```
+<font color="#00FF00">所以面上Redis中所有的类型(不管是string、hash、list;这和类型是无关的)它们真正存储的值都是字符串(string);但它们的编码方式是有可能不同的.</font>
+
+3.set age 17  
+![age](resources/redis/171.png)  
+|  field   |              解释              |
+| :------: | :----------------------------: |
+|   type   |              类型              |
+| encoding |      编码(string,int,raw)      |
+|   lru    |        最近被访问的时间        |
+| refcount | 等于1,表示当前对象被引用的次数 |
+|  \*ptr   |     value值是多少,这里是17     |
+
+4.`debug object key`命令  
+上面的5个属性中`type`、`encoding`、`*ptr`都理解了,剩下的对`lru`和`refcount`该怎么理解  
+
+要使用`debug object key`命令需要先修改redis.conf配置文件  
+`enable-debug-command [local|no(default)]` 开启debug命令;注意开启是设置为`local`不是yes  
+
+此时再次调用`debug object age`命令,效果如下  
+```shell
+debug object age
+# 输出如下:
+# Value at: 0x7f236a8c4200 refcount:2147483647 encoding:int serializedlength:2 lru:141ga771 lru_seconds_idle:14
+```
+
+|      field       |                                                                   解释                                                                    |
+| :--------------: | :---------------------------------------------------------------------------------------------------------------------------------------: |
+|     value at     |                                                                 内存地址                                                                  |
+|     refcount     |                                                                 引用次数                                                                  |
+|     encoding     |                                                               物理编码类型                                                                |
+| serializedlength | 序列化后的长度(注意这里的长度是序列化后的长度,保存为rdb文件时使用了该算法,不是真正存贮在内存的大小),会对字串 做一些可能的压缩以便底层优化 |
+|       lru        |                                                           记录最近使用的时间戳                                                            |
+| lru_seconds_idle |                                                                 空闲时间                                                                  |
+
+
+#### 10.4.5 各个类型的数据结构的编码映射和定义
+1.各个类型的<font color="#00FF00">数据结构</font>的<font color="#00FF00">编码映射</font>和定义  
+![编码定义](resources/redis/172.png)  
+
+#### 10.4.6 String数据结构介绍
+1.三大物理编码方式(int、embstr、raw)  
+**int**  
+保存long型(长整型)的64位(8个字节)有符号数  
+9223372036854775807(最多19位)  
+![long](resources/redis/173.png)  
+只有整数才会使用int,如果是浮点数,Redis内部其实先将浮点数转化为字符串值,然后再保存.
+
+**embstr**  
+代表embstr格式的SDS(Simple Dynamic String 简单动态字符串),保存长度小于44字节的字符串  
+EMBSTR顾名思义即:embedded string,表示嵌入式的String  
+
+**raw**  
+保存长度大于44字节的字符串
+
+2.案例演示  
+![案例演示](resources/redis/174.png)  
+
+3.C语言中的字符串  
+![C语言中的字符串](resources/redis/175.png)  
+
+4.<font color="#00FF00">SDS简单动态字符串</font>  
+<font color="#00FF00">Redis没有直接复用C语言的字符串</font>,而是新建了属于自己的结构-----<font color="#FF00FF">SDS</font>  
+在Redis数据库里,包含字符串值的键值对都是由SDS实现的(Redis中所有的键都是由字符串对象实现的即底层是由SDS实现,Redis中所有的值对象中包含的字符串对象底层也是由SDS实现).
+![SDS](resources/redis/176.png)  
+
+**源码分析:**  
+![SDS源码](resources/redis/177.png)  
+
+**说明:SDS类型value的结构**  
+![说明](resources/redis/178.png)  
+Redis中字符串的实现,SDS有多种结构(sds.h):  
+sdshdr5(2^5=32byte)一般这个是不会被使用的,是由内部使用  
+sdshdr8(2 ^ 8=256byte)  
+sdshdr16(2 ^ 16=65536byte=64KB)  
+sdshdr32(2 ^ 32byte=4GB)  
+sdshdr64(2 ^ 64byte=17179869184G)  
+用于存储不同的长度的字符串
+| field |                                                            解释                                                             |
+| :---: | :-------------------------------------------------------------------------------------------------------------------------: |
+|  len  | 表示SDS的长度,使我们在获取字符串长度的时候可以在O(1)情况下拿到,<font color="#00FF00">而不是像C那样需要遍历一遍字符串</font> |
+| alloc |     可以用来计算free就是字符串已经分配的未使用的空间,有了这个值就可以引入预分配空间的算法了,而不用去考虑内存分配的问题      |
+|  buf  |                                                   表示字符串数组,真实数据                                                   |
+
+
+5.Redis为什么重新设计一个SDS数据结构  
+![SDS](resources/redis/179.png)  
+<font color="#00FF00">C语言没有Java里面的String类型</font>,只能是靠自己的char[]来实现,字符串在C语言中的存储方式,<font color="#FF00FF">想要获取[Redis]的长度,需要从头开始遍历,直到遇到'\O'为止</font>.所以,Redis没有直接使用C语言传统的字符串标识,而是自己构建了一种名为简单动态字符串SDS(simple
+dynamic string)的抽象类型,并将SDS作为Redis的默认字符串.
+
+|      要点      |                                                           C语言                                                           |                                                                                                                                                                                       SDS                                                                                                                                                                                        |
+| :------------: | :-----------------------------------------------------------------------------------------------------------------------: | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------: |
+| 字符串长度处理 |                                     需要从头开始遍历,直到遇到'\0’为止,时间复杂度O(N)                                      |                                                                                                                                                                  记录当前字符串长度,直接读取即可,时间复杂度O(1)                                                                                                                                                                  |
+|  内存重新分配  |                                   分配内存空间超过后,会导致数组下标越界或者内存分配溢出                                   | <font color="#00FF00">空间预分配:</font><br/>SDS修改后,len长度小于1M,那么将会额外分配与len相同长度的未使用空间.如果修改后长度大于1M,那么将分配1M的使用空间.<br/><font color="#00FF00">惰性空间释放:</font><br/> 有空间分配对应就有空间释放.SDS缩短时并不会回收多余的内存空间,而是使用free字段将多出来的空间记录下来.如果后续有变更操作,直接使用free中记录的空间,减少了内存的分配 |
+|   二进制安全   | 二进制数据并不是规则的字符串格式,可能会包含一些特殊的字符串,比如'\0'等.前面提到过,C中字符串遇到'\0'之后的数据就读取不上了 |                                                                                                                                                               根据len长度来判断字符串结束,二进制的安全问题就解决了                                                                                                                                                               |
+|                |                                                                                                                           |                                                                                                                                                                                                                                                                                                                                                                                  |
+
+6.源码分析  
+**set k1 v1底层发生了什么**  
+![set](resources/redis/180.png)  
+set命令调用的了`setCommand`方法  
+`setCommand`方法内部又调用了`setGenericCommand`方法,`setGenericCommand`方法才是真正的核心方法.  
+
+**三大物理编码方式**  
+int编码格式  
+![int编码](resources/redis/181.png)    
+Redis启动时会预先建立10000个分别存储0~9999的redisObject变量作为共享对象,这就意味着如果set字符串的键值在0~10000之间的话,<font color="#00FF00">则可以直接指向共享对象面不需要再建立新对象,此时值不占空间</font>  
+此时\*prt指针指向的是共享变量(不占空间)  
+set k1 123  
+set k2 123  
+![引用同一个对象](resources/redis/182.png)  
+![10000个对象哪里来的](resources/redis/183.png)  
+redis6源代码(redis7代码变了,但效果是一样的)  
+![redis6](resources/redis/184.png)  
+
+embstr编码格式  
+![set](resources/redis/180.png)
+ 由`tryObjectEncoding`方法来决定当前key对应的value编码格式;该方法调用的是object.c中的`tryObjectEncoding`方法;`tryObjectEncoding`方法又调用了`createEmbeddedStringObject`方法  
+![tryObjectEncoding](resources/redis/185.png)
+![tryObjectEncoding](resources/redis/186.png)  
+对于长度小于44的字符串,Redis对键值采用OBJ_ENCODING_EMBSTR方式,EMBSTR顾名思义即:embedded string,表示嵌入式的String.从内存结构上来讲即字符串sds结构体与其对应的redisObject对象分配在同一块连续的内存空间,字符串sds嵌入在redisObject对象之中一样.  
+![指针](resources/redis/187.png)  
+
+raw编码格式  
+当字符串的键值为长度大于44的超长字符串时,Redis则会将键值的内部编码方式改为OBJ_ENCODING_RAW格式,这与<font color="#00FF00">OBJ_ENCODING_EMBSTR</font>编码方式的不同之处在于,此时动态字符串sds的内存与<font color="#00FF00">其依赖的edisObject的内存不再连续了</font>  
+![raw](resources/redis/188.png)  
+
+*embstr是只读的,如果更改过后会变成raw;无论是否达到44字节*  
+![embstr](resources/redis/189.png)  
+
+7.转变逻辑图  
+![转变逻辑图](resources/redis/190.png)  
+
+8.案例结论  
+只有整数才会使用int,如果是浮点数,<font color = '00FF00'>Redis内部其实先将浮点数转化为字符串值,然后再保存</font>  
+embstr与raw类型底层的数据结构其实都是<font color = '00FF00'>SDS(简单动态字符串,</font>Redis内部定义sdshdr一种结构)
+
+| int    | Long类型整数时,RedisObiect中的ptr指针直接赋值为整数数据,不再额外的指针再指向整数了,节省了指针的空间开销.                                                                                                                 |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| embstr | 当保存的是字符串数据且字符串小于等于44字节时,emstr类型将会调用内存分配函数,只分配一块连续的内存空间,空间中依次包含 redisObject 与 sdshdr 两个数据结构,让元数据、指针和SDS是一块连续的内存区域,这样就可以避免内存碎片      |
+| raw    | 当字符串大于44字节时,SDS的数据量变多变大了,SDS和RedisObject布局分家各自过,会给SDS分配多的空间并用指针指SDS结构,raw 类型将会调用两次内存分配函数,分配两块内存空间,一块用于包含 redisObject结构,而另一块用于包含sdshdr 结构 |
+
+![案例结论](resources/redis/191.png)  
+
+9.总结  
+Redis内部会根据用户给的不同键值而使用不同的编码格式,自适应地选择较优化的内部编码格式,而这一切对用户完全透明  
+
+#### 10.4.7 Hash数据结构介绍
+1.hash的两种编码格式  
+* redis6:ziplist+hashtable
+* redis7:listpack+hahstable  
+
+2.redis6
+
+执行`config get hash*`  
+![执行结果](resources/redis/192.png)  
+
+<font color="#00FF00">hash-max-ziplist-entries:使用压缩列表保存时哈希集合中的最大元素个数.</font>  
+<font color="#00FF00">hash-max-ziplist-value:使用压缩列表保存时哈希集合中单个元素的最大长度.</font>  
+
+Hash类型键的字段个数`小于`hash-max-ziplist-entries并且每个字段名和字段值的长度`小于`hash-max-ziplist-value时,Redis才会使用OBJ_ENCODING_ZIPLIST(压缩列表)来存储该键,前述条件任意一个不满足则会转换为OBJ_ENCODING_HT(hashtable)的编码方式  
+![redis6](resources/redis/194.png)  
+![redis6](resources/redis/195.png)  
+
+**结论:**  
+* 哈希对象保存的键值对数量小天512个;
+* 所有的键值对的健和值的字符串长度都小于等于64byte(一个英文字母一个字节)时用ziplist,反之用hashtable
+* ziplist升级到hashtable可以,反过来降级不可以
+
+**流程图:**
+![流程图](resources/redis/196.png)
+
+**源码分析**  
+在Redis中,hashtable被称为字典(dictionary),它是一个数组+链表的结构  
+OBJ_ENCODING_HT编码分析:  
+OBJ_ENCODING_HT这种编码方式内部才是真正的哈希表结构,或称为字典结构,其可以实现O(1)复杂度的读写操作,因此效率很高.  
+在Redis内部,从OBJ_ENCODING_HT类型到底层真正的散列表数据结构是一层层嵌套下去的,组织关系见面图:  
+![组织关系](resources/redis/197.png)  
+<font color="#00FF00">源代码dict.h:</font>  
+![dict.h](resources/redis/198.png)  
+![dict.h](resources/redis/199.png)  
+<font color="#FF00FF">每个键值对都会有一个dictEntry</font>  
+
+**hset命令解读**  
+![hset](resources/redis/200.png)  
+![hset](resources/redis/201.png)  
+
+ziplist压缩列表是一种紧凑编码格式,总体思想是<font color="#00FF00">多花时间来换取节约空间</font>,即以部分读写性能为代价,来换取极高的内存空间利用率  
+因此<font color="#00FF00">只会用于字段个数少,且字段值也较小的场景</font>.压缩列表内存利用率极高的原因与其连续内存的特性是分不开的.
+
+**ziplist什么样**  
+为了节约内存而开发的,它是由连续内存块组成的顺序型数据结构,有点类似于数组  
+ziplist是一个经过特殊编码的<font color="#00FF00">双向链表,它不存储指向前一个链表节点prev和指向下一个链表节点的指针next</font>而是<font color="#00FF00">存储上一个节点长度和当前节点 长度</font>,通过牺牲部分读写性能,来换取高效的内存空间利用率,节约内存,是一种时间换空间的思想.只用在<font color="#00FF00">字段个数少,字段值小的场景里面</font>  
+![ziplist组织结构](resources/redis/202.png)  
+
+**ziplist各个组成单元什么意思**  
+![组成单元](resources/redis/203.png)  
+
+**zlentry,压缩列表节点的构成:**  
+![zlentry](resources/redis/204.png)  
+![zlentry](resources/redis/205.png)  
+
+**ziplist存储情况**  
+![存储情况](resources/redis/206.png)  
+|  field   |                 解释                 |
+| :------: | :----------------------------------: |
+| prevlen  |        记录了前一个节点的长度        |
+| encoding | 记录了当前节点实际数据的类型以及长度 |
+|   data   |       记录了当前节点的实际数据       |
+
+**zlentry解析**  
+![解析](resources/redis/207.png)  
+前节点(prevlen):(前节点占用的内存字节数)表示前1个zlentry的长度,privious_entry_length有两种取值情况:<font color="#00FF00">1字节或5字节</font>.取值1字节时,表示上一个entry的长度小于254字节.虽然1字节的值能表示的数值范围是0到255,但是压缩列表中zlend的取值默认是255,因此,就默认用255表示整个压缩列表的结束,其他表示长度的地方就不能再用255这个值了.所以,当上一个entry长度小于254字节时,prev_len取值为1字节,否则,就取值为5字节.记录长度的好处:占用内存小,1或者5个字节  
+encoding:记录节点的content保存数据的类型和长度  
+content:保存实际数据内容  
+![解析](resources/redis/208.png)  
+
+**为什么zlentry这么设计?数组和链表数据结构对比**  
+privious_entry_length,encoding长度都可以根据编码方式推算,真正变化的是content,而content长度记录在encoding里,因此entry的长度就知道了.entry总长度=privious_entry_length字节数+encoding字节数+content字节数  
+![zlentry](resources/redis/209.png)  
+为什么entry这么设计?记录前一个节点的长度?  
+链表在内存中,一般是不连续的,遍历相对比较馒,而ziplist可以很好的解决这个问题.如果知道了当前的起始地址,因为entry是连续的,entry后一定是另一个entry,想知道下一个entry的地址,只要将当前的起始地址加上当前entry总长度.如果还想遍历下一个entry,只要继续同样的操作  
+
+**明明有链表了,为什么还需要压缩链表?**  
+![压缩链表](resources/redis/210.png)  
+
+**总结:**  
+ziplist为了节省内存,采用了紧凑的连续存储.  
+ziplist是一个双向链表,可以在时间复杂度为O(1)下从头部、尾部进行pop或push.  
+<font color="#00FF00">新增或更新元素可能会出现连锁更新现象(致命缺点导致被listpack替换)</font>  
+不能保存过多的元素,否则查询效率就会降低,数量小和内容小的情况下可以使用.  
+
+
+3.redis7
+
+执行`config get hash*`  
+![执行结果](resources/redis/193.png)  
 
 
 
