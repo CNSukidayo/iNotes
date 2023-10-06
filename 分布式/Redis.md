@@ -2373,6 +2373,7 @@ A.其它
 8.RedLock算法和底层源码分析  
 9.Redis缓存过期策略  
 10.Redis经典5大类型源码及底层实现  
+11.Redis为什么快?epoll和IO多路复用深度解析  
 
 
 ## 1.Redis单线程和多线程  
@@ -6318,7 +6319,6 @@ value可以是字符串对象,也可以是集合数据类型的对象,比如List
 10.4.8 List数据结构介绍  
 10.4.9 Set数据结构介绍  
 10.4.10 ZSet数据结构介绍  
-10.4.11 小总结
 
 #### 10.4.1 Redis数据类型总纲
 1.源码分析总体数据结构大纲  
@@ -6531,7 +6531,7 @@ raw编码格式
 只有整数才会使用int,如果是浮点数,<font color = '00FF00'>Redis内部其实先将浮点数转化为字符串值,然后再保存</font>  
 embstr与raw类型底层的数据结构其实都是<font color = '00FF00'>SDS(简单动态字符串,</font>Redis内部定义sdshdr一种结构)
 
-| int    | Long类型整数时,RedisObiect中的ptr指针直接赋值为整数数据,不再额外的指针再指向整数了,节省了指针的空间开销.                                                                                                                 |
+| int    | Long类型整数时,RedisObiect中的ptr指针直接赋值为整数数据,不再额外的指针再指向整数了,节省了指针的空间开销.                                                                                                                  |
 | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | embstr | 当保存的是字符串数据且字符串小于等于44字节时,emstr类型将会调用内存分配函数,只分配一块连续的内存空间,空间中依次包含 redisObject 与 sdshdr 两个数据结构,让元数据、指针和SDS是一块连续的内存区域,这样就可以避免内存碎片      |
 | raw    | 当字符串大于44字节时,SDS的数据量变多变大了,SDS和RedisObject布局分家各自过,会给SDS分配多的空间并用指针指SDS结构,raw 类型将会调用两次内存分配函数,分配两块内存空间,一块用于包含 redisObject结构,而另一块用于包含sdshdr 结构 |
@@ -6632,6 +6632,518 @@ ziplist是一个双向链表,可以在时间复杂度为O(1)下从头部、尾�
 执行`config get hash*`  
 ![执行结果](resources/redis/193.png)  
 
+redis7的ziplist已经不在使用了,但是为了兼容性还是保留了  
+```shell
+config set hash-max-listpack-entries 3
+config set hash-max-listpack-value 5
+config get hash*
+"hash-max-ziplist-value"
+"5"
+"halch-max-ziplist-entries"
+"3"
+"hash-max-listpack-value"
+"5"
+"hash-max-listpack-entries"
+"3"
+```
+可以看到更新listpack之后会自动更新ziplist  
+
+```shell
+config set hash-max-ziplist-entries 7
+config set hash-max-ziplist-value 7
+config get hash*
+"hash-max-ziplist-value"
+"7"
+"halch-max-ziplist-entries"
+"7"
+"hash-max-listpack-value"
+"7"
+"hash-max-listpack-entries"
+"7"
+```
+同样更新ziplist之后也会连带更新listpack  
+<font color="#00FF00">所以可以理解为在redis7下ziplist就是listpack的别名</font>  
+Hash类型键的字段个数小于hash-max-listpack-entries且每个字段名和字段值的长度小于hash-max-listpack-value时,Redis才会使用OBJ_ENCODING_LISTPACK来存储该键,前述条件任意一个不满足则会转换为OBJ_ENCODING_HT的编码方式  
+
+```shell
+hset user02 id 2 cname zs
+object encoding user02 
+"listpack" #从6-7 ziplist已经被替换成listpack了
+```
+
+**结论:**  
+* 哈希对象保存的键值对数量小于512个
+* 所有的键值对的健和值的字符串长度都小于等于64byte(一个英文字母一个字节)时用hashtable,反之用listpack  
+* listpack升级到hashtable可以,反过来降级不可以
+
+**源码说明**  
+object.c  
+![object.c](resources/redis/211.png)  
+listpack.c  
+![listpack](resources/redis/212.png)  
+IpNew函数创建了一个空的listpack,一开始分配的大小是LP_HDR_SIZE再加1个字节.LP_HDR_SIZE宏定义是在listpack.c中,它默认是6个字节,其中4个字节是记录listpack的总字节数,2个字节是记录listpack的元素数量.  
+此外,listpack的最后一个字节是用来标识listpack的结束,其默认值是宏定义LP_EOF.  
+和ziplist列表项的结束标记一样,LP_EOF的值也是255
+![object.c](resources/redis/213.png)  
+
+**已经有ziplist了,为什么还需要listpack紧凑列表?**  
+ziplist的连锁更新问题  
+![连锁更新问题](resources/redis/214.png)  
+因为entry1节点的prevlen属性只有1个字节大小,无法保存新节点的长度,此时就需要对压缩列表的空间重分配操作并将entry1节点的prevlen属性从原来的1字节大小扩展为5字节大小.  
+![连锁更新问题](resources/redis/215.png)  
+entry1节点原本的长度在250~253之间,因为刚才的扩展空间,此时entry1节点的长度就大于等于254,因此原本entry2节点保存entry1节点的prevlen属性也必须从1字节扩展至5字节大小.entry1节点影响entry2节点,entry2节点影响entry3节点.....一直持续到结尾.<font color="#00FF00">这种在特殊情况下产生的连续多次空间扩展操作就叫做[连锁更新]</font>  
+listpack是Redis设计用来取代掉ziplist的数据结构,它通过每个节点记录自己的长度且放在节点的尾部,来彻底解决掉了ziplist存在的连锁更新的问题  
+
+**listpack的结构**  
+![结构](resources/redis/216.png)  
+![结构](resources/redis/217.png)  
+
+**listpack中每一个元素entry的结构**  
+|     field      |              解释              |
+| :------------: | :----------------------------: |
+| entry-encoding |       当前元素的编码类型       |
+|   entry-data   |            元素数据            |
+|   entry-len    | 编码类型和元素数据这两部分长度 |
+
+![结构](resources/redis/218.png)  
+
+4.两种数据模型的对比  
+![ziplist](resources/redis/209.png) 
+和ziplist列表项类似,listpack列表项也包含了元数据信息和数据本身.不过,为了避免ziplist引起的连锁更新问题,listpack中的每个列表项不再像ziplist列表项那样保存其前一个列表项的长度.
+![listpack](resources/redis/219.png)
+
+
+#### 10.4.8 List数据结构介绍  
+1.redis中list结构的底层数据类型是quickList  
+* redis6下quicklist里面装的是ziplist
+* redis7下quicklist里面装的是listpack
+  
+
+2.redis6  
+```shell
+config get list*  
+"list-max-ziplist-size"
+-2
+"list-compress-depth"
+0
+```
+ziplist压缩配置:`list-compress-depth 0`  
+表示一个quicklist两端不被压缩的节点个数.这里的节点是指quicklist双向链表的节点,而不是指ziplist里面的数据项个数
+参数list-compress-depth的取值含义如下:  
+<font color="#00FF00">0:是个特殊值,表示都不压缩.这是Redis的默认值.</font>  
+1:表示quicklist两端各有1个节点不压缩,中间的节点压缩.  
+2:表示quicklist两端各有2个节点不压缩,中间的节点压缩.  
+3:表示quicklist两端各有3个节点不压缩,中间的节点压缩.  
+
+ziplist中entry配置:`list-max-ziplist-size -2`  
+当取正值的时候,表示按照数据项个数来限定每个quicklist节点上的ziplist长度.比如,当这个参数配置成5的时候,表示每个quicklist节点的ziplist最多包含5个数据项.<font color="#00FF00">当取负值的时候,表示按照占用字节数来限定每个quicklist节点上的ziplist长度</font>.这时,它只能取-1到-5这五个值,每个值含义如下:  
+-5:每个quicklIst节点上的ziplist大小不能超过64Kb.(注:1kb:>1024bytes)  
+-4:每个quicklist节点上的ziplist大小不能超过32Kb.  
+-3:每个quicklist节点上的ziplist大小不能超过16Kb.  
+<font color="#00FF00">-2:每个quicklist节点上的ziplist大小不能超过8Kb.(-2是Redis给出的默认值) </font> 
+-1:每个quicklist节点上的ziplist大小不能超过4Kb.  
+
+**redis6版本前list的编码格式**  
+list用quicklist来存储,quicklist存储了一个双向链表(linkedlist),每个节点都是一个ziplist  
+![ziplist](resources/redis/220.png)  
+在Redis3.0之前,list采用的底层数据结构是ziplist压缩列表+linkedList双向链表  
+然后在高版本的Redis中底层数据结构是quicklist(替换了ziplist+linkedList),而quicklist也用到了ziplist  
+<font color="#00FF00">结论:quicklist就是[双向链表+压缩列表]组合,因为一个quicklist就是一个链表,而链表中的每个元素又是一个压缩列表</font>  
+
+在较早版本的redis中,list有两种底层实现:  
+* 当列表对象中元素的长度比较小或者数量比较少的时候,采用压缩列表ziplist来存储
+* 当列表对象中元素的长度比较大或者数量比较多的时候,则会转而使用双向列表linkedlist来存储  
+
+两者各有优缺点:  
+* ziplist的优点是内存紧凑,访问效率高,缺点是更新效率低,并且数据量较大时,可能导致大量的内存复制
+* linkedlist的优点是节点修改的效率高,但是需要额外的内存开销,并且节点较多时,会产生大量的内存碎片
+为了结合两者的优点,在redis 3.2之后,list的底层实现变为快速列表quicklist.  
+
+**quicklist总纲**  
+quicklist是ziplist和linklist的结合体  
+![quicklist](resources/redis/221.png)  
+linklist就是图中的quickListNode  
+
+**quicklist结构**  
+![quicklist](resources/redis/222.png)  
+
+**quicklistNode结构**  
+![quicklistNode](resources/redis/223.png)  
+
+**quicklistNode中的*zl指向一个ziplist一个ziplist可以存放多个元素**  
+![quicklistNode](resources/redis/224.png)  
+
+3.redis7  
+```shell
+config get list*
+"list- compress- depth"
+"0"
+"list-max-ziplist-size"
+"-2"
+"list-max-listpack-size"
+"-2"
+```
+同样的道理在redis7下保留了ziplist,它作为listpack的别名而存在  
+
+**t_list.c**  
+![t_list](resources/redis/225.png)  
+
+**object.c**  
+![object.c](resources/redis/226.png)  
+
+**redis7的list一种编码格式**  
+* list用quicklist来存储,quicklist存储了一个双向链表,每个节点都是一个listpack
+* quicklist是listpack和linklist的结合体 
+
+
+#### 10.4.9 Set数据结构介绍
+
+**set的两种编码方式**  
+inset、hashtable  
+
+Redis用intset或hashtable存储set.如果元素都是整数类型,就用intset存储.  
+如果不是整数类型,就用hashtable(数组+链表的存来储结构).key就是元素的值,value为null.  
+
+```shell
+config get set*  
+"set-max-intset-entries"
+"512"
+```
+`set-max-intset-entries` 元素个数小于该值编码就是intset(并且都是整数类型);超过该值就是hashtable
+
+**t_set.c源码**  
+![t_set](resources/redis/227.png)  
+
+
+#### 10.4.10 ZSet数据结构介绍
+1.ZSet的两种编码格式  
+* redis6:ziplist+skiplist
+* redis7:listpack+skiplist
+
+2.配置  
+redis6:  
+```shell
+config get zset* 
+"zset-max-ziplist-entries"
+"128"
+"zset-max-ziplist-value"
+"64"
+```
+
+redis7:  
+```shell
+config get zset* 
+"zset-max-listpack-entries"
+"64"
+"zset-max-ziplist-value"
+"64"
+"zset-max-ziplist-entries"
+"128"
+"zset-max-listpack-value"
+"128"
+```
+和之前的效果是一样的,就是用listpack替换了ziplist  
+
+3.redis6  
+当有序集合中包含的元素数量超过服务器属性server.zset_max_ziplist_entries 的值(默认值为128)  
+或者有序集合中新添加元素的member的长度大于服务器属性server.zset_max_ziplist_value的值(默认值为64)时  
+redis会使用<font color="#00FF00">跳跃表</font>作为有序集合的底层实现  
+否则会使用ziplist作为有序集合的底层实现  
+
+4.skiplist  
+**为什么使用跳表?**  
+单链表:  
+对于一个单链表来讲,即便链表中存储的数据是有序的,如果我们要想在其中查找某个数据,也只能从头到尾遍历链表.  
+这样查找效率就会很低,时间复杂度会很高O(N)  
+![跳表](resources/redis/228.png)  
+链表的痛点:  
+数组和链表各有优缺点链表遍历的时候,时间复杂度最差会出现O(N),我们优化一下,尝试空间换时间,给链表加个索引,称为"索引升级",两两取首即可.  
+加索引:  
+![加索引](resources/redis/229.png)  
+![加索引](resources/redis/230.png)  
+<font color="#00FF00">实际上这种加索引的效果就类似于二叉树</font>  
+
+**跳表:**  
+跳表:可以实现二分查找的有序链表  
+跳表=链表+多级索引  
+skiplist是一种以空间换取时间的结构.  
+由于链表,无法进行二分查找,因此借鉴数据库索引的思想,提取出链表中关键节点(索引),先在关键节点上查找,再进入下层链表查找,提取多层关键节点,就形成了跳跃表  
+<font color="#00FF00">注意:由于索引也要占据一定空间的,所以索引添加的越多,空间占用的越多</font>
+
+**跳表的时间空间复杂度**  
+时间复杂度:O(logN)  
+跳表查询的时间复杂度分析,如果链表里有N个结点,会有多少级索引呢?  
+按照我们前面讲的,两两取首.每两个结点会抽出一个结点作为上一级索引的结点,以此估算:  
+第一级索引的结点个数大约就是n/2,  
+第二级索引的结点个数大约就是n/4,  
+第三级索引的结点个数大约就是n/8,依次类推....  
+也就是说,第k级索引的结点个数是第k-1级索引的结点个数的1/2,那第k级索引结点的个数就是n/(2^k)  
+假设索引有h级,最高级的索引有2个结点.通过上面的公式,  
+我们可以得到n/(2^h)=2,从而求得h=log<sub>2</sub>n-1  
+如果包含原始链表这一层,整个跳表的高度就是log<sub>2</sub>n  
+
+**跳表的空间复杂度**  
+比起单纯的单链表,跳表需要存储多级索引,肯定要消耗更多的存储空间.那到底需要消耗多少额外的存储空间呢?  
+我们来分析一下跳表的空间复杂度.  
+第一步:首先原始链表长度为n  
+第二步:两两取首,每层索引的结点数:n/2,n/4,n/8...,8,4,2每上升一级就减少一半,直到剩下2个结点,以此类推;如果我们把每层索引的
+结点数写出来,就是一个等比数列.  
+这几级索引的结点总和就是n/2+n/4+n/8...+8+4+2=n-2.所以,跳表的空间复杂度是O(n).也就是说,如果将包含n个结点的单链表构造成
+跳表,我们需要额外再用接近n个结点的存储空间.  
+
+**为什么是两两取首?不能三三取首?**  
+第三步:思考三三取首,每层索引的结点数:n/3,n/9,n/27...,9,3,1以此类推;
+第一级索引需要大约n/3个结点,第二级索引需要大约n/9个结点.每往上一级,索引结点个数都除以3.为了方便计算,我们假设最高一级的索
+引结点个数是1.我们把每级索引的结点个数都写下来,也是一个等比数列  
+通过等比数列求和公式,总的索引结点大约就是n/3+n/9+n/27+...+9+3+1=n/2.尽管空间复杂度还是O(n),但比上面的每两个结点抽一个结
+点的索引构建方法,要减少了一半的索引结点存储空间  
+所以空间复杂度是o(n)
+
+**跳表的优点**  
+跳表是一个最典型的<font color="#00FF00">空间换时间</font>解决方案,而且只有在<font color="#00FF00">数据量较大</font>的情况下才能体现出来优势.而且应该是<font color="#00FF00">读多写少</font>的情况下才能使用,所以它的适用范围应该还是比较有限的  
+
+**跳表的缺点**  
+维护成本相对要高  
+在单链表中,一旦定位好要插入的位置,插入结点的时间复杂度是很低的,就是O(1)  
+新增或者删除时需要把所有索引都更新一遍,为了保证原始链表中数据的有序性,我们需要先找到要动作的位置,这个查找操作就会比较耗时最后在新增和删除的过程中的更新,时间复杂度也是O(log n)
+
+## 11.Redis为什么快?epoll和IO多路复用深度解析
+**目录:**  
+11.1 为什么使用多路复用?  
+11.2 Unix网络编程中的五种IO模型  
+11.3 BIO  
+11.4 NIO  
+11.5 IO Multiplexing(IO多路复用)  
+11.6 select  
+11.7 poll  
+11.8 epoll  
+11.9 总结  
+
+
+
+### 11.1 为什么使用多路复用?
+1.没有多路复用  
+<font color="#00FF00">并发多客户端连接,同步阻塞网络IO模型</font>  
+也即Redis为了处理每一个连接请求,都需要创建一个进程来单独处理(对接);使用这种方式的缺点就是性能非常差  
+
+2.IO多路复用  
+由于创建进程的开销太大了,并且进程上下文切换的开销也非常大(还涉及到用户态到内核态的转换);为了让一个进程能够同时处理很多TCP连接,由此引出了IO多路复用.  
+一种实现方式是让这个IO线程轮询遍历所有连接的客户端来发现IO事件,但这种方式并不高效,随着连接数量的增多性能也会急剧下降.  
+<font color="#00FF00">希望有一种更高效的机制,在很多连接中一旦有IO事件发生时就快速地把它找出来.</font>  
+
+* I/O:网络I/O,尤其在操作系统层面指数据在内核态和用户态之间的读写操作
+* 多路:多个客户端连接(连接就是套接字描述符,即socket或者channel),指的是多条TCP连接  
+* 复用:复用一个或几个线程来处理多条连接
+* IO多路复用:一个或一组线程就可以处理多个TCP连接,使用单进程就能够实现同时处理多个客户端连接,<font color="#00FF00">无需创建或者维护过多的进程/线程</font> 
+* 小总结:一个服务端进程可以同时处理多个套接字描述符  
+  实现IO多路复用的模型有三种:可以分select->poll-><font color="#00FF00">epoll</font>三个阶段来描述 
+
+![epoll](resources/redis/64.png)
+
+3.Redis单线程如何处理那么多并发客户端连接,为什么单线程,为什么快?  
+Redis利用epoll来实现IO多路复用,<font color="#00FF00">将连接信息和事件放到队列中</font>,一次放到文件事件<font color="#00FF00">分派器</font>,事件分派器将事件分发给事件<font color="#00FF00">处理器</font>.  
+![流程](resources/redis/231.png)  
+Redis是跑在单线程中的,所有的操作都是按照顺序线性执行的,但是由于读写操作等待用户输入或输出都是阻塞的,所以I/O操作在一般情况
+下往往不能直接返回,这会导致某一文件的I/O阻塞导致整个进程无法对其它客户提供服务,而I/O多路复用就是为了解决这个问题而出现  
+所谓I/O多路复用机制,就是说通过一种机制,可以监视多个描述符(linux中一个socket对应一个文件),一旦某个描述符就绪(一般是读就绪或写就绪),能够通知程序进行相应的读写操作.这种机制的使用需要<font color="#00FF00">select、poll、epoll</font>来配合.<font color="#00FF00">多个连接共用一个阻塞对象,应用程序只需要在一个阻塞对象上等待,无需 阻塞等待所有连接.当某条连接有新的数据可以处理时,操作系统通知应用程序,线程从阻塞状态返回,开始进行业务处理.</font>
+Redis服务采用Reactor(响应式)的方式来实现文件事件处理器(每一个网络连接其实都对应一个文件描述符)  
+Redis基于Reactor模式开发了网络事件处理器,这个处理器被称为文件事件处理器.它的组成结构为4部分:多个套接字、IO多路复用、文件事件分派器、事件处理器.  
+<font color="#00FF00">因为文件事件分派器队列的消费是单线程的,所以Redis才叫单线程模型.</font>  
+![IO多路复用](resources/redis/67.png)
+
+
+### 11.2 Unix网络编程中的五种IO模型
+**分类**
+* BlockingIO-阻塞IO  
+* NoneBlockingIO-BIO非阻塞IO
+* IO Multiplexing-IO多路复用  
+* Signal Driven IO-信号驱动IO
+* Asynchronous IO-异步IO
+
+这里有个吃米线的故事非常有意思,但是太长了就不粘贴了(P168)  
+* 同步:调用者要一直等待调用结果的通知后才能进行后续的执行  
+* 异步:指被调用方先应答让调用者先回去,然后再计算调用结果,计算完最终结果后再通知并返回给调用方  
+  异步调用要想获得结果一般通过回调  
+* 同步与异步的理解:同步、异步的讨论对象是被调用者(服务提供者),<font color="#00FF00">获得调用结果的消息通知方式上</font>
+* 阻塞:调用方一直在等待而且别的事情什么都不做,当前进程/线程会被挂起,啥都不干
+* 非阻塞:调用在发出后,调用方接着执行别的事情,不会阻塞当前进程/线程,而是理解返回
+* 阻塞与非阻塞的理解:阻塞、非阻塞的讨论对象是调用者(服务请求者),重点在于等消息时候的行为,调用者是否能干其它事
+* 总结:  
+  同步与异步是针对服务提供者而言的,当调用者调用服务提供者时;如果服务提供者需要完整运行完流程才能给调用者答复就是同步(答复内容是:收到+数据),如果服务提供者可以立即给调用者答复就是异步(答复内容是:收到).  
+  阻塞与非阻塞是针对调用者而言的,当调用者调用服务提供者时;当服务提供者给应答之前(可能是数据也可能只是一个应答);服务调用者是等待啥也不干就是阻塞,如果服务调用者可以做别的事情就是非阻塞. 
+  * 同步阻塞:调用者请求数据,服务者要获取到完整数据之后才把应答+数据信息传给调用者;并且调用者在拿到数据之前一直等待
+  * 同步非阻塞:调用者请求数据,服务者要获取到完整数据之后才把应答+数据信息传给调用者;调用者在拿到数据之前可以干别的事情
+  * 异步阻塞:调用者请求数据,服务者立即应答(表明已经收到请求);调用者拿到应答信息,但在拿到数据之前一直等待
+  * 异步非阻塞:调用者请求数据,服务者立即应答(表明已经收到请求);调用者者拿到应答信息,但在拿到数据之前可以干别的事情
+
+### 11.3 BIO
+![BIO](resources/redis/232.png)  
+当用户进程调用了recvfrom这个系统调用,kernel就开始了IO的第一个阶段:准备数据(对于网络IO来说,很多时候数据在一开始还没有到达.比如,还没有收到一个完整的UDP包.这个时候kernel就要等待足够的数据到来).这个过程需要等待,也就是说数据被拷贝到操作系统内核的缓冲区中是需要一个过程的.而在用户进程这边,整个进程会被阻塞(当然,是进程自己选择的阻塞).当kernel一直等到数据准备好了,它就会将数据从kernel中拷贝到用户内存,然后kernel返回结果,用户进程才解除block的状态,重新运行起来.所以,<font color="#00FF00">BIO的特点就是在IO执行的两个阶段都被block了</font>  
+<font color="#FF00FF">复习一下Java的网络BIO编程(没新东西)</font>  
+<font color="#00FF00">Tomcat7之前就是用BIO多线程来解决多连接的问题</font> 
+
+### 11.4 NIO
+![NIO](resources/redis/233.png)  
+当用户进程发出read操作时,如果kernel中的数据还没有准备好,那么它并不会block用户进程,而是立刻返回一个error.从用户进程角度讲
+,它发起一个read操作后,并不需要等待,而是马上就得到了一个结果(应答).用户进程判断结果是一个error时,它就知道数据还没有准备好,于是它可以再次发送read操作.一旦kernel中的数据准备好了,并且又再次收到了用户进程的system call,那么它马上就<font color="#00FF00">将数据拷贝到了用户内存</font>
+,然后返回.<font color="#00FF00">NIO特点是用户进程需要不断的主动询问内核数据准备好了吗?即用轮询替代阻塞!</font>  
+
+1.在NIO模式中,一切都是非阻塞的  
+accept()方法是非阻塞的,如果没有客户端连接,就返回无连接标识  
+read()方法是非阻塞的,如果read()方法读取不到数据就返回空闲中标识,如果读取到数据时只阻塞read()方法读数据的时间  
+
+2.在NIO中只有一个线程  
+当一个客户端与服务端进行连接,这个socket就会加入到一个数组中,隔一段时间遍历一次  
+看这个socket的read()方法能否读到数据,这样<font color="#00FF00">一个线程就能处理多个客户端的连接和读取了</font>  
+<font color="#FF00FF">它是通过轮询来实现的</font>
+
+3.NIO存在的问题和缺点  
+NIO成功的解决了BIO需要开启多线程的问题,<font color="#00FF00">NIO中一个线程就能解决多个socket连接</font>,但是还存在2个问题.  
+
+问题一:  
+这个模型在客户端少的时候十分好用,但是客户端如果很多.  
+比如有1万个客户端进行连接,那么每次循环就要遍历1万个socket,如果一万个socket中只有10个socket有数据,也会遍历一万个socket,就会
+做很多无用功,每次遍历遇到read返回-1时(返回-1代表socket没有数据)仍然是一次浪费资源的系统调用.  
+
+问题二:  
+<font color="#00FF00">遍历socket的过程是在用户态完成的,用户态判断socket是否有数据是通过调用内核态的read()方法实现的</font>,这就涉及到用户态和内核态的转换,而每遍历一个socket就需要切换一次,开销太大!  
+
+* 优点:不会阻塞在内核的等待数据过程,每次发起的I/O请求可以立即返回,不用阻塞等待,实时性较好.  
+* 缺点:轮询将会不断地询问内核,这将占用大量的CPU时间,系统资源利用率较低,所以一般Web服务器不使用这种I/O模型.  
+
+问题一解决方案:  
+将用户socket对应的fd注册进epoll,然后epoll帮你监听哪些socket上有消息到达,<font color="#00FF00">这样就避免了大量的无用操作</font>.此时的socket应该采用非阻塞模式.这样,整个过程只在调用select、poll、epoll这些调用的时候才会阻塞,收发客户消息是不会阻塞的,整个进程或者线程就被充分利用起来,这就是事件驱动,<font color="#00FF00">所谓的reactor反应模式</font>.
+
+
+问题二解决方案:  
+由于遍历每个socket都涉及到用户态到内核态的转换;能不能直接让linux内核完成上述的需求,程序将一批文件描述符通过一次系统调用传给内核<font color="#FF00FF">由内核去遍历</font>.于是IO多路复用应运而生,也即将上述工作直接放入linux内核,不在两态之间转换而是直接从内核获取结果,<font color="#00FF00">因为内核是非阻塞的</font>.
+
+### 11.5 IO Multiplexing(IO多路复用)
+1.文件描述符  
+文件描述符(File descriptor)是计算机科学中的一个术语,是一个用于表述<font color="#00FF00">指向文件的引用</font>的抽象化概念.文件描述符在形式上是一个非负整数,实际上,<font color="#00FF00">它是一个索引值</font>,指向内核为每一个进程所维护的该进程打开文件的记录表.<font color="#00FF00">当程序打开一个现有文件或者创建一个新文件时,内核向进程返回一个文件描述符</font>.在程序设计中,文件描述符这一概念往往只适用于UNIX、Linux这样的操作系统.  
+
+2.IO多路复用模型  
+![IO Multiplexing](resources/redis/234.png)  
+IO multiplexing就是我们说的select、poll、epoll,有些技术书籍也称这种IO方式为event driven IO事件驱动IO.就是通过一种机制,一
+个进程可以监视多个描述符,一旦某个描述符就绪(一般是读就绪或者写就绪),能够通知程序进行相应的读写操作.可以基于一个阻塞对象并同时在多个描述符上等待就绪,而不是使用多个线程(每个文件描述符一个线程,每次new一个线程),这样可以大大节省系统资源.<font color="#00FF00">所以,I/O多路复用的特点是通过一种机制一个进程能同时等待多个文件描述符而这些文件描述符(套接字描述符)其中的任意一个进入读就绪状态</font>,select、poll、epoll等函数就可以返回(就可以读取).  
+
+3.Reactor响应模式  
+基于I/O复用模型:<font color="#00FF00">多个连接共用一个阻塞对象</font>,应用程序只需要在一个阻塞对象上等待,无需阻塞等待所有连接.<font color="#00FF00">当某条连接有新的数据可以处理时,操作系统通知应用程序,线程从阻塞状态返回</font>,开始进行业务处理.  
+Reactor模式,是指通过一个或多个输入同时传递给服务处理器的服务请求的事件驱动处理模式.服务端程序处理传入多路请求,并将它们同步分
+派给请求对应的处理线程,Reactor模式也叫Dispatcher模式.<font color="#00FF00">即I/O多了复用统一监听事件,收到事件后分发(Dispatch给某进程),是编写高性能网络服务器的必备技术.</font>
+
+![reactor](resources/redis/235.png)  
+Reactor模式中有2个关键组成:  
+* Reactor:Reactor在一个单独的线程中运行,负责监听和分发事件,分发给适当的处理程序来对IO事件做出反应.它就像公司的电话接线员,它接听来自客户的电话并将线路转移到适当的联系人;  
+* Handlers:处理程序执行I/O事件要完成的实际事件,类似于客户想要与之交谈的公司中的实际办理人.Reactor通过调度适当的处理程序来响应I/O事件,处理程序执行非阻塞操作.  
+![reactor](resources/redis/236.png)
+
+
+### 11.6 select
+`select`指代的是linux的系统调用  
+![select](resources/redis/237.png)  
+**`select`函数的执行流程:**  
+select是一个阻塞函数,当没有数据时,会一直阻塞在select哪一行  
+当有数据时会将rset中对应的那一位置**位**为1  
+select函数返回不再阻塞  
+遍历文件描述符数组(即&rset),判断哪个fd被置为1  
+遍历到fd为1的文件读取数据,然后返回  
+
+**优点:**  
+<font color="#00FF00">select其实就是把NIO中用户态要遍历的fd数组(我们的每一个socket连接)拷贝到了内核态,让内核态来遍历</font>,因为用户态判断socket是否有数据还是要调用内核态的,所有拷贝到内核态后,<font color="#00FF00">这样遍历判断的时候就不用一直用户态和内核态频繁切换了</font>  
+从代码中可以看出,select系统调用后,返回了一个置位后的&rset,这样用户态只需进行很简单的二进制比较,就能很快知道哪些socket需要
+read数据,有效提高了效率
+
+**缺点:**  
+* select函数通过bitmap数据结构来观察哪一个socket有数据;bitmap默认大小为1024,虽然可以调整但还是有限度.
+* rset每次循环都必须重新置**位**为0,不可重复使用
+* 尽管将rset从用户态拷贝到内核态,由内核态判断是否有数据,但还是有拷贝开销
+* 当有数据时select就会返回,但是select函数并不知道哪个文件描述符有数据了,<font color="#00FF00">后面还需要再次对又件描述符数组进行遍历</font>.效率比较低
+
+**小总结:**  
+select方式,既做到了一个线程处理多个客户端连接(文件描述符),又减少了系统调用的开销,多个文件描述符只有一次select的系统调用+N次就绪状态的文件描述符的read系统调用
+
+### 11.7 poll
+**`poll`函数的执行流程:**   
+将五个fd从用户态拷贝到内核态  
+poll为阻塞方法,执行poll方法,如果有数据会将fd对应的revents置POLLIN  
+poll方法返回  
+循环遍历,查找哪个fd被置位为POLLIN了  
+将revents重置为0便于复用  
+对置位的fd进行读取和处理  
+
+**解决的问题:**  
+* 解决了bitmap大小限制  
+  poll使用pollfd数组来代替select中的bitmap,数组没有1024的限制,可以一次管理更多的client.它和select的主要区别就是,去掉了select只能监听1024个文件描述符的限制.
+* 解决了rset不可重用的情况  
+  当pollfds数组中有事件发生,相应的revents置位为1,遍历的时候又置位回零,实现了pollfd数组的重用
+
+
+**缺点:**  
+*poll解决了select函数缺点的前两条,select函数的后两条问题还是没有解决*
+* pollfds数组拷贝到了内核态,仍然有开销
+* poll并没有通知用户态哪一个socket有数据,仍然需要O(n)的遍历
+
+
+### 11.8 epoll
+1.epoll不是一个函数,而是由三个函数构成  
+`epoll_create`、`epoll_ctl`、`epoll_wait`
+```c
+// 创建epoll并且设置它的空间值为多少
+int epoll_create(int size);
+/*
+args0:是epoll_create方法的返回值
+args1:表示operation,用三个宏定义来表示;可选值有:EPOLL_ADD添加、EPOLL_CTL_DELETE删除、EPOLL_CTL_MOD修改.三操作对fd的监听
+args2:是需要监听的fd(文件描述符)
+args3:告诉内核要监听什么事(结构体定义在下面)
+*/
+int epoll_ctl(int epfd,int op,int fd,struct epoll_event *event);
+
+// 等待epfd上的io事件,最多返回maxevents个事件.参数events用来从内核得到事情的集合,maxevents告知内核这个events有多大
+int epoll_wait(int epfd,struct epoll_event *events,int maxevents,int timeout);
+
+// epoll_event结构体
+struct epoll_event{
+  __uint32_t events;
+  epoll_data_t data;
+};
+/*
+events可以是以下几个宏的集合:  
+EPOLLIN:表示对应的文件描述符可以读(包括对socket正常关闭)
+EPOLLOUT:表示对应的文件描述符可以写
+*/
+```
+
+2.**`epoll`函数的执行流程**  
+*<font color="#00FF00">epoll函数是非阻塞的</font>*  
+epoll的执行流程:
+当有数据的时候,会把相应的文件描述符"置位",但是epool没有revent标志位,所以并不是真正的置位.这时候会把有数据的文件描述符放到队首.  
+epoll会返回有数据的文件描述符的个数  
+根据返回的个数读取前N个文件描述符即可  
+读取、处理  
+
+3.epoll的特点  
+多路复用快的原因在于,操作系统提供了这样的系统调用,使得原来的while循环里多次系统调用,<font color="#00FF00">变成了一次系统调用+内核层遍历这些文件描述符.</font>  
+* 一个socket的生命周期中只有一次从用户态拷贝到内核态的过程,开销小  
+* 使用event事件通知机制,每次socket中有数据会主动通知内核,并加入到就绪链表中,不需要遍历所有的socket  
+
+在多路复用IO模型中,会有一个内核线程不断地去轮询多个socket的状态,只有当真正读写事件发送时,才真正调用实际的IO读写操作.因为在
+多路复用IO模型中,只需要使用一个线程就可以管理多个socket,系统不需要建立新的进程或者线程,也不必维护这些线程和进程,并且只有真正
+有读写事件进行时,才会使用IO资源,所以它大大减少来资源占用.<font color="#00FF00">多路I/O复用模型是利用select、poll、epoll可以同时监察多个流的I/O事件的能力,在空闲的时候,会把当前线程阻塞掉,当有一个或多个流有I/O事件时,就从阻塞态中唤醒,于是程序就会轮询一遍所有的流(epoll是只轮询那些真正发出了事件的流),并且只依次顺序的处理就绪的流,这种做法就避免了大量的无用操作.采用多路I/O复用技术可以让单个线程高效的处理多个连接请求(尽量减少网络IO的时间消耗),且Redis在内存中操作数据的速度非常快,也就是说内存内的操作不会成为影响Redis性能的瓶颈</font>
+
+### 11.9 总结
+1.`select、poll、epoll`三种方法的总结  
+![三种方法总结](resources/redis/238.png)  
+
+2.五种IO模型的总结  
+多路复用快的原因在于,操作系统提供了这样的系统调用,使得原来的while循环里多次系统调用<font color="#00FF00">变成了一次系统调用+内核层遍历这些文件描述符.</font>  
+所谓I/O多路复用机制,就是说通过一种机制,可以监视多个描述符,一旦某个描述符就绪(一般是读就绪或写就绪),能够通知程序进行相应的读写操作.这种机制的使用需要select、poll、epoll来配合.多个连接共用一个阻塞对象,应用程序只需要在一个阻塞对象上等待,无需阻塞等待所有连接.当某条连接有新的数据可以处理时,操作系统通知应用程序,线程从阻塞状态返回,开始进行业务处理.  
+
+![5种IO模型](resources/redis/239.png)  
+
+3.如果Redis装在Windows操作系统上,会选择使用select函数;而不会使用epoll函数  
+所以Redis一定要装在linux上  
+
 
 
 
@@ -6641,6 +7153,7 @@ ziplist是一个双向链表,可以在时间复杂度为O(1)下从头部、尾�
 **目录:**  
 1.丰富系统功能  
 2.bitmap、hyperloglog、geo实战  
+3.迷你版微信抢红包  
 
 
 ## 1. 丰富系统功能  
@@ -6709,3 +7222,144 @@ ziplist是一个双向链表,可以在时间复杂度为O(1)下从头部、尾�
 详情见:高级篇=>4.bitmap、hyperloglog、geo实战
 
 
+## 3.迷你版微信抢红包
+**目录:**  
+3.1 总体介绍  
+3.2 架构设计  
+3.3 代码编写  
+
+
+### 3.1 总体介绍
+1.需求分析  
+* 各种节假日,发红包+抢红包,100%高并发业务要求,不能用mysql来做
+* 一个总的大红包,会有可能拆分为多个小红包,总金额=分金额1+分金额2+分金额3
+* 每个人只能抢一次,需要有记录,比如100块钱,被拆分为10个红包发出去总计有10个红包,抢一个少一个,总数显示(10/6)直到完,需要记录那些人抢到了红包,重复抢作弊不可以.
+* 有可能还需要你计时,从发出红包到完全抢完花费了多长时间?
+* 红包过期,或者没人抢完红包,红包资金原封不动退回.
+
+2.难点分析  
+* 拆分算法如何实现?  
+  红包其实就是金额,拆分算法如何?给你100块,分成10个小红包(金额有可能小概率相同,有2个红包都是2.58),如何拆分随机金额设定每个红包里面安装多少钱?
+* 次数限制  
+  每个人只能抢一次,次数限制
+* 原子性  
+  每抢走一个红包就减少一个(类似库存),那这就需要保证库存的原子性(不能加锁实现)
+
+
+### 3.2 架构设计
+1.发送包流程  
+发红包使用Redis中的list类型  
+```shell
+# 往list数组中添加本次红包的信息
+# orderId是订单号,coin根据红包大小的不同会拆分出多个子金额
+lpush redpackage:orderId [coin]...  
+
+# 例如100元红包,5个人抢
+lpush redpackage:001 20 20 20 30 10
+``` 
+
+2.抢红包流程  
+要求:保证高并发、多线程、不加锁保证原子性  
+```shell
+# 利用lpop命令弹出就能实现抢红包
+# 不用加锁也能保证原子性
+lpop redpackage:001
+```
+
+3.记录红包  
+为了防止作弊,同一个用户不可以抢夺两次红包,所以需要记录红包被抢情况  
+利用Redis中的hash类型  
+```shell
+# 用一个新的hash类型来存放用户抢红包的记录
+# userID表示是哪个用户抢的
+# coin表示该用户抢的金额是多少
+hset redpackage:customer:001 [userID]... [coin]...
+# 例如;表明user0抢了10 user12抢了20
+hset redpackage:customer:001 user:0 10 user:12 20
+```
+
+4.红包拆分算法之<font color="#00FF00">二倍均值算法</font>  
+剩余红包金额为M,剩余人数为N,那么有如下公式  
+`每次抢到的金额 = 随机区间(0,(剩余红包金额M ÷ 剩余人数N) × 2)`  
+该公式保证了每次随机金额的平均值是相等的,不会因为抢红包的先后顺序而造成不公平.  
+举个例子:  
+假设有10个人,红包总额100元.  
+第1次:  
+100 ÷ 10 × 2 = 20,所以第一个人的随机范围是(0,20)平均可以抢到10元.假设第一个人随机到10元,那么剩余金额是100-10=90元.  
+第2次:  
+90 ÷ 9 × 2 = 20,所以第二个人的随机范围同样是(0,20)平均可以抢到10元.假设第二个人随机到10元,那么剩余金额是90 - 10 = 80元.  
+第3次:  
+80 ÷ 8 × 2 = 20,所以第三个人的随机范围同样是(0,20),平均可以抢到10元.以此类推,每一次随机范围的均值是相等的.
+
+### 3.3 代码编写
+这里直接写controller了  
+RedPackageController:  
+```java
+@RestController
+public class RedPackageController {
+    // 定义的两个key常量
+    public static final String RED_PACKAGE_KEY = "redpackage:";
+    public static final String RED_PACKAGE_CONSUME_KEY = "redpackage:consume";
+
+    @Autowired
+    private RedisTemplate redisTemplate;
+
+    @RequestMapping(value = "/send")
+    public String sendRedPackage(int totalMoney, int redpackageNumber) {
+        // 1 拆红包将总金额totalMoney拆分成redpackageNumber个子红包
+        Integer[] splitRedPackages = splitRedPackageAlgorithm(totalMoney, redpackageNumber);
+        // 2 发红包并保存进list结构里面且设置过期时间
+        String key = RED_PACKAGE_KEY + IdUtil.simpleUUID();
+        redisTemplate.opsForList().leftPushAll(key, splitRedPackages);
+        redisTemplate.expire(key, 1, TimeUnit.DAYS);
+
+        return key + "\t" + Ints.asList(Arrays.stream(splitRedPackages).mapToInt(Integer::valueOf).toArray());
+    }
+
+    @RequestMapping(value = "/rob")
+    public String robRedPackage(String redpackageKey, String userId) {
+        // todo 个人感觉这里是存在并发问题的,因为判断和抢等操作是非原子性操作
+        // 验证某个用户是否抢过红包，不可以多抢
+        Object redPackage = redisTemplate.opsForHash().get(RED_PACKAGE_CONSUME_KEY + redpackageKey, userId);
+        if (redPackage == null) {
+            // 红包没有抢完才能让用户接着抢
+            Object partRedPackage = redisTemplate.opsForList().leftPop(RED_PACKAGE_KEY + redpackageKey);
+            if(partRedPackage != null) {
+                redisTemplate.opsForHash().put(RED_PACKAGE_CONSUME_KEY+redpackageKey, userId, partRedPackage);
+                System.out.println("用户：" + userId + "\t 抢到了" + partRedPackage + "");
+                // TODO 后续异步操作或者回滚操作
+                return String.valueOf(partRedPackage);
+            }
+            // 抢完了
+            return "errorCode:-1, 红包抢完了";
+        }
+        // 抢过了，不能抢多次
+        return "errorCode:-2," + userId + "\t已经抢过了";
+
+    }
+
+    // 拆分红包算法 --》 二倍均值算法
+    private Integer[] splitRedPackageAlgorithm(int totalMoney, int redpackageNumber) {
+        Integer[] redpackageNumbers = new Integer[redpackageNumber];
+        // 已经被抢夺的红包金额
+        int useMoney = 0;
+        for (int i = 0; i < redpackageNumber; i++) {
+            if (i == redpackageNumber - 1) {
+                redpackageNumbers[i] = totalMoney - useMoney;
+            } else {
+                // 二倍均值算法，每次拆分后塞进子红包的金额
+                // 金额 = 随机区间(0，(剩余红包金额M ÷ 剩余人数N ) * 2)
+                int avgMoney = ((totalMoney - useMoney) / (redpackageNumber - i)) * 2;
+                redpackageNumbers[i] = 1 + new Random().nextInt(avgMoney - 1);
+                useMoney = useMoney + redpackageNumbers[i];
+            }
+        }
+        return redpackageNumbers;
+    }
+}
+```
+
+**多学一手**  
+假设现在Redis中已经存储了很多红包信息,如何批量删除这些红包?  
+执行命令:  
+`redis-cli -a 111111 keys "red*" | xargs redis-cli -a 111111 del `
