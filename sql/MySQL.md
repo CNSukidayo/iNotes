@@ -1246,9 +1246,9 @@ MySQL引入了binlog组提交(group commit)机制,当有多个事务提交的时
 
 第一个事务会成为flush阶段的Leader,此时后面到来的事务都是Follower  
 ![flush阶段](resources/mysql/22.png)  
-接着,获取队列中的事务组,由绿色事务组的Leader对redo log做一次write + fsync,即一次将同组事务的redolog刷盘(<font color="#00FF00">redo log-prepare阶段的优化</font>)  
+接着,获取队列中的事务组,由绿色事务组的Leader对redo log做一次write + fsync,即一次将同组事务的redo log刷盘(<font color="#00FF00">redo log-prepare阶段的优化</font>)从图中也可以看到flush redo log和write binlog融合到一个阶段里面了  
 ![flush阶段](resources/mysql/23.png)  
-完成了prepare阶段后,将绿色这一组事务执行过程中产生的bin log buffer写入binlog文件(调用write,不会调用fsync,所以不会刷盘,binlog缓存在操作系统的文件系统中)  
+完成了prepare阶段后,将绿色这一组事务执行过程中产生的bin log buffer写入binlog文件(调用write,不会调用fsync,所以不会刷盘,binlog缓存在操作系统的文件系统中,即page cahce)  
 ![flush阶段](resources/mysql/24.png)  
 从上面这个过程,可以知道flush阶段队列的作用是**用于支撑redo log的组**提交.并且该阶段也会将bin log buffer写入到page cache  
 如果在这一步完成后数据库崩溃,由于binlog中没有该组事务的记录,所以MySQL会在重启后回滚该组事务.  
@@ -1257,7 +1257,7 @@ MySQL引入了binlog组提交(group commit)机制,当有多个事务提交的时
 
 绿色这一组事务的binlog写入到binlog文件后,并不会马上执行刷盘的操作,而是会等待一段时间,个等待的时长由`Binlog_group_commit_sync_delay`参数控制,目的是为了组合更多事务的binlog,然后再一起刷盘,如下:  
 ![sync](resources/mysql/25.png)  
-不过,在等待的过程中,如果事务的数量提前达到了Binlog_group_commit_sync_no_delay_count参数设置的值,就不用继续等待了,就马上将binlog刷盘,如下图:  
+不过,在等待的过程中,如果事务的数量提前达到了`Binlog_group_commit_sync_no_delay_count`参数设置的值,就不用继续等待了,就马上将binlog刷盘,如下图:  
 ![sync](resources/mysql/26.png)  
 从上面的过程,可以知道sync阶段队列的作用是用于支持**binlog的组**提交  
 如果想提升bin log组提交的效果,可以通过设置下面这两个参数实现:  

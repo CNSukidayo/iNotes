@@ -37,7 +37,7 @@ B.八股文
 ![限流](resources/rabbitMQ/2.png)  
 
 **降低系统耦合性**  
-模块之间不通过直接调用,而是通过消息交互;那么新增模块或修改模块就对其它模块的影响较小,从而达到解耦的效果  
+模块之间不通过直接调用(远程调用),而是通过消息交互;那么新增模块或修改模块就对其它模块的影响较小,从而达到解耦的效果  
 ![耦合性](resources/rabbitMQ/3.png)  
 
 另外为了避免消息队列服务器宕机造成消息丢失,会将成功发送到消息队列的消息存储在消息生产者服务器上,等消息真正被消费者服务器处理后才删除消息.在消息队列服务器宕机后,<font color="#00FF00">生产者服务器会选择分布式消息队列服务器集群中的其他服务器发布消息;即通过MQ集群保证高可用</font>
@@ -45,17 +45,20 @@ B.八股文
 2.通过消息队列实现分布式事务  
 分布式事务一共有6中解决方案,其中一种便是MQ事务(付费知识看不到)  
 
-3.消息队列的缺点  
+3.通过消息队列实现Redis的最终一致性  
+还可以通过消息队列实现数据库与Redis之间的双写最终一致性  
+
+4.消息队列的缺点  
 * 系统可用性降低:在加入MQ之前,你不用考虑消息丢失或者说MQ挂掉等等的情况,但是引入MQ之后这些问题都必须要考虑.  
 * 系统复杂性提高:加入MQ之后,你需要保证消息没有被重复消费、处理消息丢失的情况、保证消息传递的顺序性等等问题
 * 一致性问题:消息队列可以实现异步,并且可以提高对客户端的响应速度.但是万一消息没有被消费者正确消费就会导致消息不一致的情况
 
-3.JMS  
+5.JMS  
 JMS(Java Message Service;Java消息服务)是一个消息服务的标准或者说是规范.  
 JMS客户端之间可以通过JMS服务进行异步的消息传输.  
 <font color="#00FF00">ActivityMQ和HornetMQ就是基于JMS规范实现的,不过这两个MQ都被淘汰了.</font>  
 
-4.AMQP  
+6.AMQP  
 AMQP(Advanced Message Queuing Protocol)一个提供统一消息服务的应用层标准 **<font color="#FF00FF">高级消息队列协议</font>**,它是二进制应用层协议,是应用层协议的一个开放标准,兼容JMS;基于该协议客户端可与消息中间件传递消息,并且不受不同开发语言、不同消息中间件产品的限制(通用协议).  
 <font color="#00FF00">RabbitMQ就是基于AMQP实现的;RabbitMQ还支持STOMP、MQTT、XMPP、SMTP等多种消息中间件协议</font>  
 |   对比方向   |                                                 JMS                                                  |                                                                                                                       AMQP                                                                                                                       |
@@ -67,7 +70,7 @@ AMQP(Advanced Message Queuing Protocol)一个提供统一消息服务的应用�
 | 支持消息类型 | 支持多种消息类型<br/>StreamMessage<br/>MapMessage</br>TextMessage</br>ObjectMessage</br>BytesMessage |                                                                                                                      二进制                                                                                                                      |
 
 
-5.消息中间件选择  
+7.消息中间件选择  
 总体来说:kafka>RocketMQ=Pulsar>RabbitMQ>~~ActivityMQ~~
 
 #### 2.RabbitMQ基本介绍
@@ -105,7 +108,7 @@ RabbitMQ中交换器有<font color="#00FF00">四种不同的类型</font>,分别
 
 <font color="#00FF00">生产者</font>将消息发给交换器的时候,一般会指定一个**RoutingKey(路由键)**,用来指定这个消息的路由规则,而这个**RoutingKey**需要与**交换器类型**和 **绑定键(BindingKey)** 联合使用才能最终生效.  
 
-RabbitMQ中通过 **Binding(绑定)** 将 **Exchange(交换器)** 与 **Queue(消息队列)** 关联起来,在绑定的时候一般会指定一个 **BindingKey(绑定建)**  
+RabbitMQ中通过 **Binding(绑定)** 将 **Exchange(交换器)** 与 **Queue(消息队列)** 关联起来,在绑定的时候一般会指定一个 **BindingKey(绑定建)**,当然也可以指定多个**BindingKey(绑定建)**  
 生产者将消息发送给交换机时,需要一个RoutingKey,<font color="#00FF00">当BindingKey和RoutingKey相匹配时</font>,消息会被路由到对应的队列中.在绑定多个队列到同一个交换器的时候,这些绑定允许使用相同的BindingKey.BindingKey并不是在所有的情况下都生效,它依赖于交换器类型;<font color="#00FF00">即不同的交换机类型对应着不同的路由策略</font>  
 Binding(绑定)示意图:  
 ![绑定](resources/rabbitMQ/6.png)  
@@ -235,7 +238,7 @@ RabbitMQ的消息默认存放在内存上面,如果不特别声明设置,消息�
 
 6.5 针对MQ之消息补偿机制  
 
-6.6 <font color="#00FF00">针对消费者之ACK确认机制(重)</font>  
+6.6 <font color="#00FF00">针对消费者之ACK确认机制(重要)</font>  
 消费者接收消息接收到一半,消费者宕机了;这种情况如何保证消息不丢失?  
 使用rabbitmq提供的ack机制,服务端首先关闭rabbitmq的自动ack,然后每次在确保处理完这个消息之后,`在代码里手动调用ack`.这样就可以避免消息还没有处理完就ack.  
 

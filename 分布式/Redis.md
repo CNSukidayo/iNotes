@@ -2696,7 +2696,7 @@ java代码示例:
 *本节是对BigKey你做过调优吗?惰性释放lazyfree了解过吗?问题的解答*  
 1.阻塞和非阻塞删除命令  
 ![阻塞和非阻塞删除命令](resources/redis/71.png)  
-2.打开redis.conf配置文件,找到lazy freeing相关说明
+2.打开redis.conf配置文件,找到lazy freeing相关说明  
 ![惰性优化](resources/redis/72.png)  
 * `lazyfree-lazy-server-del no` 惰性服务器删除
 * `replica-lazy-flush no` 惰性刷新
@@ -2887,7 +2887,7 @@ public User findUserById(Integer id) {
 
 **先更新数据库,再删除redis(推荐)**  
 *这种方案也不是最完美的,它同样也有问题只是比较推荐这种方式*  
-异常:
+异常:  
 ![异常问题](resources/redis/81.png)  
 <font color="#00FF00">这种方式可能会读取到缓存旧值</font>  
 *此外还有一个问题,有没有可能删除缓存失败?*  
@@ -2909,7 +2909,7 @@ public User findUserById(Integer id) {
 * 如果业务应用中读取数据库和写缓存的时间不好估算,<font color="#00FF00">那么延迟双删中的等待时间就不好设置(即之前说的延时双删如何确定延时时长)</font>  
 
 如果使用先更新数据库再删除缓存的方案  
-如果业务要求必须读写一致性的数据,那么我们就需要在更新数据库时,先在redis缓存客户端暂停并发读请求,等数据库更新完、缓存值删除后,再读取数据,从而保证数据一致性,这是理论可以达到的效果,但实际不推荐,因为真实生产环境中,分布式下很难做到实时一致性,<font color="#00FF00">一般都是最终一致性</font>,请大家参考.  
+如果业务要求必须读写一致性的数据,那么我们就需要在更新数据库时,先在redis缓存客户端暂停并发读请求,等数据库更新完、缓存值删除后,再读取数据,从而保证数据一致性,这是理论可以达到的效果,但实际不推荐,因为真实生产环境中,分布式下很难做到<font color="#00FF00">实时一致性</font>,<font color="#00FF00">一般都是最终一致性</font>(最终一致性即保证数据最终是一致的,好好评鉴下面的图),请大家参考.  
 
 **一图总结:**  
 ![一图总结](resources/redis/83.png)  
@@ -3065,7 +3065,7 @@ public class RedisUtils {
         JedisPoolConfig jedisPoolConfig = new JedisPoolConfig();
         jedisPoolConfig.setMaxTotal(20);
         jedisPoolConfig.setMaxIdle(10);
-        jedisPool = new JedisPool(jedisPoolConfig, REDIS_IP_ADDR, port:6379, timeout:10000, REDIS_pwd);
+        jedisPool = new JedisPool(jedisPoolConfig, REDIS_IP_ADDR, 6379, 10000, REDIS_pwd);
     }
 
     public static Jedis getJedis() throws Exception {
@@ -3227,7 +3227,7 @@ public class RedisCanalClientExample {
 **这段代码实现了什么效果?**  
 该java程序会每隔1s去读取MySQL的binlog日志,它会去监控设定的表;如果表中的数据发生了改变它会实时感知到,并且<font color="#00FF00">当MySQL新增一条数据时它会同步到redis,MySQL更新一条数据时会同步到redis,MySQL删除一条数据时会同步到redis.</font>  
 实际上只要启动这个main方法即可,可以不需要和springboot整合.  
-<font color="#FF00FF">通过这种方法就可以实现双写一致性</font>  
+<font color="#FF00FF">通过这种方法就可以实现**双写一致**性(最终一致性)</font>  
 
 **表的监控问题:**  
 canal是通过`subscribe`方法设置监控范围的,该方法采用正则表达式进行监控,它的规则参考如下:  
@@ -3269,7 +3269,7 @@ canal是通过`subscribe`方法设置监控范围的,该方法采用正则表达
 
 **排序统计:**  
 抖音短视频最新评论留言的场景,请你设计一个展现列表.  
-考察你的数据结构和设计思路
+考察你的数据结构和设计思路  
 ![排序](resources/redis/91.png)  
 我第一个想到的也是<font color="#00FF00">zset</font>  
 在面对需要展示最新列表、排行榜等场景时,如果数据更新频繁或者需要分页显示,建议使用zset  
@@ -4398,7 +4398,7 @@ public class JHSTaskController {
 
 5.上面这些代码在高并发场景下的生产问题  
 热点key突然失效,导致可怕的缓存击穿  
-导致的原因是service层中的`delete`和`leftPushAll`这两个方法不是原子的.
+导致的原因是service层中的`delete`和`leftPushAll`这两个方法不是原子的.  
 ![生产问题](resources/redis/114.png)  
 ![生产问题](resources/redis/115.png)  
 
@@ -4489,7 +4489,7 @@ public List<Product> findAB(int page, int size) {
 * Redid分布式锁如何续期?看门狗知道吗?
 
 - [x] 问:Redis除了拿来做缓存,你还见过基于Redis的什么用法  
-答(这个问题就是Redis实战的所有场景):  
+答:这个问题就是Redis实战的所有场景  
 * 数据共享,分布式session
 * 分布式锁
 * 全局ID
@@ -5032,7 +5032,7 @@ eval "if redis.call('exists', KEYS[1]) == 0 or redis.call('hexists', KEYS[1], AR
 先判断`hexistis [key] [uuid:ThreadId]` 当前线程是否获取到了目标锁;如果返回0说明根本没有锁,程序块返回nil  
 不是0,说明有锁并且这把锁是当前线程的锁,直接调用`hincrby -1`表示每次减一unlock;直到该值变为0表示可以删除该[key],删除获取到的目标锁  
 
-<font color="#00FF00">解锁流程图</font>
+<font color="#00FF00">解锁流程图</font>  
 ![解锁流程图](resources/redis/127.png)
 
 **编写lua脚本unlock**  
@@ -5308,7 +5308,7 @@ public void testReEntry(){
 
 10.测试锁的可重入  
 调用Service层的`sale()`方法查看结果  
-![锁的可重入](resources/redis/129.png)
+![锁的可重入](resources/redis/129.png)  
 发现出错了,<font color="#00FF00">因为第二次拿锁的时候发现UUID是不一样的;</font>虽然线程id是一样的  
 因为每次调用DistributedLockFactory工厂的getDistributedLock()方法时都会生成一个新的对象(RedisDistributedLock),而这个新的对象中的`uuidValule`方法的值是随机生成的.  
 
@@ -5477,7 +5477,7 @@ public class RedisDistributedLock implements Lock {
   上图表示Zookeeper发生故障时的情况
 * eureak集群是AP:  
   ![eureak](resources/redis/132.png)  
-* nacos集群是AP:
+* nacos集群是AP:  
   ![nacos](resources/redis/133.png)  
 
 1.编写lua脚本  
@@ -5766,10 +5766,10 @@ Redisson里面就实现了这个方案,使用"看门狗"定期检查(每1/3的�
 ![续期lua脚本](resources/redis/144.png)  
 
 5.解锁源码分析  
-**解锁的核心逻辑**
+**解锁的核心逻辑**  
 ![unlock](resources/redis/145.png)  
 
-**解锁的lua脚本**
+**解锁的lua脚本**  
 ![解锁的lua脚本](resources/redis/146.png)  
 
 ### 8.5 多机案例  
@@ -5820,7 +5820,7 @@ lock.unlock();
 直接说RedLock被废弃了  
 
 #### 8.5.2 多重锁
-<font color="#00FF00">2023年推荐使用第8章第3小节的代码MultiLock</font>
+<font color="#00FF00">2023年推荐使用第8章第3小节的代码MultiLock</font>  
 ![多重锁](resources/redis/149.png)  
 
 代码示例:  
@@ -6966,7 +6966,7 @@ Redis基于Reactor模式开发了网络事件处理器,这个处理器被称为�
   异步调用要想获得结果一般通过回调  
 * 同步与异步的理解:同步、异步的讨论对象是被调用者(服务提供者),<font color="#00FF00">获得调用结果的消息通知方式上</font>
 * 阻塞:调用方一直在等待而且别的事情什么都不做,当前进程/线程会被挂起,啥都不干
-* 非阻塞:调用在发出后,调用方接着执行别的事情,不会阻塞当前进程/线程,而是理解返回
+* 非阻塞:调用在发出后,调用方接着执行别的事情,不会阻塞当前进程/线程,而是立即返回
 * 阻塞与非阻塞的理解:阻塞、非阻塞的讨论对象是调用者(服务请求者),重点在于等消息时候的行为,调用者是否能干其它事
 * 总结:  
   同步与异步是针对服务提供者而言的,当调用者调用服务提供者时;如果服务提供者需要完整运行完流程才能给调用者答复就是同步(答复内容是:收到+数据),如果服务提供者可以立即给调用者答复就是异步(答复内容是:收到).  
@@ -6974,7 +6974,7 @@ Redis基于Reactor模式开发了网络事件处理器,这个处理器被称为�
   * 同步阻塞:调用者请求数据,服务者要获取到完整数据之后才把应答+数据信息传给调用者;并且调用者在拿到数据之前一直等待
   * 同步非阻塞:调用者请求数据,服务者要获取到完整数据之后才把应答+数据信息传给调用者;调用者在拿到数据之前可以干别的事情
   * 异步阻塞:调用者请求数据,服务者立即应答(表明已经收到请求);调用者拿到应答信息,但在拿到数据之前一直等待
-  * 异步非阻塞:调用者请求数据,服务者立即应答(表明已经收到请求);调用者者拿到应答信息,但在拿到数据之前可以干别的事情
+  * 异步非阻塞:调用者请求数据,服务者立即应答(表明已经收到请求);调用者拿到应答信息,但在拿到数据之前可以干别的事情
 
 ### 11.3 BIO
 ![BIO](resources/redis/232.png)  
