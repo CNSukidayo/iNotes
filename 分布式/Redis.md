@@ -6339,7 +6339,7 @@ Redis通过一个叫做过期字典(可以看作是hash表)来保存数据过期
 [Redis7.0源码:https://github.com/redis/redis/tree/7.0/src](https://github.com/redis/redis/tree/7.0/src)  
 
 4.推荐两本书深入学习Redis  
-《Redis设计与实现》
+《Redis设计与实现》  
 《Redis5设计与源码分析》
 
 ### 10.2 如何学习源码包?
@@ -6431,9 +6431,9 @@ value可以是字符串对象,也可以是集合数据类型的对象,比如List
 首先RedisServer启动加载Redisdb,Redisdb加载进入内存形成数据库,形成数据库后立即去读取字典dict,形成字典之后马上去找hash;hash其中的一个就是K-V键值对dictEntry;每个K-V键值对形成实体dictEntry;每个dictEntry的K-V键值对封装了之后形成的是RedisObject对象  
 
 **redisObject +Redis数据类型+Redis 所有编码方式(底层实现)三者之间的关系**
-![关系对象](resources/redis/162.png)
+![关系对象](resources/redis/162.png)  
 <font color="#00FF00">其中\*prt这个指针指向的是真正的Redis类型(字符串、跳表、压缩列表;这些和10.1 面试题=>1.Redis底层的数据类型都对应上了)</font>
-![关系对象](resources/redis/163.png)
+![关系对象](resources/redis/163.png)  
 <font color="#00FF00">所以第二节说的传统5大类型,只是对外而言暴露的;它的底层实际上是后面跳表、压缩列表、字段这些数据类型.</font>  
 
 ### 10.4 传统5大类型C语言源码分析
@@ -6509,7 +6509,8 @@ redis7相关的底层模型和结构
 
 1.RedisObject各个字段的含义  
 ![各个字段的含义](resources/redis/170.png)  
-`embstr`
+`embstr`  
+即可以理解为,type+encoding才能代表一个数据类型  
 * LRU字段表示当内存超限时采用LRU算法清除内存中的对象
 * refcount表示对象的引用计数
 * \*ptr指针指向真正的底层数据结构的指针
@@ -6660,10 +6661,11 @@ raw编码格式
 只有整数才会使用int,如果是浮点数,<font color = '00FF00'>Redis内部其实先将浮点数转化为字符串值,然后再保存</font>  
 embstr与raw类型底层的数据结构其实都是<font color = '00FF00'>SDS(简单动态字符串,</font>Redis内部定义sdshdr一种结构)
 
-| int    | Long类型整数时,RedisObiect中的ptr指针直接赋值为整数数据,不再额外的指针再指向整数了,节省了指针的空间开销.                                                                                                                  |
+| 类型   | 解释                                                                                                                                                                                                                      |
 | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| int    | Long类型整数时,RedisObiect中的ptr指针直接赋值为整数数据,<font color="#00FF00">不再额外的指针再指向整数了</font>,节省了指针的空间开                                                                                                                     |
 | embstr | 当保存的是字符串数据且字符串小于等于44字节时,emstr类型将会调用内存分配函数,只分配一块连续的内存空间,空间中依次包含 redisObject 与 sdshdr 两个数据结构,让元数据、指针和SDS是一块连续的内存区域,这样就可以避免内存碎片      |
-| raw    | 当字符串大于44字节时,SDS的数据量变多变大了,SDS和RedisObject布局分家各自过,会给SDS分配多的空间并用指针指SDS结构,raw 类型将会调用两次内存分配函数,分配两块内存空间,一块用于包含 redisObject结构,而另一块用于包含sdshdr 结构 |
+| raw    | 当字符串大于44字节时,SDS的数据量变多变大了,SDS和RedisObject布局分家各自过,会给SDS分配多的空间并用指针指SDS结构,raw类型将会调用<font color="#00FF00">两次内存分配函数</font>,分配两块内存空间,一块用于包含 redisObject结构,而另一块用于包含sdshdr 结构 |
 
 ![案例结论](resources/redis/191.png)  
 
@@ -6715,7 +6717,7 @@ ziplist压缩列表是一种紧凑编码格式,总体思想是<font color="#00FF
 
 **ziplist什么样**  
 为了节约内存而开发的,它是由连续内存块组成的顺序型数据结构,有点类似于数组  
-ziplist是一个经过特殊编码的<font color="#00FF00">双向链表,它不存储指向前一个链表节点prev和指向下一个链表节点的指针next</font>而是<font color="#00FF00">存储上一个节点长度和当前节点 长度</font>,通过牺牲部分读写性能,来换取高效的内存空间利用率,节约内存,是一种时间换空间的思想.只用在<font color="#00FF00">字段个数少,字段值小的场景里面</font>  
+ziplist是一个经过特殊编码的<font color="#00FF00">双向链表,它不存储指向前一个链表节点prev和指向下一个链表节点的指针next</font>而是<font color="#00FF00">存储上一个节点长度和当前节点长度</font>,通过牺牲部分读写性能,来换取高效的内存空间利用率,节约内存,是一种时间换空间的思想.只用在<font color="#00FF00">字段个数少,字段值小的场景里面</font>  
 ![ziplist组织结构](resources/redis/202.png)  
 
 **ziplist各个组成单元什么意思**  
