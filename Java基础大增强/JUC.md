@@ -528,8 +528,457 @@ public class Demo13 {
 有点类似之前的情况,方法1和方法2之间不是顺序执行的.  
 第一个线程执行到1步骤时,增加到了101,还没有执行步骤2时.线程2进来了将数据增加到102后,并运行步骤2设置值为102.此时线程一继续执行步骤2将值设置为101.  
 
+`demo14:`关于synchronized优化问题  
+**结论:**  
+同步代码块中的语句越少越好
 
+```java
+public class Demo13 {
+    int count = 0;
 
+    public synchronized void m1() {
+        count++;
+        System.out.println(count);
+    }
+
+    public void m2() {
+        synchronized (this) {
+            count++;
+        }
+        System.out.println(count);
+    }
+}
+```
+
+比较m1和m2方法:  
+m1的锁将整个方法全部锁定  
+m2只在业务逻辑里面增加了同步锁,所以m2的效率比m1要高.  
+细力度的锁  
+
+`demo15:`永远不要锁一个字符串对象  
+```java
+public class Demo14 {
+    String s1 = "String";
+    String s2 = "String";
+
+    public void m1() {
+        synchronized (s1) {
+        }
+    }
+
+    public void m2() {
+        synchronized (s2) {
+        }
+    }
+}
+```
+你以为m1和m2方法锁定的是两个不同的对象,但实际上s1和s2锁定的是同一个对象.  
+原因:分析jvm内存  
+栈内存中的s1和s2指向堆内存中的两个对象,因为是字符串常量,所以堆内存中的两个对象又指向堆中的字符串常量池(又因为内容相同,所以指向同一个字符串常量),所以这两个是同一个对象.
+
+`demo16:`曾经淘宝面试题  
+有一个容器,A线程负责给容器添加10个元素.B线程负责监视这个容器直到容器大小为5的时候打印一个通知.  
+
+写法一:  
+```java
+public class Demo15 {
+    volatile List list = new ArrayList<>();
+
+    public void add(Object o) {
+        list.add(o);
+    }
+
+    public int size() {
+        return list.size();
+    }
+
+    public static void main(String[] args) {
+        Demo15 demo15 = new Demo15();
+        new Thread(() -> {
+            while (true) {
+                if (demo15.size() == 5) {
+                    System.out.println("数量达到5");
+                    break;
+                }
+            }
+        }).start();
+        new Thread(() -> {
+            for (int i = 0; i < 10; i++) {
+                demo15.add(i);
+            }
+        }).start();
+    }
+}
+```
+**问题:**  
+使用while(true)太浪费资源,并且线程二的监测不是那么的精准.
+
+**思路:**  
+使用wait和notify以及notifyAll  
+wait和notify的用法:javaSE中有讲到过  
+这两个方法只能是被锁定对象去调用.  
+wait:当一个线程的方法获已经得到锁,但是条件没有满足无法执行语句的时候,调用被锁的对象的wait方法,可以暂停该线程,并释放锁.  
+notify:调用一个被锁住对象的notify方法,会唤醒正在这个对象上等待的某一个线程.继续执行调用wait方法后面的代码,不是重新进方法.  
+但是nofity方法不会释放锁,而且被唤醒的线程需要重新获得锁.  
+notifyAll:和notify类似,只不过会唤醒这个对象的所有线程.  
+
+写法二:  
+```java
+public class Demo15 {
+    volatile List list = new ArrayList<>();
+    boolean flag = true;
+    public synchronized void add(Object o) {
+        if(flag){
+            try {
+                this.wait();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+        System.out.println("add");
+        list.add(o);
+        flag=true;
+        this.notify();
+    }
+
+    public synchronized int size() {
+        if(!flag){
+            try {
+                this.wait();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+        System.out.println("size");
+        flag=false;
+        this.notify();
+        return list.size();
+    }
+
+    public static void main(String[] args) {
+        Demo15 demo15 = new Demo15();
+        new Thread(() -> {
+            while (true) {
+                if (demo15.size() == 5) {
+                    System.out.println("数量达到5");
+                    break;
+                }
+            }
+        }).start();
+        new Thread(() -> {
+            for (int i = 0; i < 10; i++) {
+                demo15.add(i);
+            }
+        }).start();
+    }
+}
+```
+
+**问题:**  
+还是需要while(true),而且当线程一结束之后,线程二就会wait造成算法无法结束.
+
+写法三:  
+```java
+public class Demo16 {
+    volatile List list = new ArrayList<>();
+
+    public void add(Object o) {
+        list.add(o);
+    }
+
+    public int size() {
+        return list.size();
+    }
+
+    public static void main(String[] args) {
+        Demo16 demo15 = new Demo16();
+        new Thread(() -> {
+            synchronized (demo15){
+                System.out.println("线程开头");
+                if (demo15.size() != 5) {
+                    try {
+                        demo15.wait();
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+                }
+                System.out.println("数量达到5");
+            }
+
+        }).start();
+        new Thread(() -> {
+            synchronized (demo15){
+                for (int i = 0; i < 10; i++) {
+                    demo15.add(i);
+                    if(demo15.size()==5){
+                        demo15.notify();
+                    }
+                    System.out.println(demo15.size());
+                    try {
+                        Thread.sleep(500);
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+                }
+            }
+        }).start();
+    }
+}
+```
+**输出结果:**  
+| 线程开头 |   1   |   2   |   3   |   4   |   5   |   6   |   7   |   8   |   9   |  10   | 数量5 |
+| :------: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+
+**原因:**  
+当数量达到5的时候,线程一虽然被唤醒了,但是需要重新获得这把锁.由于notify方法不会释放锁,所以需要等待线程二方法执行完毕线程一才可以获得锁.
+
+写法四:  
+```java
+public class Demo16 {
+    volatile List list = new ArrayList<>();
+    boolean flag = true;
+
+    public void add(Object o) {
+        list.add(o);
+    }
+
+    public int size() {
+        return list.size();
+    }
+
+    public static void main(String[] args) {
+        Demo16 demo15 = new Demo16();
+        new Thread(() -> {
+            synchronized (demo15) {
+                if (demo15.size() != 5) {
+                    try {
+                        demo15.wait();
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+                }
+                System.out.println("数量达到5");
+                demo15.notify();
+            }
+
+        }).start();
+        new Thread(() -> {
+            synchronized (demo15) {
+                for (int i = 0; i < 10; i++) {
+                    demo15.add(i);
+                    System.out.println(demo15.size());
+                    if (demo15.size() == 5) {
+                        demo15.notify();
+                        try {
+                            demo15.wait();
+                        } catch (InterruptedException e) {
+                            e.printStackTrace();
+                        }
+                    }
+                }
+            }
+        }).start();
+    }
+}
+```
+
+**输出结果:**  
+| 线程开头 |   1   |   2   |   3   |   4   |   5   | 数量5 |   6   |   7   |   8   |   9   |  10   |
+| :------: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+
+**原因:**  
+正是因为notify不会释放锁,所以调用完notify在调用wait方法释放锁,所以这里wait不是用于暂停线程的,而是用于释放锁的.  
+
+写法五:使用门栓  
+```java
+public class Demo17 {
+    volatile List list = new ArrayList<>();
+
+    public void add(Object o) {
+        list.add(o);
+    }
+
+    public int size() {
+        return list.size();
+    }
+
+    public static void main(String[] args) {
+        Demo17 demo15 = new Demo17();
+        CountDownLatch latch = new CountDownLatch(1);
+        new Thread(() -> {
+            System.out.println("线程一启动");
+            if(demo15.size()!=5){
+                try {
+                    latch.await();//直到调用latch.countDown();方法否则方法暂停在这
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+                System.out.println("数量达到5");
+            }
+        }).start();
+        new Thread(() -> {
+            for (int i = 0; i <10 ; i++) {
+                demo15.add(i);
+                System.out.println(demo15.size());
+                if(demo15.size()==5){
+                    latch.countDown();			//门栓打开
+                }
+            }
+
+        }).start();
+    }
+}
+```
+**问题:**  
+有时结果输出正确,有时不正确.只能保证线程一会执行,但不能保证顺序.
+
+**优点:**  
+效率高(没有同步快)  
+
+`demo17:`ReentrantLock  
+**介绍:**  
+ReentrantLock用于替代`synchronized`  
+ReentrantLock实现了<font color="#FF00FF">Lock</font>接口
+```java
+public class Demo18 {
+    Lock lock = new ReentrantLock();
+
+    public void m1() {
+        lock.lock();					//锁住
+        try {
+            for (int i = 0; i < 10; i++) {
+                System.out.println(i);
+                Thread.sleep(1000);
+            }
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        } finally {
+            lock.unlock();				//在finally中手动释放锁
+        }
+    }
+
+    public void m2() {
+        lock.lock();
+        System.out.println("m2");
+        lock.unlock();
+    }
+
+    public static void main(String[] args) {
+        Demo18 demo18 = new Demo18();
+        new Thread(() -> demo18.m1()).start();
+        try {
+            Thread.sleep(1000);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        new Thread(() -> demo18.m2()).start();
+    }
+
+}
+```
+**注意:**  
+必须要手动释放锁,使用synchronized锁定如果遇到异常,jvm会自动释放,但是lock必须手动释放锁,因此经常在finally中进行锁的释放  
+
+`demo18:`  
+可以通过ReentrantLock的tryLock方法进行尝试性的加锁,这个方法会返回一个布尔值.你可以根据这个返回值来进行你想要的操作.比如返回值为false不可锁定我可能会执行别的方法而不是像synchronized那样只能干等着.  
+```java
+public class Demo19 {
+    Lock lock = new ReentrantLock();
+
+    public void m1() {
+        lock.lock();
+        try {
+            for (int i = 0; i < 10; i++) {
+                System.out.println(i);
+                Thread.sleep(1000);
+            }
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    public void m2() {
+        boolean locked = false;
+        try {
+            /*
+            另外一种用法
+            参数一:锁定的时间	
+            参数二:锁定时间的单位	
+            这是个阻塞方法,就是如果这么长时间还不能获得到这把锁就返回false,一旦可以锁定就返回true
+            */
+            locked = lock.tryLock(5, TimeUnit.SECONDS);			
+            System.out.println("m2方法是否可以锁定");
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }finally {
+            if(locked){			//如果已经锁定
+                lock.lock();		//释放锁
+            }
+        }
+
+    }
+
+    public static void main(String[] args) {
+        Demo19 demo18 = new Demo19();
+        new Thread(() -> demo18.m1()).start();
+        try {
+            Thread.sleep(1000);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        new Thread(() -> demo18.m2()).start();
+    }
+
+}
+```
+ 
+`demo19:`  
+使用ReentrantLock还可以调用lockInterruptibly方法,可以对线程interrupt做出响应.
+```java
+public class Demo19 {
+    public static void main(String[] args) {
+        Lock lock = new ReentrantLock();
+        new Thread(() -> {
+            lock.lock();
+            System.out.println("线程1");
+            try {
+                Thread.sleep(Integer.MAX_VALUE);		//谁很长时间
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            } finally {
+                lock.unlock();
+            }
+        }).start();
+
+        Thread thread = new Thread(() -> {
+            boolean locked = false;
+            try {
+                lock.lockInterruptibly();//这种锁可以对interrupt方法做出响应
+                System.out.println("线程2");
+                locked = true;		//只有进入到该方法才能证明执行成功,因为如果出现异常会直接跳到catch里面
+            } catch (InterruptedException e) {
+                System.out.println("线程2被打断");
+            } finally {
+                if (locked) {
+                    lock.unlock();
+                }
+            }
+        });
+        thread.start();
+        try {
+            Thread.sleep(2000);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        thread.interrupt();     //打断线程二的等待,如果被打断会直接抛出异常
+    }
+}
+```
+**结果:**  
+线程1  
+线程2被打断  
 
 
 
