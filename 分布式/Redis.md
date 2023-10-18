@@ -280,8 +280,9 @@ Redis会在后台异步进行快照操作,<font color="#FFC800">不阻塞</font>
 2.3.7 AOF的重写机制  
 
 #### 2.3.1 基本介绍
-1.基本介绍
+1.基本介绍  
 以日志的形式来记录每个写操作,将Redis执行过的所有写指令记录下来(读操作不记录),只许追加文件但不可以改写文件,redis启动之初会读取该文件重新构建数据,换言之,redis重启的话就根据日志文件的内容将写指令从前到后执行一次以完成数据的恢复工作.  
+和RDB的
 
 2.开启AOF持久化  
 默认情况下Redis是没有开启AOF持久化的  
@@ -296,13 +297,21 @@ Redis会在后台异步进行快照操作,<font color="#FFC800">不阻塞</font>
 注意该路径最终的效果是`dir`+`appenddirname`;也就是说会在配置文件`dir`的目录下的`appenddirname`目录下创建aof文件.  
 查看:基础篇=>附录=>A.Redis基本环境搭建=>5.redis.conf
 
+5.持久化方式  
+同理也是通过子进程异步写入  
 
 #### 2.3.2 AOF文件的持久化流程
 *提示:AOF只记录Redis的增删改操作不记录查询操作*  
 
-1.客户端提交命令到Redis服务器  
+1.客户端提交命令到Redis服务器,Redis先执行命令再写入日志  
+**为什么AOF是在执行完命令之后再写日志?**  
+* 避免额外的检查开销,AOF记录日志时就不需要对命令进行语法检查
+* 在命令执行完之后再记录,不会阻塞当前的命令执行
 
-2.Redis服务器产生的AOF日志内存并不是实时写回到AOF文件中,而是先写入一个**AOF缓冲区**,它就类似MySQL中的日志,MySQL中的日志也不是实时写入磁盘中,也是写入一个内存的缓冲区中.所以AOF缓冲区也是Redis在内存中开辟的一块区域  
+由此引发的风险:  
+* 如果刚执行完命令Redis就宕机会导致对应的修改日志丢失
+
+2.Redis服务器产生的AOF日志内存并不是实时写回到AOF文件中,而是先写入一个**AOF缓冲区**,它就类似MySQL中的日志,MySQL中的日志也不是实时写入磁盘中,也是写入一个内存(**内核**)的缓冲区中.所以AOF缓冲区也是Redis在内存中开辟的一块区域  
 
 3.写入到AOF缓冲区的AOF日志文件会有三种不同的策略来刷盘  
 策略的设置见:基础篇=>附录=>A.Redis基本环境搭建=>5.redis.conf  
@@ -310,6 +319,9 @@ Redis会在后台异步进行快照操作,<font color="#FFC800">不阻塞</font>
 * always:同步写回,每个写命令执行完立刻同步地将日志写回磁盘(很安全但是性能不高)  
 * everysec(默认):每秒写回,每隔一秒将AOF缓冲区的内容写入刷盘
 * no:由操作系统控制写回,每个写命令执行完只是先把AOF日志文件写入到内存缓冲区,由操作系统决定何时将缓冲区内容写入磁盘.  
+
+**AOF阻塞:**  
+当AOF采用everysec策略时虽然是后台线程线程(aof_fsync线程)每秒调用`fsync`(系统调用)将缓冲区的内容写入AOF文件,但写入缓冲区的过程是由主线程完成的,当磁盘压力太大时,fsync函数阻塞,从而造成主线程写入缓冲区阻塞.  
 
 性能小总结:  
 ![性能小总结](resources/redis/5.png)  
@@ -346,7 +358,12 @@ appendonly.aof.1.base.rdb  appendonly.aof.1.incr.aof  appendonly.aof.manifest
 * `filePath`:修复的文件路径
 
 **举例:**  
-`redis-check-aof --fix appendonly.aof.1.incr.aof` 一般修复就是修复`appendonly.aof.1.incr.aof`这个文件,注意一定要来到`appendonly.aof.1.incr.aof`文件所在的目录下执行该命令 
+`redis-check-aof --fix appendonly.aof.1.incr.aof` 一般修复就是修复`appendonly.aof.1.incr.aof`这个文件,注意一定要来到`appendonly.aof.1.incr.aof`文件所在的目录下执行该命令  
+
+3.AOF校验和  
+AOF校验机制是Redis在启动时对AOF文件进行检查,以判断文件是否完整,是否有损坏或者丢失的数据.这个机制的原理其实非常简单,就是通过使用一种叫做<font color="#00FF00">校验和(checksum)</font>的数字来验证AOF文件.这个校验和是通过对整个AOF文件内容进行CRC64算法计算得出的数字.如果文件内容发生了变化,那么校验和也会随之改变.因此,Redis在启动时会比较计算出的校验和与文件末尾保存的校验和(计算的时候会把最后一行保存校验和的内容给忽略点),从而判断AOF文件是否完整.如果发现文件有问题,Redis就会拒绝启动并提供相应的错误信息.AOF校验机制十分简单有效,可以提高Redis数据的可靠性.  
+类似地,RDB文件也有类似的校验机制来保证RDB文件的正确性  
+
 
 #### 2.3.5 AOF的优势  
 * 使用AOF的Redis更加持久:  
@@ -386,7 +403,11 @@ set k1 v3
 最开始的时候`appenddirname`目录下有这三个文件`appendonly.aof.1.base.aof  appendonly.aof.1.incr.aof appendonly.aof.manifest`注意这里的文件和之前是不一样的(之前的base文件是rdb文件,这里是aof文件),`appendonly.aof.1.base.aof  appendonly.aof.1.incr.aof`这两个文件的大小都是0;现在开始往Redis中添加添加内容,随着添加的过程,appendonly.aof.1.incr.aof会慢慢膨胀;直到该文件大小膨胀到`auto-aof-rewrite-min-size`指定的大小时;再次查看目录下的文件有`appendonly.aof.2.base.aof  appendonly.aof.2.incr.aof appendonly.aof.manifest`表明此时AOF文件已经<font color="#00FF00">重写</font>过了  
 `appendonly.aof.manifest`文件的大小是不变的,两个文件名本来为1的变为2了,并且appendonly.aof.2.incr.aof的<font color="#00FF00">大小变为0</font>;appendonly.aof.2.base.aof中的内容是刚才appendonly.aof.1.incr.aof文件瘦身后的内容.  
 以此类推,如果`appendonly.aof.2.incr.aof`文件达到了设定的重写大小,并且大小比`appendonly.aof.2.base.aof`的大小膨胀到指定比例时又会发生重写,将文件名2改为3.  
-<font color="#FF00FF">但是重写并不是将appendonly.aof.x.incr.aof文件中的内容进行重写;而是直接读取服务器现有的键值对,然后用一条命令去代替之前记录这个键值对的多条命令,生成一个新的appendonly.aof.x+1.base.aof文件去代替原来的AOF文件</font>
+<font color="#FF00FF">但是重写并不是将appendonly.aof.x.incr.aof文件中的内容进行重写;而是直接读取服务器现有的键值对,然后用一条命令去代替之前记录这个键值对的多条命令,生成一个新的appendonly.aof.(x+1).base.aof文件去代替原来的AOF文件</font>
+
+* fork出一条子线程来将文件重写,在执行`bgrewriteaof`命令时,Redis服务器会维护一个AOF重写缓冲区,该缓冲区会在子线程创建新AOF文件期间,记录服务器执行的所有写命令
+* 当子线程完成创建新AOF文件 **(appendonly.aof.(x+1).base.aof)** 的工作之后,服务器会将重写缓冲区中的所有内容追加到<font color="#00FF00">新AOF文件</font>的末尾,<font color="#00FF00">使得新的AOF文件保存的数据库状态与现有的数据库状态一致</font>.  
+* 最后,服务器用新的AOF文件替换旧的AOF文件,以此来完成AOF文件重写操作
 
 **手动重写:**  
 通过`bgrewriteaof`命令手动重写AOF文件  
@@ -1048,7 +1069,7 @@ Redis集群有16384个哈希槽,每个key通过CRC16校验后对16384<font color
 ![槽位slot](resources/redis/26.png)  
 
 2.什么是分片  
-使用Redis集群时我们会将存储的数据分散到多台Redis机器上,这称之为分片.即集群中的每个Redis实例都被认为是整个数据的一个分片.  
+使用Redis集群时我们会将存储的数据分散到多台Redis机器上,这称之为分片.即集群中的每个Redis实例都被认为是整个数据的一个分片.<font color="#00FF00">(一个Redis就是一个分片)</font>  
 为了找到给定key的分片,我们对key进行CRC16(key)算法处理并通过对总分片数量取模.然后,使用确定性哈希函数,这意味着给定的key将多次始终映射到同一个分片,我们可以推断将来读取特定key的位置.  
 
 3.槽位和分片的优势  
@@ -1061,7 +1082,7 @@ Redis集群有16384个哈希槽,每个key通过CRC16校验后对16384<font color
 一共有三种算法:哈希取余分区、一致性哈希算法分区、哈希槽分区  
 4.1 哈希取余分区:  
 ![哈希取余分区](resources/redis/27.png)  
-2亿条记录就是2亿个Key,单击存不下必须使用分布式,假设有三台器构成一个集群,每次用户读写都是根据公式:hash(key) % N个机数量,计算出哈希值,用来决定数据映射到哪一个节点上.  
+2亿条记录就是2亿个Key,单机存不下必须使用分布式,假设有三台器构成一个集群,每次用户读写都是根据公式:hash(key) % N个机数量,计算出哈希值,用来决定数据映射到哪一个节点上.  
 **优点:**  
 简单粗暴,直接有效,只需要预估好数据规划好节点,例如台、8台、10台,就能保证一段时间的数据支撑.使用Hash算法让固的一部分请求落到同一台服务器上,这样每台服务器固定处理一部分求(并维护这些请求的信息),起到负载均衡+分而治之的作用.  
 **缺点:**  
@@ -1106,7 +1127,7 @@ Redis集群有16384个哈希槽,每个key通过CRC16校验后对16384<font color
 4.3 哈希槽分区:  
 为了解决一致性哈希出现的**数据倾斜**问题提出了哈希槽分区  
 哈希槽实质就是一个数组,数组[0,2^14 - 1]形成hash slot空间.  
-![哈希槽分区](resources/redis/34.png)
+![哈希槽分区](resources/redis/34.png)  
 哈希槽分区解决<font color="#00FF00">均匀分配问题</font>,在<font color="#FF00FF">数据和节点之间又加入了一层,把这层称为哈希槽(slot),用于管理数据和节点之间的关系</font>,现在就相当于节点上方的是槽,槽里放的是数据.  
 槽解决的是粒度问题,相当于把粒度变大了,这样便于数据移动.哈希解决的是映射问题,使用Key的哈希值来计算所在的槽,便于数据分配.  
 一个集群只能有16384个槽,编号0-16383(0-2^14-1).这些槽会分配给集群中的所有主节点,分配策略没有要求.  
@@ -1270,7 +1291,8 @@ keys *
 
 2.为什么报错  
 <font color="#00FF00">一定要注意槽位的范围,需要**路由到位**</font>  
-![路由到位](resources/redis/45.png)  
+![路由到位](resources/redis/45.png)
+Redis客户端启动的时候加上`-c`参数即可,例如`redis-cli -c`  
 
 3.再次写入key  
 在master1上运行命令:  
@@ -1553,11 +1575,11 @@ public class Demo {
 
 ### 9.4 RedisTemplate  
 **目录:**  
-9.4.1 连接单击  
+9.4.1 连接单机  
 9.4.1 连接集群  
 
 
-#### 9.4.1 连接单击
+#### 9.4.1 连接单机
 1.引入maven  
 ```xml
 <dependency>
@@ -1865,6 +1887,13 @@ B.Redis命令大全
 * `aof-use-rdb-preamble [yes(default)|no]` 是否采用aof-rdb持久化日志的混合模式
 * `no-appendfsync-on-rewrite [yes|no(default)]` aof重写期间是否允许编写aof
 * `activerehashing [yes(default)|no]` 指定是否激活重置哈希  
+* `slowlog-log-slower-than [microsecond(default=10000)]` 如果命令执行时间超过`microsecond`微秒,则会被慢查询日志记录  
+* `slowlog-max-len [length(default=128)]` 慢查询日志的记录上限值
+* `activedefrag [no(default)|yes]` 是否开启Redis自动内存碎片整理
+* `active-defrag-threshold-lower [percent(default=10)]` 内存碎片率大于1.1时开始清理,如果设置为50就代表大于1.5开始清理
+* `active-defrag-ignore-bytes [memory(default=100mb)]` 内存碎片达到多少时开始清理
+* `active-defrag-cycle-min [percent(default=1)]` 内存碎片清理时间所占用CPU时间的比例不低于1%
+* `active-defrag-cycle-max [percent(default=25%)]` 内存碎片清理时间所占用CPU时间的比例不高于25%
 * `include [filePath]` 指定包含其它的配置文件,可以在同一主机上多个redis实例之间使用同一份配置文件,而同时各个实例又拥有自已的特定配置文件
 * `io-threads [threadCount]` io线程数量;默认是未开启的  
   对于一个实例,如果你又4核CPU,建议使用2~3个IO线程;  
@@ -2360,6 +2389,8 @@ A.其它
   * `arg`:`luaScript`脚本中指定的agr占位符的值
 * `config set maxmemory [bytes]` 手动设置Redis的内存占用量为[bytes]  
 * `info memory` 显示内存的使用情况
+* `monitor` 监控key的使用情况
+* `slowlog get [number(default=10)]` 查询`number`条慢查询日志
 
 # 高级篇
 **目录:**  
@@ -2581,6 +2612,10 @@ redis的游标并不是从第一纬数组的第零位一直遍历到末尾,而�
 2.`memory usage`  
 执行:  
 `memory usage [key]` 查看某个key对应的value占多少字节数
+
+3.使用第三方工具  
+
+4.使用Redis云服务厂商提供的服务  
 
 **如何删除**  
 什么叫渐进式删除?  
@@ -4032,6 +4067,8 @@ public Customer findCustomerByIdWithBloomFilter(Integer customerId) {
 6.3 缓存雪崩  
 6.4 缓存穿透  
 6.5 缓存击穿  
+6.6 热点key  
+6.7 慢查询  
 
 ### 6.1 面试题
 * 缓存预热、雪崩、穿透、击穿分别是什么?你遇到过那几个情况? 
@@ -4079,8 +4116,9 @@ sentinel完成服务的限流或降级
 ### 6.4 缓存穿透
 **目录:**  
 6.4.1 介绍  
-6.4.2 空对象缓存  
-6.4.3 Guava布隆过滤器(推荐)  
+6.4.2 参数校验  
+6.4.3 空对象缓存  
+6.4.4 Guava布隆过滤器(推荐)  
 
 
 #### 6.4.1 介绍  
@@ -4090,15 +4128,18 @@ sentinel完成服务的限流或降级
 ![介绍](resources/redis/106.png)  
 
 **解决方案:**  
-空对象缓存、Guava布隆过滤器  
+参数校验、空对象缓存、Guava布隆过滤器  
 
-#### 6.4.2 空对象缓存(回写增强)  
+#### 6.4.2 参数校验  
+最基本的就是首先做好参数校验,一些不合法的参数请求直接抛出异常信息返回给客户端.比如查询的数据库id不能小于0、传入的邮箱格式不对的时候直接返回错误消息给客户端等等.  
+
+#### 6.4.3 空对象缓存(回写增强)  
 如果发生了缓存穿透,可以针对要查询的数据与业务部门商定出一个缺省值(比如-1、0、null等)  
 一个请求查询Redis和MySQL都没有(发生一次缓存穿透),<font color="#00FF00">此时需要在Redis中存入刚才查询的key,value为缺省值</font>  
 那么相同的请求再来查询的时候就能从Redis中查询到数据库了,这种方案就能<font color="#00FF00">避免大量相同的请求</font>把MySQL打爆了  
 但是此方法无法避免恶意攻击,<font color="#FF00FF">只能解决key相同的情况</font>;并且Redis中无关紧要的key也会越来越多(<font color="#00FF00">记得设计key的过期时间</font>)  
 
-#### 6.4.3 Guava布隆过滤器(推荐)
+#### 6.4.4 Guava布隆过滤器(推荐)
 **介绍:**  
 为了解决空对象缓存方案带来的只能对相同key有效的问题;提出了使用布隆过滤器  
 布隆过滤器的基本介绍详情见(高级篇=>5.布隆过滤器(BloomFilter))  
@@ -4265,7 +4306,7 @@ guava准备的坑位(bitmap)大小位数为9585058
 **危害:**  
 会造成某一时刻数据库请求量过大,压力剧增  
 一般技术部门<font color="#00FF00">需要知道热点key是哪些</font>,防止缓存被击穿.  
-
+热点Key的发现方法见:高级篇=>6.缓存预热、缓存雪崩、缓存击穿、缓存穿透=>6.6热点Key  
 
 #### 6.5.2 解决方案
 方案一:差异失效时间,对于访问频繁的热点key,干脆就不设置过期时间  
@@ -4467,6 +4508,62 @@ public List<Product> findAB(int page, int size) {
 
 说白了就是同一份数据用两个key来保存,一个是正常过期时间;另一个在正常过期时间上加上一点时间.  
 查询的时候如果查询不到正常时间的key,说明已经过期;<font color="#00FF00">但为了防止本次查询打入数据库(因为可能是海量查询)</font>;让本次查询去查询时间长一点的key.
+
+### 6.6 热点key
+1.什么是热点key  
+如果一个key的访问次数比较多且明显多于其他key的话,那这个key就可以看作是hotkey  
+hotkey出现的原因主要是某个热点数据访问量暴增,如重大的热搜事件、参与秒杀的商品  
+
+2.热点Key的失效可能会造成缓存击穿  
+
+3.如何发现热点Key  
+* 使用Redis自带的`--hotkeys`参数来查找  
+  使用该命令来发现热点Key的前提是Redis内存淘汰策略使用的是`LFU算法`  
+  例如:`redis-cli -p 6379 --hotkeys`
+* 使用`monitor`命令  
+  `monitor`命令是Redis提供的一种实时查看Redis的所有操作的方式,可以用于临时监控Redis实例的操作情况,包括读写、删除等操作.  
+  由于该命令对Redis性能的影响比较大,<font color="#00FF00">因此禁止长时间开启MONITOR</font>(生产环境中建议谨慎使用该命令)  
+* 借助三方工具  
+  京东零售的[hotkey](https://gitee.com/jd-platform-opensource/hotkey)这个项目不光支持hotkey的发现,还支持hotkey的处理
+* 根据业务提前预估  
+  可以根据业务情况来预估一些hotkey,例如电商秒杀活动的数据;不过我们无法预估所有hotkey的出现,比如突发的热点新闻事件等  
+* 业务代码中记录分析  
+  通过在业务代码中添加相应的逻辑来对key的访问量进行统计,不过这种方式会增加业务代码的复杂度,一般也不推荐使用  
+* 借助公有云的Redis分析服务
+
+4.如何解决热点key  
+* 读写分离:主节点处理写请求,从节点处理读请求
+* Redis集群:将热点数据分散存储在多个Redis节点上
+
+### 6.7 慢查询
+1.慢查询日志配置  
+通过在`redis.conf`配置文件中设置`slowlog-log-slower-than`参数设置耗时命令的阈值,并使用`slowlog-max-len`参数设置耗时命令的最大记录条数.  
+当Redis服务器检测到执行时间超过`slowlog-log-slower-than`阈值的命令时,就会将该命令记录在慢查询日志(slow log)中,这点和MySQL记录慢查询语句类似.当慢查询日志超过设定的最大记录条数之后,Redis会把最早的执行命令依次舍弃  
+*注意:由于慢查询日志会占用一定内存空间,如果设置最大记录条数过大,可能会导致内存占用过高的问题.*  
+
+2.查询慢查询日志  
+执行`slowlog get [number(default=10)]` 查询`number`条慢查询日志
+```java
+127.0.0.1:6379> SLOWLOG GET //慢日志查询
+ 1) 1) (integer) 5
+   2) (integer) 1684326682
+   3) (integer) 12000
+   4) 1) "KEYS"
+      2) "*"
+   5) "172.17.0.1:61152"
+   6) ""
+  // ...
+
+```
+慢查询日志中的每个条目都由以下六个值组成:  
+* 唯一渐进的日志标识符.
+* 处理记录命令的Unix时间戳.
+* 执行所需的时间量,以微秒为单位.
+* 组成命令参数的数组.
+* 客户端IP地址和端口.
+* 客户端名称.
+
+
 
 ## 7.手写Redis分布式锁
 *本章和第8章强关联*  
@@ -6072,6 +6169,7 @@ public class RedLockController {
 9.3 Redis的key是怎么删除的?   
 9.4 Redis内存淘汰策略   
 9.5 Redis内存淘汰策略配置性能建议   
+9.6 Redis是如何判断数据是否过期的   
 
 
 ### 9.1 面试题
@@ -6101,6 +6199,29 @@ public class RedLockController {
 
 2.内存淘汰策略  
 为了避免key没有填写过期时间而导致出现OOM异常,Redis提出了<font color="#00FF00">内存淘汰策略</font>
+
+3.内存利用率  
+通过`info memory`得到的内存使用情况中,注意有这么几个参数  
+`mem_fragmentation_ratio`(内存碎片率)=`used_memory_rss`(操作系统实际分配给Redis的物理内存空间大小)/`used_memory`(Redis内存分配器为了存储数据实际申请使用的内存空间大小)  
+也就是说,`mem_fragmentation_ratio`(内存碎片率)的值越大代表内存碎片率越严重.  
+
+通常情况下,我们认为`mem_fragmentation_ratio` > <font color="#00FF00">1.5</font>的话才需要清理内存碎片.  
+`mem_fragmentation_ratio` > 1.5 意味着你使用Redis存储实际大小2G的数据需要使用大于3G的内存  
+
+4.Redis内存碎片整理  
+通过设置redis.conf配置文件来开启Redis自动内存碎片整理  
+* `activedefrag [no(default)|yes]` 是否开启Redis自动内存碎片整理 
+
+具体什么时候清理需要通过下面两个参数控制:  
+* `active-defrag-threshold-lower [percent(default=10)]` 内存碎片率大于1.1时开始清理,如果设置为50就代表大于1.5开始清理
+* `active-defrag-ignore-bytes [memory(default=100mb)]` 内存碎片达到多少时开始清理
+
+通过Redis自动内存碎片清理机制可能会对Redis的性能产生影响,我们可以通过下面两个参数来减少对Redis性能的影响:
+* `active-defrag-cycle-min [percent(default=1)]` 内存碎片清理时间所占用CPU时间的比例不低于1%
+* `active-defrag-cycle-max [percent(default=25%)]` 内存碎片清理时间所占用CPU时间的比例不高于25%
+
+另外,重启节点可以做到内存碎片重新整理.如果你采用的是高可用架构的Redis集群的话,你可以将碎片率过高的主节点转换为从节点,以便进行安全重启  
+
 
 ### 9.3 Redis的key是怎么删除的?
 1.Redis过期键的删除策略  
@@ -6174,6 +6295,14 @@ redis默认每隔100ms检查是否有过期的key,有过期key则删除.注意:<
 ### 9.5 Redis内存淘汰策略配置性能建议
 1.避免存储bigkey  
 2.开启惰性淘汰`lazyfree-lazy-eviction yes`
+
+### 9.6 Redis是如何判断数据是否过期的
+Redis通过一个叫做过期字典(可以看作是hash表)来保存数据过期的时间.过期字典的键指向 Redis数据库中的某个key(键),过期字典的值是一个long long类型的整数,这个整数保存了key所指向的数据库键的过期时间(毫秒精度的UNIX时间戳)  
+![过期字典](resources/redis/241.png)  
+注意看**dict**指向的是真实的K-V键值对  
+**expires**指向的是过期字典,该字典中存储的key和**dict**中存储的key一致,只不过它指向的是该key的过期时间(long long类型)  
+
+
 
 
 
@@ -7037,6 +7166,7 @@ Reactor模式中有2个关键组成:
 * Reactor:Reactor在一个单独的线程中运行,负责监听和分发事件,分发给适当的处理程序来对IO事件做出反应.它就像公司的电话接线员,它接听来自客户的电话并将线路转移到适当的联系人;  
 * Handlers:处理程序执行I/O事件要完成的实际事件,类似于客户想要与之交谈的公司中的实际办理人.Reactor通过调度适当的处理程序来响应I/O事件,处理程序执行非阻塞操作.  
 ![reactor](resources/redis/236.png)
+![reactor](resources/redis/240.png)
 
 
 ### 11.6 select
@@ -7180,6 +7310,8 @@ epoll会返回有数据的文件描述符的个数
 
 ### 1.3 利用Hash类型完成购物车功能
 ![购物车](resources/redis/1.png)  
+为什么购物车功能推荐使用hash类型来完成?  
+<font color="#00FF00">由于购物车中的商品频繁修改和变动</font>,购物车信息建议使用Hash存储.  
 
 ### 1.4 利用Set类型完成抽奖小程序、社交场景 
 1.利用Set完成抽奖程序  
@@ -7320,7 +7452,7 @@ public class RedPackageController {
     @RequestMapping(value = "/rob")
     public String robRedPackage(String redpackageKey, String userId) {
         // todo 个人感觉这里是存在并发问题的,因为判断和抢等操作是非原子性操作
-        // 验证某个用户是否抢过红包，不可以多抢
+        // 验证某个用户是否抢过红包,不可以多抢
         Object redPackage = redisTemplate.opsForHash().get(RED_PACKAGE_CONSUME_KEY + redpackageKey, userId);
         if (redPackage == null) {
             // 红包没有抢完才能让用户接着抢
@@ -7334,7 +7466,7 @@ public class RedPackageController {
             // 抢完了
             return "errorCode:-1, 红包抢完了";
         }
-        // 抢过了，不能抢多次
+        // 抢过了,不能抢多次
         return "errorCode:-2," + userId + "\t已经抢过了";
 
     }
@@ -7348,8 +7480,8 @@ public class RedPackageController {
             if (i == redpackageNumber - 1) {
                 redpackageNumbers[i] = totalMoney - useMoney;
             } else {
-                // 二倍均值算法，每次拆分后塞进子红包的金额
-                // 金额 = 随机区间(0，(剩余红包金额M ÷ 剩余人数N ) * 2)
+                // 二倍均值算法,每次拆分后塞进子红包的金额
+                // 金额 = 随机区间(0,(剩余红包金额M ÷ 剩余人数N ) * 2)
                 int avgMoney = ((totalMoney - useMoney) / (redpackageNumber - i)) * 2;
                 redpackageNumbers[i] = 1 + new Random().nextInt(avgMoney - 1);
                 useMoney = useMoney + redpackageNumbers[i];
