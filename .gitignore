@@ -35,6 +35,7 @@
 !Linux/resources/**
 !spring
 !spring/spring-logging.md
+!spring/Spring.md
 !spring/resources
 !spring/resources/**
 !sql

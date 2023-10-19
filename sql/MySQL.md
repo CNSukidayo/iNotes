@@ -999,7 +999,7 @@ redo log是物理日志,记录了某个数据页做了什么修改,每当提交�
 5.redo log和数据持久化不是一样的吗?  
 貌似redo log持久化就是为了保证数据一致,那不就不需要数据持久化了吗?  
 数据写入到buffer pool,然后buffer pool再更新磁盘数据;为的是减少磁盘的IO次数,并且buffer pool中的数据才是磁盘真正需要写入的数据.  
-redo log的本质还是做故障恢复用的,并且写入redo log使用了追加操作,所以磁盘是顺序写;而buffer pool中数据的写入需要先找到数据的写入位置,然后才能写到磁盘,所以磁盘操作时随机写.  
+redo log的本质还是做故障恢复用的,并且写入redo log使用了追加操作,所以磁盘是顺序写;而buffer pool中数据的写入需要先找到数据的写入位置,然后才能写到磁盘,所以磁盘操作是随机写.  
 磁盘的**顺序写**比**随机写**要高效很多,因此redo log的开销更小.  
 
 6.redo log和undo log的关系  
@@ -1051,7 +1051,7 @@ undo log记录的是事务执行过程中的每一步操作,这些每一步操�
 ![写方式](resources/mysql/15.png)  
 
 **两个指针:**  
-实际上redo log文件是防止buffer pool中的数据丢失而设计的,所以当buffer pool中的数据写入到磁盘是,对应的redo log就失去了价值,这时候我们便可以擦除这部分数据,从而腾出新的空间写入新的redo log.  
+实际上redo log文件是防止buffer pool中的数据丢失而设计的,所以当buffer pool中的数据写入到磁盘时,对应的redo log就失去了价值,这时候我们便可以擦除这部分数据,从而腾出新的空间写入新的redo log.  
 redo log是循环写的方式,相当于一个环形,InnoDB用<font color="#00FF00">write pos</font>表示redo log当前记录写到的位置,用<font color="#00FF00">checkpoint</font>表示当前要擦除的位置.
 ![两个指针](resources/mysql/16.png)  
 
