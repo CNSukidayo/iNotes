@@ -980,5 +980,186 @@ public class Demo19 {
 线程1  
 线程2被打断  
 
+`demo20:`  
+ReentrantLock还可以指定公平锁.所谓的公平锁就是哪个线程等待的时间长,哪个线程就能的到这把锁.  
+synchronized是非公平锁:如果有多个线程需要访问同一个方法,当一个线程拿到锁之后别的线程就需要等待,当拿到锁的线程释放锁的时候,根据CPU的调度问题,你指不定是哪个线程能拿到那把锁.就算一个线程等了很长时间,一个线程等了很短的时间,但有可能拿到这把锁的是那个等了不短不长的那个线程.相比于公平锁,synchronized的效率要高因为不需要计算那个线程等待的时间长.  
+**公平锁:**  
+`Lock lock = new ReentrantLock(true);`  
+//构造参数为true就代表公平锁,如果没有设置就是非公平锁.公平锁效率低于非公平锁.
+
+**非公平锁:**  
+```java
+public class Demo20 {
+    Lock lock = new ReentrantLock();
+
+    public void m() {
+        for (int i = 0; i < 100; i++) {
+            lock.lock();
+            System.out.println(Thread.currentThread().getName());
+            lock.unlock();		//循环一次就重新锁
+        }
+    }
+
+    public static void main(String[] args) {
+        Demo20 demo20 = new Demo20();
+        new Thread(()->demo20.m(),"线程1").start();
+        new Thread(()->demo20.m(),"线程2").start();
+    }
+}
+```
+**打印结果:**  
+112111222211  
+总之就是没有规律,不知道给哪个线程锁
+
+**公平锁:**  
+111 2121212121 222  
+给一下线程1给一下线程2.很公平前面的111是因为线程一执行的太快了  
+
+`demo21:`  
+**面试题:**  
+写一个固定容量同步容器,拥有put和get方法,以及getCount方法.能够支持两个生产者线程以及10个消费者线程的阻塞调用.使用wait和notify/notifyAll  
+何为同步容器?如果你的容器满了那么put方法就必须等待,如果你的容器空了,那么get方法就必须等待.  
+写法一:使用wait和notify  
+```java
+public class Demo21 {
+    private LinkedList list = new LinkedList();
+    private final int MAX = 10;
+    int count = 0;
+
+    public synchronized void put(Object o) {
+        while (list.size() == MAX) {           //为什么是while不是if?
+            /*
+            在effective java中说到wait基本上就是和while使用而不是if
+            原因:
+             */
+            try {
+                this.wait();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+
+        list.add(o);
+        count++;
+        this.notifyAll();		// 在effective java中说到永远你要使用nofityAll不要使用notify
+    }
+
+    public synchronized Object get() {
+        Object o = null;
+        while (list.size() == 0) {
+            try {
+                this.wait();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+
+        o = list.removeFirst();
+        count--;
+        this.notifyAll();
+        return o;
+    }
+
+    public static void main(String[] args) {
+        Demo21 demo21 = new Demo21();
+        for (int i = 0; i < 10; i++) {
+            new Thread(() -> {
+                for (int j = 0; j < 5; j++) {
+                    System.out.println(demo21.get());
+                }
+            },"c"+i).start();
+        }
+        for (int i = 0; i < 2; i++) {
+            new Thread(() -> {
+                for (int j = 0; j < 25; j++) {
+                    demo21.put(Thread.currentThread().getName()+" "+j);
+                }
+            }).start();
+        }
+
+    }
+
+}
+```
+为什么是while不是if?  
+如果现在容器元素是10个,第一个生产者线程会调用wait方法释放锁,第二个生产者线程也会调用wait释放锁.此时消费者线程将10消费成9,并通过notifyAll同时唤醒了两个生产者线程.被唤醒的线程需要重新获得当前对象的锁(假定这里就是生产者的某一个获得了锁,而不是消费者获得锁),但你不知道这两个线程是哪个线程会得到锁,如果这里使用的是if,假如此时线程1得到锁,那么他会顺着wait后面的语句继续执行,添加一个元素并唤醒所有等待的线程(注意此时消费者没有线程wait只是得不到这把搜所以无法执行get的代码),线程一执行完毕会释放锁,如果下一次还是线程一得到这把锁,那么由于此时的size是10所以线程一会被wait,wait释放锁恰巧被生产者的线程二获得这把锁,由于线程是被唤醒的所以会执行wait后面的代码,此时添加一个元素size就变成了10.  
+如果使用while,主要的区别就是生产者线程二被唤醒之后且拿到这把锁之后的区别:wait释放锁恰巧被生产者的线程二获得这把锁(前面的和上面一样),虽然线程是被唤醒的,但是由于while语句的特性,上一次执行wait语句的时候说明while里面的判断条件是true,既然是true 执行wait后的代码就需要再循环一次,再循环一次的时候发现size已经变成10了,所以生产者线程二再次wait.  
+
+写法二:使用Lock和Condition  
+```java
+
+public class Demo22 {
+    private LinkedList list = new LinkedList();
+    private final int MAX = 10;
+    int count = 0;
+
+    private Lock lock = new ReentrantLock();
+    private Condition producer = lock.newCondition();			//生产者线程
+    private Condition consumer = lock.newCondition();			//消费者线程
+
+    public void put(Object o) {
+        lock.lock();
+        try {
+            while (list.size() == MAX) {           //为什么是while不是if?
+                producer.await();      //调用await而不是wait,因为wait是针对被锁的对象的方法
+            }
+            list.add(o);
+            count++;
+            consumer.signalAll();   //唤醒所有消费者线程
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    public Object get() {
+        lock.lock();
+        Object o = null;
+        try {
+            while (list.size() == 0) {
+                consumer.await();
+            }
+            o = list.removeFirst();
+            count--;
+            producer.signalAll();
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        } finally {
+            lock.unlock();
+        }
+        return o;
+    }
+
+    public static void main(String[] args) {
+        Demo22 demo21 = new Demo22();
+        for (int i = 0; i < 10; i++) {
+            new Thread(() -> {
+                for (int j = 0; j < 5; j++) {
+                    System.out.println(demo21.get());
+                }
+            },"c"+i).start();
+        }
+        for (int i = 0; i < 2; i++) {
+            new Thread(() -> {
+                for (int j = 0; j < 25; j++) {
+                    demo21.put(Thread.currentThread().getName()+" "+j);
+                }
+            }).start();
+        }
+
+    }
+
+}
+```
+使用这种方法的好处是:  
+你可以指定唤醒哪个阵营的线程(是消费者还是生产者)而不是用notifyAll一次性唤醒所有的线程(消费者和生产者线程).  
+关于指定线程的问题:  
+在一个线程中是通过producer线程进行等待的  
+而在另外一个线程中是通过consumer进行唤醒的,所以唤醒的线程只有可能是producer线程.  
+
+
+
+
 
 
