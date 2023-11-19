@@ -1,6 +1,8 @@
 # 目录  
 1.Java内存区域  
 2.JVM垃圾回收  
+3.类文件结构  
+5.类加载器详解  
 
 
 
@@ -100,7 +102,7 @@ Hotspot会遍历所有的对象,按照年龄从小到大对其占用的大小进
 
 3.一些相关的参数设置  
 ```java
--XX:MetaspaceSize=N     //设置 Metaspace 的初始（和最小大小）
+-XX:MetaspaceSize=N     //设置 Metaspace 的初始(和最小大小)
 -XX:MaxMetaspaceSize=N //设置 Metaspace 的最大大小
 ```
 
@@ -178,6 +180,9 @@ Java程序通过栈上的<font color="#00FF00">reference数据</font>来操作�
 ## 2.JVM垃圾回收
 **目录:**  
 2.1 内存分配和回收原则  
+2.2 死亡对象判断方法  
+2.3 垃圾收集算法  
+2.4 垃圾收集器  
 
 ### 2.1 内存分配和回收原则
 由于现在收集器基本都采用分代垃圾收集算法,所以Java堆被划分为了几个不同的区域,这样我们就可以根据各个区域的特点选择合适的垃圾收集算法  
@@ -188,8 +193,8 @@ Java程序通过栈上的<font color="#00FF00">reference数据</font>来操作�
 当Eden区没有足够空间进行分配时,虚拟机将发起一次Minor GC.GC期间虚拟机又发现,如果S0或者S1这两个区域无法放入对象,所以只好通过<font color="#00FF00">分配担保机制</font>把新生代的对象提前转移到老年代中去,因为老年代足够放入对象,所以不会出现Full GC.执行Minor GC后,后面分配的对象如果能够存在Eden区的话,还是会在Eden区分配内存.  
 
 **分配担保机制**  
-空间分配担保是为了确保在Minor GC之前老年代本身还有容纳新生代所有对象的剩余空间  
-JDK 6 Update 24 之前,在发生Minor GC之前,虚拟机必须先检查老年代最大可用的连续空间是否大于新生代所有对象总空间,如果这个条件成立,那这一次Minor GC可以确保是安全的.如果不成立,则虚拟机会先查看`-XX:HandlePromotionFailure`参数的设置值是否允许担保失败(Handle Promotion Failure);如果允许,那会继续检查老年代最大可用的连续空间是否大于历次晋升到老年代对象的平均大小,如果大于,将尝试进行一次Minor GC,尽管这次Minor GC是有风险的;如果小于,或者`-XX: HandlePromotionFailure`设置不允许冒险,那这时就要改为进行一次Full GC.JDK 6 Update 24之后的规则变为只要老年代的连续空间大于新生代对象总大小或者历次晋升的平均大小,就会进行Minor GC,否则将进行 Full GC.
+空间分配担保是为了确保在Minor GC<font color="#FF00FF">之前</font>老年代本身还有容纳新生代所有对象的剩余空间  
+JDK 6 Update 24 之前,在发生Minor GC之前,虚拟机必须先检查老年代最大可用的连续空间是否大于新生代所有对象总空间,如果这个条件成立,那这一次Minor GC可以确保是安全的.如果不成立,则虚拟机会先查看`-XX:HandlePromotionFailure`参数的设置值是否允许担保失败(Handle Promotion Failure);如果允许,那会继续检查老年代最大可用的连续空间是否大于历次晋升到老年代对象的平均大小,如果大于,将尝试进行一次Minor GC,尽管这次Minor GC是有风险的;如果小于,或者`-XX:HandlePromotionFailure`设置不允许冒险,那这时就要改为进行一次Full GC.<font color="#00FF00">JDK 6 Update 24之后的规则变为只要老年代的连续空间大于新生代对象总大小或者历次晋升的平均大小,就会进行Minor GC,否则将进行 Full GC.</font>
 
 
 2.大对象直接进入老年代  
@@ -215,5 +220,328 @@ Hotspot会遍历所有的对象,按照年龄从小到大对其占用的大小进
 * 混合收集(Mixed GC):对整个新生代和<font color="#00FF00">部分</font>老年代进行垃圾收集  
 
 整堆收集(Full GC):收集整个Java堆和元空间  
+
+### 2.2 死亡对象判断方法
+要回收对象之前必须先判断对象是否已经死亡,有两种方法分析:引用计数法、可达性分析  
+
+1.引用计数法  
+给对象中添加一个引用计数器  
+* 每当有一个地方引用它,计数器就加1
+* 当引用失效,计数器就减1
+* 任何时候计数器为0的对象就是不可能再被使用的
+
+这个方法实现简单,效率高,但是目前主流的虚拟机中并没有选择这个算法来管理内存,其最主要的原因是它<font color="#FF00FF">很难解决对象之间循环引用的问题</font>  
+![循环引用](resources/JVM-simple/8.png)  
+
+```java
+public class ReferenceCountingGc {
+    Object instance = null;
+    public static void main(String[] args) {
+        ReferenceCountingGc objA = new ReferenceCountingGc();
+        ReferenceCountingGc objB = new ReferenceCountingGc();
+        objA.instance = objB;
+        objB.instance = objA;
+        objA = null;
+        objB = null;
+    }
+}
+```
+所谓循环引用就是两个对象互相引用对方,<font color="#00FF00">导致它们的引用计数器都不为0</font>于是引用计数算法无法通知GC回收器回收他们  
+
+2.可达性分析  
+这个算法的基本思想就是通过一系列的称为"GC Roots"的对象作为起点,从这些节点开始向下搜索,节点所走过的路径称为引用链,当一个对象到GC Roots没有任何引用链相连的话,则证明此对象是不可用的,需要被回收.  
+下图中的`Object 6 ~ Object 10`之间虽有引用关系,但它们到GC Roots不可达,因此为需要被回收的对象  
+![可达性分析](resources/JVM-simple/9.png)  
+
+**GC Roots对象的选举规则**  
+* 虚拟机栈(栈帧中的局部变量表)中引用的对象
+* 本地方法栈(Native方法)中引用的对象
+* 方法区中类静态属性引用的对象
+* 方法区中常量引用的对象
+* 所有被同步锁持有的对象
+* JNI引用的对象
+
+3.引用类型总结  
+无论是通过引用计数法判断对象引用数量,还是通过可达性分析法判断对象的引用链是否可达,判定对象的存活都与"引用"有关  
+JDK1.2之前,Java中引用的定义很传统:如果reference类型的数据存储的数值代表的是另一块内存的起始地址,就称这块内存代表一个引用.  
+JDK1.2以后,Java对引用的概念进行了扩充,将引用分为强引用、软引用、弱引用、虚引用四种(引用强度逐渐减弱)  
+
+3.1 强引用(StrongReference)  
+User user = new User()就是强引用,在Java中最常见的就是强引用,把一个对象赋给一个引用变量,这个引用变量就是一个强引用.当一个对象被强引用变量引用时,它始终处于可达状态,它是<font color="#00FF00">不可能被垃圾回收机制回收</font>的,即使该对象以后永远都不会被用到JVM也不会回收.因此强引用是造成Java内存泄露的主要原因之一.如果在方法内部new对象的话,只要方法弹栈,对象就会销毁.  
+
+3.2 软引用(SoftReference)  
+会用到SoftReference类,对于只有软引用的对象来说,当系统内存足够时它是不会被回收,当系统内存空间不足时它会被回收.软引用通常用在对内存敏感的程序中,作为缓存使用  
+
+3.3 弱引用(WeakReference)  
+在垃圾回收器线程扫描它所管辖的内存区域的过程中,一旦发现了只具有弱引用的对象,不管当前内存空间足够与否,都会回收它的内存.可以解决内存泄露问题,ThreadLocal就是基于弱引用解决内存泄露的问题.  
+
+3.4 虚引用(PhantomReference)  
+**虚引用主要用来跟踪对象被垃圾回收的活动**  
+虚引用必须和引用队列(ReferenceQueue)联合使用  
+
+4.如何判断一个常量是废弃常量  
+*注意JDK字符串常量是存放在堆中的字符串常量池中的,而运行时常量是存放在元空间中的*  
+假如在字符串常量池中存在字符串"abc",如果当前没有任何String对象引用该字符串常量的话,就说明常量"abc"就是废弃常量,如果这时发生内存回收的话而且有必要的话,"abc"就会被系统清理出常量池了  
+
+5.如何判断一个类是无用的类  
+<font color="#00FF00">元空间的主要回收对象就是无用的类信息</font>,类需要同时满足三个条件才能算是"无用的类"  
+* 该类所有的实例都已经被回收,也就是Java堆中不存在该类的任何实例
+* 加载该类的ClassLoader已经被回收
+* 该类对应的java.lang.Class对象没有在任何地方被引用,无法在任何地方通过反射访问该类的方法
+
+JVM可以对满足了上述三个条件的无用类进行回收,但也不是立即回收  
+
+### 2.3 垃圾收集算法
+1.标记-清除算法  
+标记-清除(Mark-and-Sweep)算法分为"标记(Mark)"和"清除(Sweep)"阶段:首先标记出所有不需要回收的对象,在标记完成后统一回收掉所有没有被标记的对象  
+
+**问题:**  
+* 效率问题:标记和清除两个过程效率都不高
+* 空间问题:标记清除后会产生大量不连续的<font color="#00FF00">内存碎片</font>  
+
+![标记清除算法](resources/JVM-simple/10.png)  
+
+2.复制算法  
+**为了解决标记-清除算法的效率和内存碎片问题**,出现了`复制(Copying)收集`算法.它可以将内存分为大小相同的两块,每次使用其中的一块.当这一块的内存使用完后,就将还存活的对象复制到另一块去,然后再把使用的空间一次清理掉.这样就使每次的内存回收都是对内存区间的一半进行回收  
+![复制算法](resources/JVM-simple/11.png)  
+
+**问题:**  
+* 可用内存变小:可用内存缩小为原来的一半
+* 不适合老年代:如果存活对象数量比较大,复制性能会变得很差
+
+3.标记-整理算法  
+标记-整理(Mark-and-Compact)算法是根据老年代的特点提出的一种标记算法,标记过程仍然与"标记-清除"算法一样,但后续步骤不是直接对可回收对象回收,而是让所有存活的对象向一端移动,然后直接清理掉端边界以外的内存  
+
+![标记整理](resources/JVM-simple/12.png)  
+
+**问题:**  
+* 多了整理这一步,因此效率也不高,适合老年代这种垃圾回收频率不是很高的场景
+
+4.分代收集算法  
+当前虚拟机的垃圾收集都采用分代收集算法,这种算法没有什么新思想;<font color="#FF00FF">只是根据对象存活周期的不同将内存分为几块</font>;JVM将堆内存划分为新生代和老年代就是为了可以<font color="#00FF00">根据各个年代的特点选择合适的垃圾收集算法.</font>  
+
+比如在新生代中,每次收集都会有大量对象死去,所以可以选择"标记-复制"算法,只需要付出少量对象的复制成本就可以完成每次垃圾收集.而老年代的对象存活几率是比较高的,而且没有额外的空间对它进行分配担保,所以我们必须选择"标记-清除"或"标记-整理"算法进行垃圾收集  
+
+### 2.4 垃圾收集器
+1.Serial收集器  
+单线程收集器,该收集器回收内存期间,<font color="#00FF00">所有的工作线程都必须暂停</font>直到回收完成.  
+新生代采用`标记-复制`算法,老年代采用`标记-整理`算法  
+
+![Serial收集器](resources/JVM-simple/13.png)  
+
+2.ParNew收集器  
+ParNew收集器其实就<font color="#00FF00">是Serial收集器的多线程版本</font>,除了使用多线程进行垃圾收集外,其余行为(控制参数、收集算法、回收策略等等)和Serial收集器完全一样;注意老年代还是使用串行  
+新生代采用`标记-复制`算法,老年代采用`标记-整理`算法  
+![ParNew收集器](resources/JVM-simple/14.png)  
+
+**特点:**  
+除了Serial收集器外,只有ParNew收集器能与CMS垃圾收集器配合工作  
+
+3.Parallel Scavenge收集器  
+Parallel Scavenge收集器也是使用`标记-复制`算法的多线程收集器,它看上去几乎和ParNew都一样,主要区别在于Parallel Scavenge收集器可以指定老年代是串行还是并行收集 
+```shell
+-XX:+UseParallelGC
+
+    使用 Parallel 收集器+ 老年代串行
+
+-XX:+UseParallelOldGC
+
+    使用 Parallel 收集器+ 老年代并行
+```
+
+Parallel Scavenge收集器关注点是吞吐量(高效率的利用 CPU)  
+CMS等垃圾收集器的关注点更多的是用户线程的停顿时间(提高用户体验)
+
+新生代采用`标记-复制`算法,老年代采用`标记-整理`算法 
+![Parallel Scavenge收集器](resources/JVM-simple/15.png)
+
+4.CMS垃圾收集器  
+**介绍:**  
+CMS收集器是一种`标记-清除`算法实现的  
+**CMS收集器是一种以获取最短回收停顿时间为目标的收集器;注重停顿时间**  
+它的运作过程分为四步:  
+* 初始标记:暂停所有的其他线程,并记录下直接与root相连的对象,速度很快  
+* 并发标记:<font color="#00FF00">同时开启GC和用户线程</font>,用一个闭包结构去记录可达对象.但在这个阶段结束,这个闭包结构并不能保证包含当前所有的可达对象.因为用户线程可能会<font color="#00FF00">不断的更新引用域</font>,所以GC线程无法保证可达性分析的实时性.所以这个算法里会跟踪记录这些发生引用更新的地方.  
+* 重新标记:<font color="#00FF00">重新标记阶段就是为了修正并发标记期间因为用户程序继续运行而导致标记产生变动的那一部分对象的标记记录</font>,这个阶段的停顿时间一般会比初始标记阶段的时间稍长,远远比并发标记阶段时间短
+* 并发清除:开启用户线程,同时GC线程开始对未标记的区域做清扫
+
+![CMS](resources/JVM-simple/16.png)  
+
+
+**缺点:**  
+* 对CPU资源敏感
+* 无法处理浮动垃圾
+* 它使用的回收算法`标记-清除`算法会导致收集结束时会有大量空间碎片产生
+
+5.G1收集器  
+**介绍:**  
+G1是一款面向服务器的垃圾收集器,主要针对配备多颗处理器及大容量内存的机器.以极高概率满足GC停顿时间要求的同时,还具备高吞吐量性能特征  
+**G1收集器的主要特点是,它会尽最大努力达到用户指定的停顿时间**;G1能够建立可预测的停顿时间模型,能让使用者明确指定在一个长度为M毫秒的时间片段内,消耗在垃圾收集上的时间不得超过N毫秒  
+
+它的运行过程:  
+* 初始标记
+* 并发标记
+* 最终标记
+* 筛选回收
+
+![G1](resources/JVM-simple/17.png)  
+G1收集器在后台维护了一个优先列表,每次根据允许的收集时间,优先选择<font color="#00FF00">回收价值最大的Region(区域)</font>这种使用Region划分内存空间以及有优先级的区域回收方式,<font color="#00FF00">保证了G1收集器在有限时间内可以尽可能高的收集效率</font>
+
+
+## 3.类文件结构
+**目录:**  
+3.1 Class文件结构  
+
+
+### 3.1 Class文件结构
+根据Java虚拟机规范,class文件通过`ClassFile`定义,类似于C的结构体  
+```c
+ClassFile {
+    u4             magic; //Class 文件的标志
+    u2             minor_version;//Class 的小版本号
+    u2             major_version;//Class 的大版本号
+    u2             constant_pool_count;//常量池的数量
+    cp_info        constant_pool[constant_pool_count-1];//常量池
+    u2             access_flags;//Class 的访问标记
+    u2             this_class;//当前类
+    u2             super_class;//父类
+    u2             interfaces_count;//接口数量
+    u2             interfaces[interfaces_count];//一个类可以实现多个接口
+    u2             fields_count;//字段数量
+    field_info     fields[fields_count];//一个类可以有多个字段
+    u2             methods_count;//方法数量
+    method_info    methods[methods_count];//一个类可以有个多个方法
+    u2             attributes_count;//此类的属性表中的属性数
+    attribute_info attributes[attributes_count];//属性表集合
+}
+```
+
+![总结](resources/JVM-simple/18.png)  
+
+**接下来对这些字段进行详细介绍**  
+1.魔数(Magic)  
+`u 4magic; //Class 文件的标志`  
+每个Class文件的头4个字节称为魔数(Magic Number),它的唯一作用是确定这个文件是否为一个能被虚拟机接收的Class文件.Java规范规定魔数为固定值:0xCAFEBABE.如果读取的文件不是以这个魔数开头,Java虚拟机将拒绝加载它.  
+
+2.Class文件版本号(Minor Version &Major Version)  
+```java
+u2      minor_version;//Class 的小版本号
+u2      major_version;//Class 的大版本号
+```
+紧接着魔数的四个字节存储的是Class文件的版本号:第5和第6个字节是**次版本号**,第7和第8个字节是**主版本号**  
+每当Java发布大版本(比如 Java 8,Java9)的时候,主版本号都会加1.可以使用`javap -v`命令来快速查看Class文件的版本号信息  
+
+3.常量池(Constant Pool)  
+```java
+u2          constant_pool_count;//常量池的数量
+cp_info     constant_pool[constant_pool_count-1];//常量池
+```
+
+常量池主要存放两大常量:字面量和符号引用字面量比较接近于Java语言层面的的常量概念,如文本字符串、声明为final的常量值等.而符号引用则属于编译原理方面的概念.包括下面三类常量:  
+* 类和接口的全限定名
+* 字段的名称和描述符
+* 方法的名称和描述符
+
+<font color="#00FF00">常量池中每一项常量都是一个表</font>  
+|               类型               | 标志(tag) |          描述          |
+| :------------------------------: | :-------: | :--------------------: |
+|        CONSTANT_utf8_info        |     1     |   UTF-8 编码的字符串   |
+|      CONSTANT_Integer_info       |     3     |       整形字面量       |
+|       CONSTANT_Float_info        |     4     |      浮点型字面量      |
+|        CONSTANT_Long_info        |     5     |      长整型字面量      |
+|       CONSTANT_Double_info       |     6     |   双精度浮点型字面量   |
+|       CONSTANT_Class_info        |     7     |   类或接口的符号引用   |
+|       CONSTANT_String_info       |     8     |    字符串类型字面量    |
+|      CONSTANT_FieldRef_info      |     9     |     字段的符号引用     |
+|     CONSTANT_MethodRef_info      |    10     |   类中方法的符号引用   |
+| CONSTANT_InterfaceMethodRef_info |    11     |  接口中方法的符号引用  |
+|    CONSTANT_NameAndType_info     |    12     |  字段或方法的符号引用  |
+|     CONSTANT_MethodType_info     |    16     |      标志方法类型      |
+|    CONSTANT_MethodHandle_info    |    15     |      表示方法句柄      |
+|   CONSTANT_InvokeDynamic_info    |    18     | 表示一个动态方法调用点 |
+
+
+4.访问标志(Access Flags)  
+`u2     access_flags;   //Class 的访问标记`  
+在常量池结束之后,紧接着的两个字节代表访问标志,这个标志用于识别一些类或者接口层次的访问信息,包括:这个Class是类还是接口,是否为`public`或者`abstract`类型,如果是类的话是否声明为`final`  
+类访问和属性修饰符:  
+![访问标志](resources/JVM-simple/19.png)  
+
+5.当前类(This Class)、父类(Super Class)、接口(Interfaces)索引集合  
+```java
+u2      this_class;//当前类
+u2      super_class;//父类
+u2      interfaces_count;//接口数量
+u2      interfaces[interfaces_count];//一个类可以实现多个接口
+```
+Java类的继承关系由类索引、父类索引和接口索引集合三项确定.类索引、父类索引和接口索引集合按照顺序排在访问标志之后  
+类索引用于确定这个类的全限定名,父类索引用于确定这个类的父类的全限定名,由于Java语言的单继承,所以父类索引只有一个,除了`java.lang.Object`之外,所有的Java类都有父类,因此除了`java.lang.Object`外,所有Java类的父类索引都不为0.  
+接口索引集合用来描述这个类实现了那些接口,这些被实现的接口将按`implements`(如果这个类本身是接口的话则是`extends`)后的接口顺序从左到右排列在接口索引集合中.  
+
+5.字段表集合(Fields)  
+```java
+u2             fields_count;//字段数量
+field_info     fields[fields_count];//一个类会可以有个字段
+```
+字段表(field info)用于描述接口或类中声明的变量.字段包括<font color="#00FF00">静态变量以及实例变量</font>,但不包括在方法内部声明的局部变量  
+**field info(字段表)的结构:**  
+![字段表](resources/JVM-simple/20.png)  
+
+* access_flags:字段的作用域(public,private,protected修饰符),是实例变量还是类变量(static修饰符),可否被序列化(transient修饰符),可变性(final),可见性(volatile修饰符,是否强制从主内存读写).
+* name_index:对常量池的引用,表示的字段的名称
+* descriptor_index:对常量池的引用,表示字段和方法的描述符
+* attributes_count:一个字段还会拥有一些额外的属性,attributes_count存放属性的个数
+* attributes[attributes_count]:存放具体属性具体内容
+
+**字段表的access_flag的取值:**  
+![access_flag](resources/JVM-simple/21.png)  
+
+6.方法表集合(Methods) 
+```java
+u2             methods_count;//方法数量
+method_info    methods[methods_count];//一个类可以有个多个方法
+```
+methods_count表示方法的数量,而method_info表示方法表  
+
+Class文件存储格式中对方法的描述与对字段的描述几乎采用了完全一致的方式.方法表的结构如同字段表一样,依次包括了<font color="#00FF00">访问标志、名称索引、描述符索引、属性表集合</font>几项  
+
+**method_info(方法表的)结构:**  
+![方法表](resources/JVM-simple/22.png)  
+**方法表的access_flag取值:**  
+![access_flag](resources/JVM-simple/23.png)  
+
+
+7.属性表集合(Attributes)  
+```java
+u2                  dattributes_count;//此类的属性表中的属性数
+attribute_info      dattributes[attributes_count];//属性表集合
+```
+
+
+
+## 5.类加载器详解
+**目录:**  
+5.1 类加载器  
+
+
+### 5.1 类加载器
+
+1.类加载器介绍
+* 类加载器是一个负责加载类的对象,用于实现类加载过程中的加载这一步
+* 每个Java类都有一个引用指向加载它的`ClassLoader`
+* 数组类不是通过`ClassLoader`创建的(数组类没有对应的二进制字节流),是由JVM直接生成的
+
+<font color="#FF00FF">类加载器主要就是加载Java类的字节码(.class文件)到JVM中</font>(在内存中生成一个代表该类的Class对象)  
+除了加载类之外,类加载器还可以加载Java应用所需的资源如文本、图像、配置文件、视频等等文件资源  
+
+2.类加载器加载规则  
+<font color="#FF00FF">JVM启动的时候,并不会一次性加载所有的类,而是根据需要去动态加载</font>即类只有在真正被使用的时候才会被加载,这样对内存更友好  
+对于已经加载的类会被放在`ClassLoader`中.在类加载的时候,系统会首先判断当前类是否被加载过.已经被加载的类会直接返回,否则才会尝试加载  
+
+3.类加载器总结  
+
+
+
+
 
 
