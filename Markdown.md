@@ -260,5 +260,9 @@ public static void main(String args[]){
    ```
 8. ### <p align="center">文字居中显示</p>
 
-
-
+- - - 
+## Mermaid  
+```mermaid
+graph LR
+   A --> B;
+```
