@@ -126,7 +126,7 @@ B. 常用docker镜像大全
 * `docker exec -it [containerId] /bin/bash` 进入一个容器  
 * `docker rm [containerId]` 删除一个容器(是容器不是镜像)  
 * `docker rmi [imageName]/[imageId]` 删除一个镜像  
-* `docker rmi -f [imageName]/[imageId]` 强制删除一个镜像,推荐不使用-f参数,如果用上面没有-f删除docker镜像时出现问题(可能是当前要删除的镜像依赖某个容器,可以使用上面的docker rm \[containerId\]删除该容器后重试)
+* `docker rmi -f [imageName]/[imageId]` 强制删除一个镜像,推荐不使用-f参数,如果用上面没有-f删除docker镜像时出现问题(可能是当前要删除的镜像依赖某个容器,可以使用上面的docker rm [containerId]删除该容器后重试)
 * `docker run ...` 运行一个镜像(注意和start区分)  
 * `docker stop [containerId]` 停止一个容器  
 * `docker start [containerId]` 启动一个容器  
@@ -159,7 +159,7 @@ docker run -p 7901:3306 --name mysql8.0 \
 ```
 
 参数解释:  
-* -v \[hostPath\]:\[containerPaht\]  挂载容器文件路径到本机;将containerPaht\(容器\)路径的文件挂载到\(hostPath\)  
+* -v [hostPath]:[containerPaht]  挂载容器文件路径到本机;将containerPaht(容器)路径的文件挂载到(hostPath)  
 * -e MYSQL_ROOT_PASSWORD=[password] -e参数的本质是启动容器时给容器设置参数,这里的参数意思是设置MySQL root用户的密码为root(看上面的例子)  
 * --name 给当前容器其名  
 * -p [hostPort]:[containerPort] 将容器的容器的端口(containerPort)映射到宿主机的端口(hostPort).  
@@ -392,7 +392,7 @@ docker run --name rabbitmq \
 
 #### 5.ElasticSearch  
 1.拉取镜像  
-`docker pull elasticsearch:8.6.0`
+`docker pull elasticsearch:8.5.2`
 
 2.在宿主机创建两个文件目录  
 `mkdir -p ~/software/elasticsearch/plugins`  
