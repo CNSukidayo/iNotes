@@ -170,6 +170,8 @@ docker run -p 7901:3306 --name mysql8.0 \
 
 `flush privileges;` 刷新权限  
 
+4.注意可能需要删除用户  
+
 
 #### 2.Redis  
 1.下载镜像  
