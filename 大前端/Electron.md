@@ -124,7 +124,7 @@ index.html中修改引入main.js的内容为:
 ```
 mian.js文件中的内容:  
 ```js
-// 从vue中结构出createApp这个组件
+// 从vue中解构出createApp这个组件
 import { createApp } from 'vue' 
 // 引入我们编写的App.vue组件
 import App from './App.vue'
@@ -170,7 +170,7 @@ SFC(single file component)单文件组件,主要由三个部分构成`<script>`�
 </style>
 
 ```
-刷新浏览器,可以发现字体app已经变大,说明单文件组件的功能十分强大
+刷新浏览器,可以发现字体app已经变大,说明单文件组件的功能十分强大  
 
 
 ### 1.3 Vue3
@@ -178,5 +178,7 @@ SFC(single file component)单文件组件,主要由三个部分构成`<script>`�
 1.3.1 初入vue3  
 1.3.2 模板语法  
 1.3.3 响应式基础  
+
+
 
 

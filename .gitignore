@@ -16,6 +16,7 @@
 !项目实战/尚上优选/resources/*
 !分布式
 !分布式/Docker.md
+!分布式/kong.md
 !分布式/K8S.md
 !分布式/resources
 !分布式/resources/**
