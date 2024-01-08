@@ -1,9 +1,24 @@
 # 目录  
+1.CompletableFuture  
+2.锁  
+3.LockSupport与线程中断  
+4.Java内存模型之JMM  
+5.volatile与JMM  
+6.CAS  
+7.原子操作类  
+8.ThreadLocal  
+9.Java对象内存布局和对象头  
+10.synchronized与锁升级  
+11.AbstractQueuedSynchronizer之AQS  
+12.ReentrantLock、ReentrantReadWriteLock、StampedLock  
 
 
 
+
+
+**附录:**  
 A.Java并发编程实战  
-
+B.线程基础知识  
 
 
 
@@ -1159,6 +1174,75 @@ public class Demo22 {
 而在另外一个线程中是通过consumer进行唤醒的,所以唤醒的线程只有可能是producer线程.  
 
 
+## B.线程基础知识
+**目录:**  
+1.1 前置知识学习  
+1.2 为什么需要多线程  
+1.3 线程的start方法  
+
+
+### 1.1 前置知识学习
+1.什么是JUC  
+JUC就是指java.util.concurrent包下的类,其中主要有三个java.util.concurrent、java.util.concurrent.atomic、java.util.concurrent.locks  
+
+2.要求的基本工具类的使用  
+* ReentrantLock(锁)
+  * ReentrantReadWriteLock
+  * Condition
+* CountDownLatch(门栓)
+* CyclicBarrier
+* Semaphore
+* 线程池与阻塞队列
+* ForkJoinPool与ForkJoinTask
+* 原子操作类Atomic
+* volatile
+* Callable和FutureTask
+
+### 1.2 为什么需要多线程  
+1.硬件方面  
+简而言之就是单机的美好年代一去不复返,现在CPU的发展已经从对主频的提升转变为对多核多线程的发展.  
+所以为了能更好地利用CPU的性能,由此引入的了多线程  
+即单处理机转变为多处理机的过程  
+<font color="#00FF00">并发与并行编程</font>
+
+2.软件方面  
+* 充分利用多处理器  
+* 提高程序性能,当处理大批量数据的时候使用多线程来提高程序性能  
+* 提高程序吞吐量,实现异步+回调等生产需求
+* 同时处理多阻塞任务  
+
+3.弊端及问题  
+* 线程安全问题
+* 线程锁问题
+* 线程性能问题
+
+### 1.3 线程的start方法
+1.`start0`  
+Java中Thread类的start方法本质上是调用了native方法start0  
+`private native void start0();`  
+
+2.C语言`satrt0`方法分析  
+首先自已下载openJdk8的源码  
+* src/share/navite/java/lang/thread.c  
+* src/share/demo/jvmti/waiters/Thread.cpp  
+* hotspot/src/share/vm/prims/jvm.cpp
+
+thread.c中的部分代码:  
+实际上java调用的native方法`start0`调用就是JVM层面的`JVM_StartThread`方法.  
+```c
+static JNINativeMethod methods[] = {
+    {"start0",           "()V",        (void *)&JVM_StartThread}
+};
+```
+
+jvm.cpp:  
+thread.c中调用了JVM层面的`JVM_StartThread`方法,实际上该方法会调用jvm.cpp中的对应的方法.  
+![jvm.cpp](resources/JUC/1.png)  
+
+thread.cpp:  
+最终jvm.cpp会调用thread.cpp中的代码来创建线程  
+`os:start_thread(thread);` 调用操作系统的方法来创建线程  
+![thread.cpp](resources/JUC/2.png)  
 
 
 
