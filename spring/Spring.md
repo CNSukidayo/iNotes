@@ -177,7 +177,7 @@ public @interface Transactional {
 
     String timeoutString();  // 同timeout()参数  
 
-    boolean readOnly() default false;  // 是否只读,如果只读则代表当前事务只能查询不能修改,如果修改会产生异常.  
+    boolean readOnly() default false;  // 是否只读,如果只读则代表当前事务只能查询不能修改,如果修改会产生异常.指定该注解为true也可以增加性能  
 
     Class<? extends Throwable>[] rollbackFor();  // 指定遇到哪些异常会产生回滚
 
