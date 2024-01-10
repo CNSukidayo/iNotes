@@ -145,6 +145,7 @@ B. 常用docker镜像大全
 3.Nacos  
 4.RabbitMQ  
 5.ElasticSearch  
+6.Nginx  
 
 
 #### 1.MySQL安装  
@@ -499,4 +500,10 @@ xpack.security.transport.ssl:
 
 7.重启容器
 `docker start [containerId]`
+
+#### 6.Nginx
+1.拉取镜像  
+`docker pull nginx`  
+2.
+
 
