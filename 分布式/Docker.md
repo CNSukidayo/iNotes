@@ -134,6 +134,9 @@ B. 常用docker镜像大全
 * `docker container update --mount type=bind,source=[hostPath],target=[containerPath] [containerId]` 挂载已经启动的容器目录(需要先将容器stop);source是宿主机的路径,target是容器内的路径.
 * `docker cp [hostPath] [containerId]:[containerPath]` 将宿主机的文件拷贝到容器中  
 * `docker cp [containerId]:[containerPath] [hostPath]` 将容器中的内容拷贝到宿主机
+* `docker network ls` 查看docker所有的网络
+* `docker network rm [netWorkId]` 根据network的ID移除一个docker网络
+* `docker network create [netWordName]` 创建一个docker网络,网络名称为[netWordName];docker网络在搭建nacos集群的时候会用到
 
 ### B. 常用docker镜像大全  
 **目录:**  
@@ -142,6 +145,7 @@ B. 常用docker镜像大全
 3.Nacos  
 4.RabbitMQ  
 5.ElasticSearch  
+6.Nginx  
 
 
 #### 1.MySQL安装  
@@ -496,4 +500,10 @@ xpack.security.transport.ssl:
 
 7.重启容器
 `docker start [containerId]`
+
+#### 6.Nginx
+1.拉取镜像  
+`docker pull nginx`  
+2.
+
 
