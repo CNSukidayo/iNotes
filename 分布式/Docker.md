@@ -127,7 +127,8 @@ B. 常用docker镜像大全
 * `docker rm [containerId]` 删除一个容器(是容器不是镜像)  
 * `docker rmi [imageName]/[imageId]` 删除一个镜像  
 * `docker rmi -f [imageName]/[imageId]` 强制删除一个镜像,推荐不使用-f参数,如果用上面没有-f删除docker镜像时出现问题(可能是当前要删除的镜像依赖某个容器,可以使用上面的docker rm [containerId]删除该容器后重试)
-* `docker run ...` 运行一个镜像(注意和start区分)  
+* `docker run ...` 运行一个镜像(注意和start区分)
+  * `-e` 指定环境变量 //todo更多参数 
 * `docker stop [containerId]` 停止一个容器  
 * `docker start [containerId]` 启动一个容器  
 * `docker restart [containerId]` 重启一个容器  
