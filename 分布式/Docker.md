@@ -1,109 +1,13 @@
 # 目录
-1.基本环境搭建  
-2.docker基本知识介绍  
-  
+1.docker基本知识介绍  
+
 **附录:**  
 A.docker命令大全  
 B.常用docker镜像大全  
+C.Docker安装教程  
 
 
-## 1. 基本环境搭建  
-**目录:**  
-1.1 安装docker  
-1.2 安装JDK  
-
-### 1.1 安装docker  
-1.卸载系统之前的 docker
-```shell
-sudo yum remove docker \
-docker-client \
-docker-client-latest \
-docker-common \
-docker-latest \
-docker-latest-logrotate \
-docker-logrotate \
-docker-engine
-```
-
-2.安装Docker-CE
-```shell
-sudo yum install -y yum-utils \
-device-mapper-persistent-data \
-lvm2
-```
-
-3.设置docker-repo的yum位置
-```shell
-sudo yum-config-manager \
---add-repo \
-https://download.docker.com/linux/centos/docker-ce.repo
-```
-
-4.安装docker
-```shell
-sudo yum install docker-ce docker-ce-cli containerd.io
-```
-
-5.启动docker
-```shell
-sudo systemctl start docker
-```
-
-6.开机自启docker
-```shell
-sudo systemctl enable docker
-```
-
-7.配置阿里云镜像 **一共四条命令**  
-```shell
-sudo mkdir -p /etc/docker
-```
-```shell
-sudo tee /etc/docker/daemon.json <<-'EOF'
-{
-"registry-mirrors": ["https://82m9ar63.mirror.aliyuncs.com"]
-}
-EOF
-```
-```shell
-sudo systemctl daemon-reload
-```
-```shell
-sudo systemctl restart docker
-```
-
-### 1.2 安装JDK  
-**详情可以看附录B的安装及各种参数解释**    
-
-1.docker仓库[https://hub.docker.com/search?q=](https://hub.docker.com/search?q=)  
-
-2.拉取JDK17镜像  
-```shell
-docker pull openjdk:17
-```
-
-3.查看所有镜像  
-```shell
-docker images
-```
-![docker-images](resources/docker/1.png)  
-
-4.启动容器  
-```shell
-docker run --name openjdk17 \
--v /jdk/bin:
--d openjdk:17
-```
-
-5.进入容器  
-```shell
-docker exec -it bf80164 /bin/bash
-```
-bf80164是容器的id(不是镜像的id);后面的bin/bash是必须的  
-
-6.将
-
-## 2.docker基本知识介绍
+## 1.docker基本知识介绍
 **目录**:  
 1.容器应该是解决某个问题的功能单元，让容器保持单一用途才是正确的方式.如果一个容器中包含多个功能模块,则这个容器是不对的
 
@@ -112,6 +16,8 @@ bf80164是容器的id(不是镜像的id);后面的bin/bash是必须的
 ## 附录:  
 A. docker命令大全  
 B. 常用docker镜像大全  
+C. Docker安装教程  
+
 
 ### A. docker命令大全  
 1.[docker命令官方网站](//todo)  
@@ -505,6 +411,133 @@ xpack.security.transport.ssl:
 #### 6.Nginx
 1.拉取镜像  
 `docker pull nginx`  
-2.
+
+2.直接先启动(为了拷贝配置文件)  
+*<font color="#00FF00">提示</font>:有的时候docker挂载配置文件,启动容器后会提示找不到conf,这是因为这种镜像在启动的时候并没有同步配置文件;那么一种解决方案就是先启动一个容器,把容器中的配置文件拷贝出来,然后把该容器删掉;之后再启动一次并且设置挂载*  
+```shell
+docker run \
+-p 80:80 \
+--name nginx \
+-d nginx
+```
+
+3.拷贝文件  
+```shell
+mkdir {~/software/nginx,~/software/nginx/html,~/software/nginx/logs}
+# 把containerID替换为你的NGINX镜像id
+docker container cp [containerID]:/etc/nginx ~/software/nginx/conf/
+```
+
+4 停止容器删除容器  
+```shell
+docker stop [containerID]
+docker rm [containerID]
+```
+
+5 启动nginx  
+```shell
+docker run -p 9001:80 --name nginx \
+-v ~/software/nginx/html:/usr/share/nginx/html \
+-v ~/software/nginx/logs:/var/log/nginx \
+-v ~/software/nginx/conf:/etc/nginx \
+-d nginx
+```
+
+此时访问`LinuxIP:9001`就能够看到nginx的响应信息了  
 
 
+### C. Docker安装教程  
+**目录:**  
+1.1 安装docker  
+1.2 安装JDK  
+
+#### 1.1 安装docker  
+1.卸载系统之前的 docker
+```shell
+sudo yum remove docker \
+docker-client \
+docker-client-latest \
+docker-common \
+docker-latest \
+docker-latest-logrotate \
+docker-logrotate \
+docker-engine
+```
+
+2.安装Docker-CE
+```shell
+sudo yum install -y yum-utils \
+device-mapper-persistent-data \
+lvm2
+```
+
+3.设置docker-repo的yum位置
+```shell
+sudo yum-config-manager \
+--add-repo \
+https://download.docker.com/linux/centos/docker-ce.repo
+```
+
+4.安装docker
+```shell
+sudo yum install docker-ce docker-ce-cli containerd.io
+```
+
+5.启动docker
+```shell
+sudo systemctl start docker
+```
+
+6.开机自启docker
+```shell
+sudo systemctl enable docker
+```
+
+7.配置阿里云镜像 **一共四条命令**  
+```shell
+sudo mkdir -p /etc/docker
+```
+```shell
+sudo tee /etc/docker/daemon.json <<-'EOF'
+{
+"registry-mirrors": ["https://82m9ar63.mirror.aliyuncs.com"]
+}
+EOF
+```
+```shell
+sudo systemctl daemon-reload
+```
+```shell
+sudo systemctl restart docker
+```
+
+#### 1.2 安装JDK  
+**详情可以看附录B的安装及各种参数解释**    
+
+1.docker仓库[https://hub.docker.com/search?q=](https://hub.docker.com/search?q=)  
+
+2.拉取JDK17镜像  
+```shell
+docker pull openjdk:17
+```
+
+3.查看所有镜像  
+```shell
+docker images
+```
+![docker-images](resources/docker/1.png)  
+
+4.启动容器  
+```shell
+docker run --name openjdk17 \
+-v /jdk/bin:
+-d openjdk:17
+```
+
+5.进入容器  
+```shell
+docker exec -it bf80164 /bin/bash
+```
+bf80164是容器的id(不是镜像的id);后面的bin/bash是必须的  
+
+6.将
