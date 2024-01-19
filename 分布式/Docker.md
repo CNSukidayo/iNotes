@@ -7,9 +7,73 @@ B.常用docker镜像大全
 C.Docker安装教程  
 
 
-## 1.docker基本知识介绍
-**目录**:  
-1.容器应该是解决某个问题的功能单元，让容器保持单一用途才是正确的方式.如果一个容器中包含多个功能模块,则这个容器是不对的
+## 1.docker基本知识介绍  
+**目录:**  
+1.1 docker基本知识介绍  
+1.2 Docker三大件  
+1.3 Docker的虚悬镜像  
+
+
+### 1.1 docker基本知识介绍
+1.为什么出现docker  
+使用docker就是为了解决云端环境和本地环境不一致的问题,开发人员可以利用docker消除协作编码时<font color="#00FF00">"在我的机器上可以正常工作"</font>的问题  
+<font color="#00FF00">软件迁移时可以带环境迁移</font>  
+<font color="#00FF00">一次镜像处处运行</font>
+
+2.docker特点  
+2.1 容器应该是解决某个问题的功能单元，让容器保持单一用途才是正确的方式.如果一个容器中包含多个功能模块,则这个容器是不对的  
+2.2 docker最核心的功能是它的打包技术即<font color="#00FF00">容器镜像</font>  
+2.3 docker的核心是<font color="#FF00FF">进程隔离(name space)、资源管理(cgroup)、文件系统(mount namespace)</font>  
+2.4 容器内的应用进程复用宿主机的内核  
+2.5 便捷的扩缩容  
+
+
+3.容器与虚拟机有什么区别  
+下面这张图很重要
+![容器与虚拟机的区别](resources/docker/3.png)  
+* 传统虚拟机基于安装在主操作系统上的虚拟机管理系统(如VirtualBox和VMWare),创建虚拟机(<font color="#00FF00">虚拟出各种硬件</font>),在虚拟机上安装从操作系统,在从操作系统中安装部署各种应用  
+  * 传统虚拟机的主要缺点是:资源占用多、冗余步骤多、启动慢、性能消耗大
+		关于性能消耗大的解释:原本执行一条系统调用只需要从用户态切换到内核态,而现在在中间挡了一层虚拟机拦截,从而降低了性能
+* 容器将软件运行所需的所有资源打包到一个隔离的容器中,容器与虚拟机不同,不需要捆绑一整套操作系统,<font color="#00FF00">只需提供该容器运行所需的全部文件即可</font>  
+  * <font color="#FF00FF">容器内的应用进程复用宿主机的内核</font>
+  * 进程隔离、资源管理、文件系统
+  * 便捷的扩缩容
+
+4.docker的交互原理  
+docker启动时会创建一个守护线程用于接收用户的命令并管理docker容器;  
+![docker交互原理](resources/docker/4.png)  
+
+5.docker运行流程  
+Docker是一个C/S模式的架构,后端是一个松耦合架构,众多模块各司其职  
+Docker运行的基本流程为:  
+5.1 用户使用Docker Client与Docker Daemon建立通信,并发送请求给Docker Daemon  
+5.2 Docker Daemon作为Docker架构中的主体部分,首先提供Docker Server的功能使其可以接受Docker Client的请求  
+5.3 Docker Engine执行Docker内部的一些列工作,每一项工作都是以一个Job的形式存在  
+5.4 Job的运行过程中,当需要容器镜像时,则从Docker Register中下载镜像,并通过镜像管理驱动Graph Driver将下载镜像以Graph的形式存储  
+5.5 当需要为Docker创建网络环境时,通过网络管理驱动Network driver创建并配置<font color="#00FF00">Docker容器网络环境</font>  
+5.6 当需要限制Docker容器运行资源或执行用户指令等操作时,则通过Exec driver来完成  
+5.7 Libcontainer是一项独立的容器管理包,Network driver以及Exec driver都是通过Libcontainer来实现具体对容器进行的操作  
+
+![运行流程](resources/docker/5.png)  
+
+
+
+### 1.2 Docker三大件
+*提示:本章内容较为基础可以暂且略过*  
+Docker的三大件指的是镜像、容器、仓库  
+* 镜像:docker镜像是一个只读模板,<font color="#00FF00">一个镜像可以创建多个容器</font>;它包含应用程序的最小允许环境  
+* 容器:<font color="#00FF00">容器是镜像创建的运行实例</font>  
+* 仓库:仓库,集中存放镜像文件的场所;Docker仓库也分为<font color="#00FF00">公开仓库和私有仓库</font>两种形式;Docker官方仓库[Docker Hub](https://hub.docker.com/search?q=)  
+
+### 1.3 Docker的虚悬镜像
+<font color="#00FF00">镜像名称和镜像版本都是none的镜像,就是虚悬镜像</font>  
+![虚悬镜像](resources/docker/6.png)  
+碰到这种镜像把它删掉就行了  
+
+
+
+
+
 
 
 
@@ -20,30 +84,52 @@ C. Docker安装教程
 
 
 ### A. docker命令大全  
-1.[docker命令官方网站](//todo)  
-
+[docker命令官方网站](https://docs.docker.com/engine/reference/commandline/docker/)  
+#### 1.镜像相关  
 * `docker pull [image-name]:[version]` 拉取镜像  
-  解释:image-name是镜像名称;version是镜像版本  
+  * `image-name`(必填):镜像名称
+  * `version`(必填):镜像版本
 * `docker images` 查看所有镜像  
-* `docker ps -a` 查询运行的所有镜像  
-  解释:-a 代表所有的镜像(包括没有正在运行的镜像)
-* `docker exec -it [image-id] ` 进行一个镜像  
-  解释:image-id是容器的id(不是镜像的id;是docker ps结果的CONTAINER ID字段)  
+* `docker exec -it [image-id] ` 进入一个镜像  
+  * `image-id`(必填):image-id是容器的id(不是镜像的id;是docker ps结果的CONTAINER ID字段)
+* `docker rmi [imageName0]/[imageId0] [imageName1...]/[imageId1...]` 删除多个镜像
+  * `imageName`(必填):镜像名称,与imageId二选一
+  * `imageId`(必填):镜像ID,与imageName二选一
+* `docker rmi -f [imageName]/[imageId]` 强制删除一个镜像,推荐不使用-f参数,如果用上面没有-f删除docker镜像时出现问题(可能是当前要删除的镜像依赖某个容器,可以使用上面的docker rm [containerId]删除该容器后重试)
+  * `imageName`(必填):镜像名称,与imageId二选一
+  * `imageId`(必填):镜像ID,与imageName二选一
+* ~~`docker rmi -f $(docker images -qa)`~~ <font color="#00FF00">组合命令</font>;强制删除所有镜像,该命令不要使用
+  * `$(docker images -qa)` 这相当于一个表达式会将该命令执行的结果作为docker rmi -f命令的参数,docker images -qa的命令的意思是显示所有镜像的ID(不显示额外的信息)
+* `docker cp [hostPath] [containerId]:[containerPath]` 将宿主机的文件拷贝到容器中
+* `docker cp [containerId]:[containerPath] [hostPath]` 将容器中的内容拷贝到宿主机
+* `docker system df` 查看镜像占用磁盘空间的情况
+#### 2.容器相关  
+* `docker ps [-a]` 查询运行的所有镜像  
+  * `-a` 代表所有的镜像(包括没有正在运行的镜像)
 * `docker exec -it [containerId] /bin/bash` 进入一个容器  
 * `docker rm [containerId]` 删除一个容器(是容器不是镜像)  
-* `docker rmi [imageName]/[imageId]` 删除一个镜像  
-* `docker rmi -f [imageName]/[imageId]` 强制删除一个镜像,推荐不使用-f参数,如果用上面没有-f删除docker镜像时出现问题(可能是当前要删除的镜像依赖某个容器,可以使用上面的docker rm [containerId]删除该容器后重试)
 * `docker run ...` 运行一个镜像(注意和start区分)
   * `-e` 指定环境变量 //todo更多参数 
 * `docker stop [containerId]` 停止一个容器  
 * `docker start [containerId]` 启动一个容器  
 * `docker restart [containerId]` 重启一个容器  
 * `docker container update --mount type=bind,source=[hostPath],target=[containerPath] [containerId]` 挂载已经启动的容器目录(需要先将容器stop);source是宿主机的路径,target是容器内的路径.
-* `docker cp [hostPath] [containerId]:[containerPath]` 将宿主机的文件拷贝到容器中  
-* `docker cp [containerId]:[containerPath] [hostPath]` 将容器中的内容拷贝到宿主机
+
+#### 3.网络相关
 * `docker network ls` 查看docker所有的网络
 * `docker network rm [netWorkId]` 根据network的ID移除一个docker网络
 * `docker network create [netWordName]` 创建一个docker网络,网络名称为[netWordName];docker网络在搭建nacos集群的时候会用到
+
+#### 4.其它  
+* `docker version` 查看docker版本信息
+* `docker info` docke概要说明
+* `docker --help` docker帮助命令
+* `docker [command] --help` 查看docker某条命令的帮助
+* `sudo systemctl start docker` 启动docker
+* `sudo systemctl stop docker` 停止docker
+* `sudo systemctl restart docker` 重启docker
+* `sudo systemctl status docker` 查看docker状态
+* `sudo systemctl enable docker` 开机启动docker
 
 ### B. 常用docker镜像大全  
 **目录:**  
@@ -452,7 +538,16 @@ docker run -p 9001:80 --name nginx \
 1.2 安装JDK  
 
 #### 1.1 安装docker  
-1.卸载系统之前的 docker
+*提示:内核版本需要3.8以上,通过uname -r命令查看当前Linux的内核版本*  
+
+1.安装GCC  
+*提示:该步骤非必要*  
+```shell
+yum -y install gcc \
+yum -y install gcc-c++
+```
+
+2.卸载系统之前的 docker
 ```shell
 sudo yum remove docker \
 docker-client \
@@ -464,36 +559,36 @@ docker-logrotate \
 docker-engine
 ```
 
-2.安装Docker-CE
+3.安装Docker-CE
 ```shell
 sudo yum install -y yum-utils \
 device-mapper-persistent-data \
 lvm2
 ```
 
-3.设置docker-repo的yum位置
+4.设置docker-repo的yum位置(设置镜像仓库)
 ```shell
 sudo yum-config-manager \
 --add-repo \
 https://download.docker.com/linux/centos/docker-ce.repo
 ```
 
-4.安装docker
+5.安装docker引擎
 ```shell
 sudo yum install docker-ce docker-ce-cli containerd.io
 ```
 
-5.启动docker
+6.启动docker
 ```shell
 sudo systemctl start docker
 ```
 
-6.开机自启docker
+7.开机自启docker
 ```shell
 sudo systemctl enable docker
 ```
 
-7.配置阿里云镜像 **一共四条命令**  
+8.配置阿里云镜像 **一共四条命令**  
 ```shell
 sudo mkdir -p /etc/docker
 ```
@@ -510,6 +605,15 @@ sudo systemctl daemon-reload
 ```shell
 sudo systemctl restart docker
 ```
+
+9.卸载docker  
+```shell
+systemctl stop docker \
+yum remove docker-ce docker-ce-cli containerd.io \
+rm -rf /var/lib/docker \
+rm -rf /var/lib/containerd \
+```
+
 
 #### 1.2 安装JDK  
 **详情可以看附录B的安装及各种参数解释**    
