@@ -1,5 +1,6 @@
 # 目录
 1.docker基本知识介绍  
+2.docker镜像  
 
 **附录:**  
 A.docker命令大全  
@@ -12,6 +13,7 @@ C.Docker安装教程
 1.1 docker基本知识介绍  
 1.2 Docker三大件  
 1.3 Docker的虚悬镜像  
+1.4 Docker镜像  
 
 
 ### 1.1 docker基本知识介绍
@@ -61,7 +63,7 @@ Docker运行的基本流程为:
 ### 1.2 Docker三大件
 *提示:本章内容较为基础可以暂且略过*  
 Docker的三大件指的是镜像、容器、仓库  
-* 镜像:docker镜像是一个只读模板,<font color="#00FF00">一个镜像可以创建多个容器</font>;它包含应用程序的最小允许环境  
+* 镜像:docker镜像是一个只读模板,<font color="#00FF00">一个镜像可以创建多个容器</font>;它包含应用程序的<font color="#FF00FF">最小运行环境</font>  
 * 容器:<font color="#00FF00">容器是镜像创建的运行实例</font>  
 * 仓库:仓库,集中存放镜像文件的场所;Docker仓库也分为<font color="#00FF00">公开仓库和私有仓库</font>两种形式;Docker官方仓库[Docker Hub](https://hub.docker.com/search?q=)  
 
@@ -70,6 +72,185 @@ Docker的三大件指的是镜像、容器、仓库
 ![虚悬镜像](resources/docker/6.png)  
 碰到这种镜像把它删掉就行了  
 
+## 2.docker镜像
+**目录:**  
+2.1 docker镜像的基本概念介绍  
+2.2 Docker Commit  
+2.3 本地镜像发布到阿里云  
+2.4 搭建Dokcker私有仓库  
+2.5 容器数据卷  
+
+
+### 2.1 docker镜像的基本概念介绍
+1.UnionFS   
+UnionFS(联合文件系统)即AFS<font color="#00FF00">支持对文件系统的修改作为一次提交来一层层的叠加</font>,<font color="#FF00FF">同时可以将不同目录挂载到同一个虚拟文件系统下</font>.UnionFS是docker镜像的基础,镜像可以通过分层来进行继承,基于基础镜像可以制作各种具体的应用镜像  
+镜像的层都放置在/var/lib/docker/aufs/diff目录下,然后被联合挂载到/var/lib/docker/aufs/mnt中;从该结构可以看出容器的rootfs由三部分组成  
+![三层](resources/docker/7.png)  
+
+2.Docker镜像加载原理  
+Docker的镜像实际上是由一层层的文件系统组成的,这种层级的文件系统UnionFS  
+bootfs主要包含bootloader和kernel,bootloader主要是引导加载kernel,Linux刚启动时会加载bootfs文件系统,<font color="#00FF00">在docker镜像的最底层是引导文件系统bootfs</font>.这一层与Linux操作系统是一样的,包含boot加载器和内核.当boot加载完成之后整个内核都在内存中了,此时内存的使用权已由bootfs转交给内核,此时系统也会卸载bootfs  
+不同的Linux发行版本bootfs基本是一致的,rootfs可能会有差异(比如CentOS的根文件系统和Ubuntu的根文件系统就有差异);<font color="#00FF00">所以docker的根文件系统rootfs的底层也是基于bootfs的</font>  
+
+3.Docker镜像采用分层的好处  
+Docker镜像是一层层叠加最后利用UnionFS挂载到同一个目录下的结果,<font color="#00FF00">所以多个容器就可以共享一部分层、多个镜像也可以共享一部分层</font>,比如有多个镜像都从相同的base镜像构建而来,那么Docker Host只需要在磁盘上保存一份base镜像,同时内存中也只需加载一份base镜像,就可以为所有容器服务了  
+
+### 2.2 Docker Commit
+*提示:由于docker镜像只包含应用的最小运行环境,现在要通过docker commit的方式给容器添加vim命令的支持*  
+**首先先安装一个Ubuntu的镜像并启动,作为本次的实验环境;即为Ubuntu添加vim命令的支持**  
+1.运行`docker run -it ubuntu`拉取并运行最新的Ubuntu镜像并进入到容器  
+
+2.安装vim  
+运行`apt-get update` 更新apt安装工具  
+运行`apt-get -y install vim` 安装vim
+
+3.commit  
+使用commit命令提交容器使之成为一个新的<font color="#00FF00">镜像</font>;此时该镜像就具备了vim指令  
+运行`docker commit -m "vim add" -a "cnsukidayo" cea1b1d519dc cnsukidayo/iubuntu:1.3` 提交并创建一个新的镜像  
+*提示:多提一嘴,按照docker镜像的命令规范,镜像名称之前可以加上公司名称(包名),例如这里的包名就是cnsukidayo;可以看到很多镜像都采用了这种命名规范*  
+
+此时运行`docker images`就可以看到刚才提交的镜像了  
+
+4.启动并进入新创建的镜像  
+执行`docker run -it cnsukidayo/iubuntu:1.3`运行并进入刚才创建的镜像  
+此时可以发现vim命令确实可以使用  
+
+### 2.3 本地镜像发布到阿里云
+1.本地镜像发布到阿里云流程  
+![本地镜像发布到阿里云](resources/docker/8.png)  
+**注意:** 之前提到过docker仓库分为两种,一种是公共仓库例如Docker Hub、阿里云Docker Registry;另外一种就是私有库(类似Git Lab)
+
+2.阿里云镜像仓库注册流程  
+2.1 进入容器镜像服务  
+访问[阿里云](https://home.console.aliyun.com/home/dashboard/ProductAndService)进入控制台->选择容器镜像服务  
+![容器镜像服务](resources/docker/9.png)  
+
+2.2 配置镜像加速地址  
+![配置镜像加速地址](resources/docker/10.png)  
+可以使用开发者的个人镜像加速地址  
+
+3.推送镜像  
+3.1 个人中心  
+点击左侧实例列表=>个人实例  
+![个人中心](resources/docker/11.png)  
+
+3.2 创建命名空间  
+点击个人中心页面左侧的创建命令空间,然后在创建命名空间中创建一个命名空间  
+![创建命名空间](resources/docker/12.png)  
+
+3.3 创建镜像仓库  
+点击个人中心页面左侧的创建仓库镜像,然后为当前的Ubuntu镜像创建一个仓库;注意这里选择的命名空间就是刚才创建的命名空间  
+![创建镜像仓库](resources/docker/13.png)  
+接着在第二步代码源中选择本地仓库=>创建仓库镜像即可  
+
+3.4 运行阿里云提供的命令  
+创建好镜像仓库后在弹出的页面中有一个第三步"将镜像推送到Registry";重点关注这一步的三条命令  
+*提示:这里强烈建议使用自已的镜像加速地址*
+
+**登入阿里云**
+```shell
+# 登录阿里云镜像仓库;第一次需要输入密码
+docker login --username=cnsukidayo registry.cn-hangzhou.aliyuncs.com
+```
+
+**给镜像打标记**  
+```shell
+# ImageId是我们镜像的ID
+# registry.cn-hangzhou.aliyuncs.com/cnsukidayo/iubuntu这一段是远程仓库的地址
+# 镜像版本号是远程仓库的镜像版本
+docker tag [ImageId] registry.cn-hangzhou.aliyuncs.com/cnsukidayo/iubuntu:[镜像版本号]
+```
+![镜像打标记](resources/docker/14.png)  
+打完标记之后会出现一个新的镜像,镜像仓库为`registry.cn-hangzhou.aliyuncs.com/cnsukidayo/iubuntu`,版本号为1.3;所以其实这一步相当于以ImageId镜像创建一个新的镜像  
+但是这种说法又不准确,因为<font color="#00FF00">新创建的这个镜像的ID和老镜像的ID是一致的</font>
+
+**推送镜像**  
+```shell
+# 推送镜像;把刚才创建的镜像推送到阿里云,所以其实这一步和我们最开始ImageId指定的镜像没什么关系了已经
+docker push registry.cn-hangzhou.aliyuncs.com/cnsukidayo/iubuntu:[镜像版本号]
+```
+
+推送成功之后就可以在网页上看到刚才推送的镜像了  
+![镜像](resources/docker/15.png)  
+
+4.拉取镜像  
+在刚才iubuntu镜像仓库中还有一个第二步"从Registry中拉取镜像"  
+```shell
+docker pull registry.cn-hangzhou.aliyuncs.com/cnsukidayo/iubuntu:[镜像版本号]
+```
+此时运行该命令就可以从阿里云上拉取刚才推送的镜像了  
+
+### 2.4 搭建Dokcker私有仓库
+1.Docker Register  
+Docker Register是docker官方提供的私有Docker仓库的平台(类似Git Lab)  
+
+2.创建registry目录  
+```shell
+mkdir ~/software/registry
+```
+
+3.运行docker register容器  
+```shell
+docker run \
+-p 5000:5000 \
+-v ~/registry:/tmp/registry \
+--privileged=true \
+-d registry
+```
+
+4.查询本地私服库的所有镜像  
+<font color="#00FF00">docker registry是以Restful风格进行交互的</font>  
+```shell
+# 查询registry仓库中的所有镜像 IP地址和端口号要对应宿主机
+curl -XGET http://192.168.230.128:5000/v2/_catalog
+```
+
+5.给镜像打TAG标记  
+*提示:这里还是提交cnsukidayo/iubuntu:1.3这个镜像*  
+```shell
+# 给镜像打TAG标记;IP地址和端口号要对应宿主机
+docker tag [ImageId] [remoteAddress]/[imageName]:[imageVersion]
+# 例如:
+docker tag [ImageId] 192.168.230.128:5000/cnsukidayo/iubuntu:1.3
+```
+所以其实这里的TAG也可以理解为<font color="#FF00FF">关联远程仓库</font>,这里可以和之前发布到阿里云打TAG标记联系起来看;  
+值得注意的是仓库地址是由<font color="#00FF00">远程地址+镜像名称</font>(镜像名称也称为是仓库地址,这里叫法有点乱但能明白意思就行)组成的  
+
+6.修改配置文件使registry支持http  
+*提示:默认情况下registry是不支持http的,所以现在要修改/etc/docker/daemon.json配置文件使它支持*  
+```json
+{
+"registry-mirrors": ["https://xxxxx.mirror.aliyuncs.com"],
+"insecure-registries":["192.168.230.128:5000"]
+}
+```
+在insecure-registries里面填上私服的IP和端口即可,这里的话就是宿主机  
+
+7.重启docker  
+```shell
+sudo systemctl daemon-reload
+sudo systemctl restart docker
+```
+重启docker后记得重启registry私服  
+
+8.推送镜像到registry私服  
+```shell
+docker push 192.168.230.128:5000/cnsukidayo/iubuntu:[镜像版本号]
+```
+![推送到私服](resources/docker/16.png)  
+
+9.再次查询私有仓库所有镜像  
+返回如下结果:  
+```json
+{"repositories":["cnsukidayo/iubuntu"]}
+```
+
+10.拉取镜像  
+此时就可以从私服库拉取镜像了,这里不再介绍了  
+
+### 2.5 容器数据卷
+**目录:**  
+2.5.1 
 
 
 
@@ -85,6 +266,7 @@ C. Docker安装教程
 
 ### A. docker命令大全  
 [docker命令官方网站](https://docs.docker.com/engine/reference/commandline/docker/)  
+
 #### 1.镜像相关  
 * `docker pull [image-name]:[version]` 拉取镜像  
   * `image-name`(必填):镜像名称
@@ -92,28 +274,87 @@ C. Docker安装教程
 * `docker images` 查看所有镜像  
 * `docker exec -it [image-id] ` 进入一个镜像  
   * `image-id`(必填):image-id是容器的id(不是镜像的id;是docker ps结果的CONTAINER ID字段)
-* `docker rmi [imageName0]/[imageId0] [imageName1...]/[imageId1...]` 删除多个镜像
+* `docker rmi [imageName0]:[imageTag0]/[imageId0] [imageName1...]:[imageTag1...]/[imageId1...]` 删除多个镜像
   * `imageName`(必填):镜像名称,与imageId二选一
+  * `imageTag`(必填):镜像的TAG,和imageName一起使用
   * `imageId`(必填):镜像ID,与imageName二选一
+	注意有的时候如果使用docker tag给镜像打标签,<font color="#00FF00">则打完标签后的镜像ID是不变的</font>,此时就会出现多个镜像ID相同的镜像,此时使用镜像ID删除镜像就不好使了;<font color="#FF00FF">此时只能通过镜像名称+TAG的方式进行删除</font>
 * `docker rmi -f [imageName]/[imageId]` 强制删除一个镜像,推荐不使用-f参数,如果用上面没有-f删除docker镜像时出现问题(可能是当前要删除的镜像依赖某个容器,可以使用上面的docker rm [containerId]删除该容器后重试)
   * `imageName`(必填):镜像名称,与imageId二选一
   * `imageId`(必填):镜像ID,与imageName二选一
 * ~~`docker rmi -f $(docker images -qa)`~~ <font color="#00FF00">组合命令</font>;强制删除所有镜像,该命令不要使用
   * `$(docker images -qa)` 这相当于一个表达式会将该命令执行的结果作为docker rmi -f命令的参数,docker images -qa的命令的意思是显示所有镜像的ID(不显示额外的信息)
-* `docker cp [hostPath] [containerId]:[containerPath]` 将宿主机的文件拷贝到容器中
-* `docker cp [containerId]:[containerPath] [hostPath]` 将容器中的内容拷贝到宿主机
 * `docker system df` 查看镜像占用磁盘空间的情况
+
 #### 2.容器相关  
-* `docker ps [-a]` 查询运行的所有镜像  
-  * `-a` 代表所有的镜像(包括没有正在运行的镜像)
+* `docker ps [-a] [-l] [-n [number] -q]` 查询运行的所有镜像
+  * `-a`:代表所有的镜像(包括没有正在运行的镜像)
+  * `-l`:显示最近创建的容器
+  * `-n [number]`:显示最近创建的number个容器
+  * `-q`:静默模式,只显示容器ID(不显示额外的信息)
 * `docker exec -it [containerId] /bin/bash` 进入一个容器  
-* `docker rm [containerId]` 删除一个容器(是容器不是镜像)  
-* `docker run ...` 运行一个镜像(注意和start区分)
-  * `-e` 指定环境变量 //todo更多参数 
+  注意:/bin/bash也可以是/bin/sh、bash
+* `docker attach [containerId]` 进入一个容器;这种方式进入容器用exit退出容器时会导致容器停止
+* `docker rm [containerId] [-f]` 删除一个容器(是容器不是镜像)  
+  * `-f`:强制删除
+* `docker run [--name=[containerName]] [--privileged] [-d] [-p masterPort:containerPort] [-v [hostPath]:[containerPaht]:[mode(default=rw)]] [-it bin/bash] [command] [imageName]:[imageVersion] ` 运行一个镜像(注意和start区分)
+  * `imageName`(必填):镜像名称
+  * `imageVersion`(必填):镜像版本
+  * `--privileged`(必填):加强挂载权限,推荐使用以后就带上该参数就行
+  - - -
+  * `-e` 指定环境变量
+  * `--name [containerName]`:将容器取名为containerName
+  * `-d`:以后台运行方式运行容器并返回容器ID;与`-it`互斥使用
+  * `-p masterPort:containerPort`:将容器的containerPort端口映射到宿主机的masterPort
+  * `-it  bin/bash`:以交互模式运行容器;它与<font color="#00FF00">docker exec -it [containerId] /bin/bash</font>命令的区别在于,docker exec是容器已经启动的情况下进入容器
+  * `-v [hostPath]:[containerPaht]:[mode(default=rw)]`  挂载容器文件路径到本机;将containerPaht(容器)路径的文件挂载到hostPath(主机)
+    * `mode`:容器读写挂载文件的模式;有rw和ro两种模式
+      * `rw`(默认):容器内部可以读写挂载的目录
+      * `ro`:容器内部只能读取挂载的目录
+  * `command`:启动参数
+  * 退出容器的时候有两种退出方式,<font color="#00FF00">一种是使用exit直接退出,另一种是使用Ctrl+p+q</font>  
+  	<font color="#FF00FF">如果是利用docker run命令进入的容器,则exit的退出方式会连带将容器停止</font>  
+		如果是docker exec -it的方式进入容器,则可以随意退出容器,容器不会停止
 * `docker stop [containerId]` 停止一个容器  
 * `docker start [containerId]` 启动一个容器  
 * `docker restart [containerId]` 重启一个容器  
+* `docker kill [containerId]` 强制停止一个容器
 * `docker container update --mount type=bind,source=[hostPath],target=[containerPath] [containerId]` 挂载已经启动的容器目录(需要先将容器stop);source是宿主机的路径,target是容器内的路径.
+* `docker cp [hostPath] [containerId]:[containerPath]` 将宿主机的文件拷贝到容器中
+* `docker cp [containerId]:[containerPath] [hostPath]` 将容器中的内容拷贝到宿主机
+* `docker logs [containerId]` 查看容器启动的日志
+* `docker top [containerId]` 监控容器内运行的进程情况
+* `docker inspect [containerId]` 查看容器的内部细节;该命令会以Json串返回容器的详情情况
+  - - -
+	* "Mounts":容器挂载情况
+* `docker export [containerId] > [fileName].tar` 
+  将整个容器导出为一个tar归档文件;采用这种导出方式,可以保留在容器内部修改的文件  
+	这个命令就相当于一个压缩
+	* `containerId`(必填):容器ID
+	* `fileName`(必填):导出的文件名
+* `cat [fileName].tar | docker import - [imageName]:[imageVersion]` 导入一个镜像
+  以fileName.tar对应的容器备份文件创建一个新的镜像(注意是镜像),镜像名称为imageName,版本为imageVersion
+	* `fileName`(必填):要导入的镜像压缩包
+	* `imageName`(必填):镜像名称,该名称自拟
+	* `imageVersion`(必填):镜像版本,该版本自拟
+
+#### 3.版本控制相关  
+* `docker commit -m "[commitMessage]" -a "[author]" [containerId] [targetImageName]:[targetImageVersion]` 提交containerId对应的容器并创建一个新的镜像
+  * `commitMessage`(必填):提交的信息
+  * `author`(必填):作者
+  * `containerId`(必填):<font color="#00FF00">commit命令是基于容器的</font>;将该容器提交创建一个新的镜像
+  * `targetImageName`(必填):创建的新镜像的名称
+  * `targetImageVersion`(必填):创建的新镜像的版本
+* `docker tag [imageId] [remoteAddress]/[imageName]:[imageVersion]` 给某个镜像打标签
+	详情见:2.3 本地镜像发布到阿里云  
+	**注意:因为是给镜像打标签,所以打完标签前后镜像的ID是不变的,所以此时就会存在多个镜像ID相同的镜像,可以通过docker images查看所有镜像,包括打标签的镜像**
+  * `ImageId`(必填):镜像的id
+  * `remoteAddress`(必填):镜像的远程地址,这个值一般都会给出
+  * `[imageName]:[imageVersion]`(必填):镜像的名称和版本;自已拟定
+* `docker push [remoteAddress]/[imageName]:[imageVersion]` 发布镜像
+* `docker pull [remoteAddress]/[image-name]:[version]` 拉取镜像
+  所以之前拉取镜像的时候理论上是要填写`remoteAddress`远程地址的,<font color="#00FF00">没有填写意味着默认从docker官方仓库拉取</font>
+
 
 #### 3.网络相关
 * `docker network ls` 查看docker所有的网络
@@ -605,6 +846,8 @@ sudo systemctl daemon-reload
 ```shell
 sudo systemctl restart docker
 ```
+
+**提示:** 这里的镜像加速地址可以配置成个人的镜像加速地址,详情见2.3 本地镜像发布到阿里云=>2.2 配置镜像加速地址
 
 9.卸载docker  
 ```shell
