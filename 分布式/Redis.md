@@ -1217,7 +1217,7 @@ master&slave的配置(一共6台都是该配置,端口号和对应的内容可�
 例如:  
 `redis-cli -a 111111 --cluster create --cluster-replicas 1 192.168.111.175:6381 192.168.111.175:6382 192.168.111.176:6383`  
 **注意:**  
-该命令并不是要连接到redis服务器,仅仅是启动集群关系;所以该命令执行完毕之后并不会连接到redis,会直接退出redis;回到linux控制台
+该命令并不是要连接到redis服务器,仅仅是启动集群关系;所以该命令执行完毕之后并不会连接到redis,会直接退出redis;回到linux控制台;<font color="#00FF00">相当于redis客户端连接了服务器然后配置了一下集群信息就退出了</font>
 
 2.启动成功之后打印日志  
 ![打印日志](resources/redis/42.png)  
@@ -1381,8 +1381,7 @@ Redis集群不保证强一致性,这意味着在特定的条件下,Redis集群�
 * `slavePort`:slave的port
 * `masterIP`:要被同步的主masterIP
 * `masterPort`:要被同步的主masterPort
-* `masterID`:要被同步的主masterID(注意填写的是ID,例如这里master4的ID是<font color="#00FF00">4feb6a7ee0ed2b39ff86474cf4189ab2a554a40f</font>
-)  
+* `masterID`:要被同步的主masterID(注意填写的是ID,例如这里master4的ID是<font color="#00FF00">4feb6a7ee0ed2b39ff86474cf4189ab2a554a40f</font>)    
 
 此时再查看集群节点状态,发现slave也已经挂载到master上  
 
@@ -5561,7 +5560,7 @@ public class RedisDistributedLock implements Lock {
 指在一个分布式系统中,一致性(Consistency)、可用性(Availability)、分区容错性(Partition tolerance);要么是AP、要么CP、要么AC;但是不存在ACP  
 * 一致性:在分布式系统中的所有数据备份,在同一时刻是否同样的值,即写操作之后的读操作,必须返回该值.(分为弱一致性、强一致性和最终一致性)  
 * 可用性:在集群中一部分节点故障后,集群整体是否还能响应客户端的读写请求
-* 分区容忍性:以实际效果而言,分区相当于对通信的时限要求.系统如果不能在时限内达成数据一致性,就意味着发生了分区的情况,必须就当前操作在C和A之间做出选择
+* 分区容忍性:以实际效果而言,分区相当于对通信的时限要求.系统如果不能在时限内达成数据一致性,就意味着发生了分区的情况,必须就当前操作在C和A之间做出选择;分区容错性是分布式系统必须要保证的,<font color="#00FF00">所以CAP实际上只要关注是AP还是CP</font>
 
 **各大组件的CAP情况:**  
 * Redis集群是AP:  

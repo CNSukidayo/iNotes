@@ -1,6 +1,7 @@
 # 目录
 1.docker基本知识介绍  
 2.docker镜像  
+3.DockerFile  
 
 **附录:**  
 A.docker命令大全  
@@ -68,9 +69,24 @@ Docker的三大件指的是镜像、容器、仓库
 * 仓库:仓库,集中存放镜像文件的场所;Docker仓库也分为<font color="#00FF00">公开仓库和私有仓库</font>两种形式;Docker官方仓库[Docker Hub](https://hub.docker.com/search?q=)  
 
 ### 1.3 Docker的虚悬镜像
-<font color="#00FF00">镜像名称和镜像版本都是none的镜像,就是虚悬镜像</font>  
+<font color="#00FF00">镜像名称和镜像版本都是none的镜像,就是虚悬镜像(dangling image)</font>  
 ![虚悬镜像](resources/docker/6.png)  
 碰到这种镜像把它删掉就行了  
+
+1.使用Dockerfile编写一个虚悬镜像  
+```dockerfile
+FROM ubuntu
+CMD echo 'action is success'
+```
+
+2.构建Dockerfile  
+执行`docker build .`  
+
+3.查看所有镜像  
+此时再次执行`docker images`就可以看到一个虚悬镜像了  
+
+4.删除虚悬镜像  
+执行`docker image prune`
 
 ## 2.docker镜像
 **目录:**  
@@ -78,8 +94,6 @@ Docker的三大件指的是镜像、容器、仓库
 2.2 Docker Commit  
 2.3 本地镜像发布到阿里云  
 2.4 搭建Dokcker私有仓库  
-2.5 容器数据卷  
-
 
 ### 2.1 docker镜像的基本概念介绍
 1.UnionFS   
@@ -248,9 +262,170 @@ docker push 192.168.230.128:5000/cnsukidayo/iubuntu:[镜像版本号]
 10.拉取镜像  
 此时就可以从私服库拉取镜像了,这里不再介绍了  
 
-### 2.5 容器数据卷
+## 3.DockerFile
 **目录:**  
-2.5.1 
+3.1 DockerFile基本介绍  
+3.2 DockerFile常用指令介绍  
+3.3 使用DockerFile增强centos  
+3.4 将微服务工程制作为docker镜像  
+
+
+
+### 3.1 DockerFile基本介绍
+DockerFile是用来构建Docker镜像的文本文件,是由一条条构建镜像所需的指令和参数构成的脚本  
+
+1.DockerFile与commit  
+如果要对镜像进行增强可以使用commit来实现,但每次新增一些内容的时候都需要commit会显得十分麻烦,因为每次commit之后都是一个新的镜像  
+<font color="#00FF00">使用DockerFile就可以一次性列出所有本镜像需要的运行环境</font>  
+![关系](resources/docker/24.png)  
+
+2.官网  
+[DockerFile](https://docs.docker.com/engine/reference/builder/)
+
+3.DockerFile构建三步走  
+3.1 编写DockerFile  
+3.2 使用docker build构建镜像  
+3.3 docker run运行镜像  
+
+4.DockerFile编写基础知识  
+* 每条DockerFile指令都必须全大写,并且至少要带一个参数
+* 指令按照从上到下顺序执行
+* #表示注释
+* 每条指令都会创建一个新的镜像层并对镜像进行提交
+
+5.Docker执行DockerFile的大致流程  
+*提示:其实DockerFile中指令的执行就类似commit操作,每个指令也都是基于上一个创建的<font color="#00FF00">容器</font>来生成镜像的;因为commit只能对容器操作*  
+
+5.1 docker从基础镜像运行一个容器  
+5.2 执行一条指令并对容器做出修改  
+5.3 执行类似docker commit的操作提交一个新的镜像层  
+5.4 docker再基于刚提交的镜像运行一个新的容器  
+5.5 执行dockerfile中的下一条指令知道所有指令都执行完成  
+
+
+### 3.2 DockerFile常用指令介绍
+
+* `FROM`
+  指定基础镜像,当前新镜像是基于哪个镜像的,指定一个已存在的镜像作为模板,<font color="#00FF00">第一条指令必须是from</font>
+* `MAINTAINER`
+  镜像维护者的姓名和邮箱地址
+* `RUN [shell]`
+  * `shell`(必填):Linux脚本
+  运行Linux的shell命令,该命令在docker build的时候运行  
+  例如:之前想要为镜像安装vim工具就可以使用RUN命令来完成  
+  `RUN apt-get -y install vim`
+  `RUN ["apt-get","-y","install","vim"]` 这种形式等价于上面的方式,效果是一样的但是有点麻烦,所以这种形式的RUN命令不推荐
+* `EXPOSE`
+  设置当前容器对外暴露的端口
+* `WORKDIR`
+  指定一个目录,当容器运行后使用docker exec进入容器后终端进入的工作目录,一个落脚点  
+  比如进入redis容器时默认的路径就在/data目录下  
+* `USER`
+  指定该镜像使用什么用户去执行,如果都不指定默认就是root
+* `ENV [environmentKey] [environmentValue]`  
+  用来在构建镜像过程中设置环境变量,这个环境变量在后续的任何RUN指令中使用;通过<font color="#00FF00">${environmentKey}</font>来引用
+  **<font color="#FF00FF">这里的环境变量就是我们平常说的系统环境变量</font>**  
+  * `environmentKey`:环境变量的key
+  * `environmentValue`:环境变量的value
+* `VOLUME`
+  相当于容器启动时的-v参数,用来指定宿主机与容器内文件的映射  
+* `ADD`
+  将宿主机下的文件拷贝进镜像且会自动处理URL和解压tar压缩包
+* `COPY [src] [dest]`
+  * `src`:源路径
+  * `dest`:目标路径
+  类似ADD命令,拷贝宿主机文件和目录到镜像中
+* `ENTRYPOINT`  
+  类似CMD也是用于指定容器启动时要运行的命令  
+  <font color="#00FF00">但是ENTRYPOINT命令不会被docker run后面的[command]命令覆盖;而且这些命令行参数会当做参数传送给ENTRYPOINT指令指定的程序</font>  
+  <font color="#FF00FF">  一般ENTRYPOINT可以和CMD一起使用,并且ENTRYPOINT都是卸载CMD命令之前的;并且当这两个命令连用时CMD命令的含义会发生变化</font>
+  例子:  
+  假设已经通过DockerFile构建如下nginx:test镜像  
+  ```dockerfile
+  FROM nginx
+  ENTRYPOINT ["nginx","-c"] # 定参
+  CMD ["/etc/nginx/nginx.conf"] # 变参 
+  ```
+  当ENTRYPOINT后面根上CMD命令时,<font color="#00FF00">CMD相当于不再是一个命令而是进行传参</font>,将参数传递给ENTRYPOINT  
+  例如:
+  * docker运行 `docker run nginx:test`
+    实际运行结果为:docker run nginx:test -c /etc/nginx/nginx.conf
+  * docker运行 `docker run nginx:test /etc/nginx/`<font color="#00FF00">new.conf</font>
+    实际运行结果为:docker run nginx:test -c /etc/nginx/<font color="#00FF00">new.conf</font>
+* `CMD [shell]`
+  <font color="#FF00FF">容器启动后要执行的命令,CMD命令不在build阶段执行</font>;CMD命令一般作为DockerFile的最后一条指令;DockerFile中可以有多个CMD命令,但只有最后一个会生效  
+  并且CMD命令的参数会被`docker run ... [command]`容器启动时附带的`command`参数覆盖;这个可以参考之前docker run的命令
+  例如容器最后一行的运行命令:CMD echo Hello  
+  docker启动的命令是:docker run ... World  
+  则最终会输出World,<font color="#00FF00">注意echo命令本身是不会受影响的</font>,因为影响的只是shell命令的参数
+  * `shell`(必填):shell命令
+
+### 3.3 使用DockerFile增强centos
+1.需求梳理  
+使用DockerFile构建出一个具有vim+ifconfig+jdk8的centos  
+  
+2.创建目录mkdir ~/software/centosPlus  
+
+3.下载JDK8  
+来到[https://www.oracle.com/java/technologies/downloads/#java8](https://www.oracle.com/java/technologies/downloads/#java8)网站找到x64 Compressed Archive后面对应的JDK8的包  
+见该包导入到虚拟机中的~/software/centosPlus目录下  
+这里下载的JDK8的名称为<font color="#00FF00">jdk-8u401-linux-x64.tar.gz</font>
+
+4.编写Dockerfile  
+在centosPlus目录下创建Dockerfile并编写如下内容  
+```dockerfile
+#基础镜像，继承于centos
+FROM centos:centos7
+#指定作者
+MAINTAINER xxx<xxx@xxx.com>
+#指定目录
+ENV MYPATH /usr/local
+#进入命令
+WORKDIR $MYPATH
+#安装vim编辑器
+RUN yum -y install vim
+#按装ifconfig命令查看网络IP
+RUN yum -y install net-tools
+#安装java8及lib库
+#gcc的一个加强安装包
+RUN yum -y install glibc.i686
+#创建一个目录
+RUN mkdir /usr/local/java
+#ADD是相对路径jar,把jdk-8u171-linux-x64.tar.gz添加到容器中,安装包必须要和Dockerile文件在同一位置
+ADD jdk-8u401-linux-x64.tar.gz /usr/local/java/
+#配置java环境变量 
+ENV JAVA_HOME /usr/local/java/jdk1.8.0_171
+ENV JRE_HOME $JAVA_HOME/jre
+ENV CLASSPATH $JAVA_HOME/lib/dt.jar:$JAVA_HOME/lib/tools.jar:$JRE_HOME/lib:$CLASSPATH
+ENV PATH $JAVA_HOME/bin:$PATH
+
+EXPOSE 80
+
+CMD echo $MYPATH
+CMD echo "success-------ok"
+CMD /bin/bash
+```
+*困惑:这里有多个CMD,根据之前的知识这里的前两个CMD并不会执行成功,不太清楚为什么要这么编写*
+*提示:这里要对应把Java的版本改成对应的,<font color="#00FF00">包括环境变量</font>*
+
+
+5.构建镜像  
+执行
+```shell
+# 格式
+docker build -t [newImageName]:[newImageVersion] [path]
+# 例子
+docker build -t centosplus:1.0 .
+```
+* newImageName:构建的镜像名称
+* newImageVersion:构建的镜像的版本
+* path:Dockerfile所在的目录,因为一个目录只能存在一个Dockerfile所以Docker会去改路径下面找对应的Dockerfile文件进行构建
+
+### 3.4 将微服务工程制作为docker镜像
+
+
+
+
 
 
 
@@ -297,12 +472,12 @@ C. Docker安装教程
 * `docker attach [containerId]` 进入一个容器;这种方式进入容器用exit退出容器时会导致容器停止
 * `docker rm [containerId] [-f]` 删除一个容器(是容器不是镜像)  
   * `-f`:强制删除
-* `docker run [--name=[containerName]] [--privileged] [-d] [-p masterPort:containerPort] [-v [hostPath]:[containerPaht]:[mode(default=rw)]] [-it bin/bash] [command] [imageName]:[imageVersion] ` 运行一个镜像(注意和start区分)
+* `docker run [--name=[containerName]] [--privileged] [-d] [-p masterPort:containerPort] [-v [hostPath]:[containerPaht]:[mode(default=rw)]] [-e environmentKey=environmentValue] [-it bin/bash] [command] [imageName]:[imageVersion] ` 运行一个镜像(注意和start区分)
   * `imageName`(必填):镜像名称
   * `imageVersion`(必填):镜像版本
   * `--privileged`(必填):加强挂载权限,推荐使用以后就带上该参数就行
   - - -
-  * `-e` 指定环境变量
+  * `-e environmentKey=environmentValue` 指定环境变量
   * `--name [containerName]`:将容器取名为containerName
   * `-d`:以后台运行方式运行容器并返回容器ID;与`-it`互斥使用
   * `-p masterPort:containerPort`:将容器的containerPort端口映射到宿主机的masterPort
@@ -310,11 +485,13 @@ C. Docker安装教程
   * `-v [hostPath]:[containerPaht]:[mode(default=rw)]`  挂载容器文件路径到本机;将containerPaht(容器)路径的文件挂载到hostPath(主机)
     * `mode`:容器读写挂载文件的模式;有rw和ro两种模式
       * `rw`(默认):容器内部可以读写挂载的目录
-      * `ro`:容器内部只能读取挂载的目录
+      * `ro`:容器内部只能读取挂载的目录,<font color="#00FF00">主机不受限制</font>
   * `command`:启动参数
   * 退出容器的时候有两种退出方式,<font color="#00FF00">一种是使用exit直接退出,另一种是使用Ctrl+p+q</font>  
   	<font color="#FF00FF">如果是利用docker run命令进入的容器,则exit的退出方式会连带将容器停止</font>  
 		如果是docker exec -it的方式进入容器,则可以随意退出容器,容器不会停止
+  - - -
+  如果后续想修改环境变量可以进入容器使用`env`命令查看所有的环境变量;使用`export [environmentKey]=[environmentvalue]`命令修改环境变量
 * `docker stop [containerId]` 停止一个容器  
 * `docker start [containerId]` 启动一个容器  
 * `docker restart [containerId]` 重启一个容器  
@@ -326,7 +503,10 @@ C. Docker安装教程
 * `docker top [containerId]` 监控容器内运行的进程情况
 * `docker inspect [containerId]` 查看容器的内部细节;该命令会以Json串返回容器的详情情况
   - - -
-	* "Mounts":容器挂载情况
+	* "Mounts":容器挂载情况  
+	* "Config:"  
+    	* "Cmd":启动附加参数
+
 * `docker export [containerId] > [fileName].tar` 
   将整个容器导出为一个tar归档文件;采用这种导出方式,可以保留在容器内部修改的文件  
 	这个命令就相当于一个压缩
@@ -354,6 +534,12 @@ C. Docker安装教程
 * `docker push [remoteAddress]/[imageName]:[imageVersion]` 发布镜像
 * `docker pull [remoteAddress]/[image-name]:[version]` 拉取镜像
   所以之前拉取镜像的时候理论上是要填写`remoteAddress`远程地址的,<font color="#00FF00">没有填写意味着默认从docker官方仓库拉取</font>
+* `docker build -t [newImageName]:[newImageVersion] [path]` 通过Dockerfile构建Docker镜像
+  * `newImageName`(必填):构建的镜像名称
+  * `newImageVersion`(必填):构建的镜像的版本
+  * `path`(必填):Dockerfile所在的目录,因为一个目录只能存在一个Dockerfile所以Docker会去改路径下面找对应的Dockerfile文件进行构建
+
+
 
 
 #### 3.网络相关
@@ -383,6 +569,11 @@ C. Docker安装教程
 
 
 #### 1.MySQL安装  
+**目录:**  
+1.1 MySQL单机安装  
+1.2 MySQL主从复制安装  
+
+##### 1.1 MySQL单机安装
 1.下载镜像  
 `docker pull mysql:8.0.30`  
 
@@ -410,8 +601,143 @@ docker run -p 7901:3306 --name mysql8.0 \
 
 4.注意可能需要删除用户  
 
+##### 1.2 MySQL主从复制安装
+1.需求梳理  
+有两台MySQL,主服务器3307从服务器3308  
+主服务器插入一条数据,从服务器相应收到一条数据  
+
+2.创建配置文件  
+先创建配置文件目录:  
+```shell
+mkdir -p {~/software/mysql-master/conf,~/software/mysql-slave/conf}
+```
+
+在~/software/mysql-master/conf目录下创建my.cnf配置文件  
+```shell
+[mysqld]
+## 设置service_id,同一局域网内需要唯一
+server_id=101
+## 指定不需要同步的数据库
+binlog-ignore-db=mysql
+## 开启二进制日志功能,日志名称为mall-mysql-bin
+log-bin=mall-mysql-bin
+## 设置二进制日志使用内存大小(事务)
+binlog_cache_size=1M
+## 设置使用的二进制日志格式(mixed,statement,row)
+binlog_format=mixed
+## 二进制日志过期清理时间.默认值为0表示不自动清理
+expire_logs_days=7
+## 跳过主从复制中遇到的所有错误或指定类型的错误,避免slave端复制中断
+## 如:1062错误是指一些主键错误,1032错误是因为主从数据库数据不一致
+slave_skip_errors=1062
+```
+
+在~/software/mysql-slave/conf目录下创建my.cnf配置文件
+```shell
+[mysqld]
+## 设置service_id,同一局域网内需要唯一
+server_id=102
+## 指定不需要同步的数据库
+binlog-ignore-db=mysql
+## 开启二进制日志功能,日志名称为mall-mysql-bin
+log-bin=mall-mysql-bin
+## 设置二进制日志使用内存大小(事务)
+binlog_cache_size=1M
+## 设置使用的二进制日志格式(mixed,statement,row)
+binlog_format=mixed
+## 二进制日志过期清理时间.默认值为0表示不自动清理
+expire_logs_days=7
+## 跳过主从复制中遇到的所有错误或指定类型的错误,避免slave端复制中断
+## 如:1062错误是指一些主键错误,1032错误是因为主从数据库数据不一致
+slave_skip_errors=1062
+## relay_log配置中继日志
+relay_log=mall-mysql-relay-bin
+## log_slave_updates表示slave将复制事件写进自已的二进制日志
+log_slave_updates=1
+## slave设置为只读(具有super权限的用户除外)
+read_only=1
+```
+
+3.运行Master容器  
+```shell
+docker run -p 3307:3306 --name mysql-master \
+-v ~/software/mysql-master/log:/var/log/mysql \
+-v ~/software/mysql-master/data:/var/lib/mysql \
+-v ~/software/mysql-master/conf:/etc/mysql/conf.d \
+-e MYSQL_ROOT_PASSWORD=root \
+-d mysql:8.0.30
+```
+
+4.在master数据库中创建用户  
+创建一个slave用户,用于从master数据库中读取数据;相当于一种权限的约束  
+```shell
+# 创建slave用户
+create user 'slave'@'%' IDENTIFIED BY '123456'
+# 给slave用户分配权限
+grant replication slave,replication client on *.* to 'slave'@'%'
+```
+
+5.运行slave容器  
+```shell
+docker run -p 3308:3306 --name mysql-slave \
+-v ~/software/mysql-slave/log:/var/log/mysql \
+-v ~/software/mysql-slave/data:/var/lib/mysql \
+-v ~/software/mysql-slave/conf:/etc/mysql/conf.d \
+-e MYSQL_ROOT_PASSWORD=root \
+-d mysql:8.0.30
+```
+
+6.查看master状态  
+*提示:如果这里执行命令不方便可以在Navicat中执行*
+在master服务器中运行以下命令,<font color="#00FF00">该命令得到的参数将用于第7步</font>  
+`show master status`  
+显示的结果为  
+|File|Position|Binlog_Do_DB|Binlog_Ignore_DB|Executed_Gtid_Set|
+|:-:|:-:|:-:|:-:|:-:|
+|mall-mysql-bin.000003|741||mysql||
+
+
+7.在slave中配置主从复制  
+```shell
+change master to master_host='[masterIP]', master_user='user',master_password='[master_password]',master_port=[master_port],master_log_file='mall-mysql-bin.000003',master_log_pos=741,master_connect_retry=30;
+```
+* masterIP:主机的IP
+* user:从机访问主机的用户名
+* master_password:从机访问主机的用户名对应的密码
+* master_port:主机的端口
+* master_log_file:这个参数和第6步得到的结果对应上
+* master_log_pos:这个参数和第6步得到的结果对应上
+* master_connect_retry:连接失败的重试时间
+
+例如:  
+```shell
+change master to master_host='192.168.230.128', master_user='slave',master_password='123456',master_port=3307,master_log_file='mall-mysql-bin.000003',master_log_pos=741,master_connect_retry=30;
+```
+
+8.查看slave状态  
+执行`show master status`  
+![状态](resources/docker/17.png)  
+可以看到此时还没有进行主从同步  
+
+9.在slave中开启主从同步  
+执行`start slave`  
+
+10.再次查看slave状态  
+![状态](resources/docker/18.png)  
+此时发现已经开启同步  
+
+11.测试主从同步  
+主机新建库=>新建表=>插数据  
+从机=>查看记录  
+
 
 #### 2.Redis  
+**目录:**  
+2.1 Redis单机安装  
+2.2 Redis三主三从集群  
+
+
+##### 2.1 Redis单机安装
 1.下载镜像  
 `docker pull redis:7.0`  
 
@@ -421,21 +747,28 @@ docker run -p 7901:3306 --name mysql8.0 \
 `touch ~/software/redis/conf/redis.conf` 创建Redis配置文件  
 *提示:这个配置文件来源于Redis的官方github*  
 **[redis.conf](resources/redis/redis.conf)**  
-**注意:** 这个配置就是看一下,不要上传到Linux服务器上,有什么需要改的配置直接在刚才touch创建的配置文件中修改.  
+
+<font color="#00FF00">对于拷贝过来的配置文件需做如下修改否则导致容器启动失败:</font>  
+* 注释掉 bind 127.0.0.1
+* 将daemonize的值改为no
+* `requirepass [password]` 在配置文件中设置Redis密码
+* 将appendonly的值改为yes,开启持久化
 
 3.创建容器并启动
 ```shell
-docker run -p 7902:6379 --name redis \
+docker run \
+--name redis \
+-p 7902:6379 \
 -v ~/software/redis/data:/data \
 -v ~/software/redis/conf/redis.conf:/etc/redis/redis.conf \
--d redis:7.0 redis-server /etc/redis/redis.conf
+--privileged=true \
+-d redis:7.0 \
+/etc/redis/redis.conf
 ```
 
-**解释:** 后面的/etc/redis/redis.conf是容器里面的配置文件,意思是启动redis的时候携带的配置文件  
+**解释:** 后面的/etc/redis/redis.conf是容器启动参数[command];redis.conf是容器里面的配置文件,意思是启动redis的时候携带的配置文件  
 
-4.设置Redis密码  
-`vim ~/software/redis/conf/redis.conf` 编辑Redis配置文件,设置Redis密码  
-`requirepass [password]` 在配置文件中设置Redis密码  
+4.客户端连接redis    
 `redis-cli -a [password] --raw -h [host] -p [port]` 使用密码连接Redis客户局
 * `-a [password]` 设置密码启动客户端
 * `--raw` 解决中文乱码问题  
@@ -446,11 +779,11 @@ docker run -p 7902:6379 --name redis \
 
 5.Redis默认安装路径 /usr/local/bin(可以进入容器中访问)  
 
-6.Redis中sentinel.conf配置文件  
+~~6.Redis中sentinel.conf配置文件~~  
 该配置文件存放的路径应该与redis.conf配置文件中设置的`dir`路径的目录一致;sentinel.conf是Redis负载均衡的配置.  
 如果redis.conf没有指定dir,则将sentinel.conf配置文件放到与redis.conf配置文件相同的目录下.  
 
-7.启动sentinel  
+~~7.启动sentinel~~  
 sentinel的启动和Redis服务的启动是完全不一样的,虽然可以使用同一个镜像来完成  
 ```shell
 docker run -p 7903:26379 --name redis-sentinel \
@@ -462,7 +795,7 @@ docker run -p 7903:26379 --name redis-sentinel \
 **解释:**  
 * -e --sentinel 启动sentinel时需要带上的参数
 
-8.启动集群  
+~~8.启动集群~~  
 ```shell
 docker run -p 7903:26379 --name redis-sentinel \
 -v ~/software/redis/data:/data \
@@ -473,6 +806,155 @@ docker run -p 7903:26379 --name redis-sentinel \
 
 **解释:**  
 * -e -c 代表启动的有路由(这是集群中的概念,详情见Redis.md=>基础篇=>8.Redis集群=>8.3 三主三从集群环境=>8.3.3 主从容错切换迁移案例)
+
+##### 2.2 Redis三主三从集群
+1.需求梳理  
+![需求梳理](resources/docker/19.png)  
+
+2.启动6台Redis  
+*提示:以下的启动方式使用的启动参数,实际上完全可以改为使用<font color="#00FF00">配置文件</font>的方式指定*
+redis1:
+```shell
+docker run \
+--name redis-node-1 \
+-v ~/software/redisCluster/redis-node-1/data:/data \
+--privileged=true \
+--net host \
+-d redis:7.0 \
+--cluster-enabled yes \
+--appendonly yes \
+--port 6381
+```
+redis2:
+```shell
+docker run \
+--name redis-node-2 \
+-v ~/software/redisCluster/redis-node-2/data:/data \
+--privileged=true \
+--net host \
+-d redis:7.0 \
+--cluster-enabled yes \
+--appendonly yes \
+--port 6382
+```
+redis3:
+```shell
+docker run \
+--name redis-node-3 \
+-v ~/software/redisCluster/redis-node-3/data:/data \
+--privileged=true \
+--net host \
+-d redis:7.0 \
+--cluster-enabled yes \
+--appendonly yes \
+--port 6383
+```
+redis4:
+```shell
+docker run \
+--name redis-node-4 \
+-v ~/software/redisCluster/redis-node-4/data:/data \
+--privileged=true \
+--net host \
+-d redis:7.0 \
+--cluster-enabled yes \
+--appendonly yes \
+--port 6384
+```
+redis5:
+```shell
+docker run \
+--name redis-node-5 \
+-v ~/software/redisCluster/redis-node-5/data:/data \
+--privileged=true \
+--net host \
+-d redis:7.0 \
+--cluster-enabled yes \
+--appendonly yes \
+--port 6385
+```
+redis6:
+```shell
+docker run \
+--name redis-node-6 \
+-v ~/software/redisCluster/redis-node-6/data:/data \
+--privileged=true \
+--net host \
+-d redis:7.0 \
+--cluster-enabled yes \
+--appendonly yes \
+--port 6386
+```
+
+**解释:**  
+* `--net host`:这里没有使用端口映射的原因是使用该参数直接使用物理机的IP和端口
+
+3.进入redis-node-1容器  
+执行:`redis-cli [-a [password]] --cluster create --cluster-replicas 1 [ipAddr]...`  
+* `--cluster-replicas 1` 表示为每个master创建一个slave节点  
+* `ipAddr` 是当前6台机器的IP和端口;IP地址就是宿主机的IP
+* `password` 因为执行的是redis-cli命令,所以相当于要连接服务器(但实际并不连接服务器,也就是说这条命令执行完毕就会立即结束);如果服务器设置了密码这里需要填上密码
+
+例如:  
+`redis-cli --cluster create --cluster-replicas 1 192.168.230.128:6381 192.168.230.128:6382 192.168.230.128:6383 192.168.230.128:6384 192.168.230.128:6385 192.168.230.128:6386`
+
+*提示:这里服务器没有配置密码所以不需要指定密码*  
+该命令执行完毕之后,为每个master指定一个slave,<font color="#00FF00">一共6个节点所以就是一主一从共3组</font>  
+![配置主从](resources/docker/20.png)  
+<font color="#FF0000">红色方框</font>中的内容是主从节点同步的情况  
+<font color="#00FF00">绿色方框</font>中的内容是哈希槽的分配情况  
+
+接下来提示是否接受当前的分配情况,这里输入yes,成功之后显示内容如下图  
+![配置成功后的情况](resources/docker/21.png)  
+*提示:<font color="#00FF00">集群的分配规则是由redis自动完成的</font>*
+
+4.查看集群状态  
+执行`redis-cli -p 6381`进入redis  
+执行`cluster info` 查看集群情况  
+执行`cluster nodes` 查看集群节点情况  
+
+![集群状态](resources/docker/22.png)  
+注意图中信息的关联,这些信息指代了集群节点之间的关系  
+```mermaid
+flowchart TD
+    1(["
+    Master1
+    6381
+    "]) --> 4(["
+    Slave1
+    6384
+    "])
+    2(["
+    Master2
+    6382
+    "]) --> 5(["
+    Slave2
+    6385
+    "])
+    3(["
+    Master3
+    6383
+    "]) --> 6(["
+    Slave3
+    6386
+    "])
+```
+
+执行redis客户端命令`redis-cli -a [password] --cluster check [clusterIP]:[clusterPort]` 查看集群槽位分配数量、节点同步情况  
+* `clusterIP`:集群中某个节点的IP
+* `clusterPort`:集群中某个节点的Port
+
+![槽位情况](resources/docker/23.png)  
+
+5.集群读写redis  
+之前在redis笔记中就有讲过,要想在redis集群中读写键值对必须在启动的时候带上`-c`参数,例如`redis-cli -c`  
+
+6.主从扩缩容案例  
+详情见redis笔记=>基础篇=>8.redis集群=>8.3 3主3从集群环境=>8.3.5 主从扩容案例和8.3.6 主从缩容案例  
+
+
+
+
 
 #### 3.Nacos
 1.下载镜像  
