@@ -2,6 +2,9 @@
 1.docker基本知识介绍  
 2.docker镜像  
 3.DockerFile  
+4.Docker网络  
+5.DockerCompose  
+6.容器监控  
 
 **附录:**  
 A.docker命令大全  
@@ -24,7 +27,7 @@ C.Docker安装教程
 <font color="#00FF00">一次镜像处处运行</font>
 
 2.docker特点  
-2.1 容器应该是解决某个问题的功能单元，让容器保持单一用途才是正确的方式.如果一个容器中包含多个功能模块,则这个容器是不对的  
+2.1 容器应该是解决某个问题的功能单元,让容器保持单一用途才是正确的方式.如果一个容器中包含多个功能模块,则这个容器是不对的  
 2.2 docker最核心的功能是它的打包技术即<font color="#00FF00">容器镜像</font>  
 2.3 docker的核心是<font color="#FF00FF">进程隔离(name space)、资源管理(cgroup)、文件系统(mount namespace)</font>  
 2.4 容器内的应用进程复用宿主机的内核  
@@ -374,7 +377,7 @@ DockerFile是用来构建Docker镜像的文本文件,是由一条条构建镜像
 4.编写Dockerfile  
 在centosPlus目录下创建Dockerfile并编写如下内容  
 ```dockerfile
-#基础镜像，继承于centos
+#基础镜像,继承于centos
 FROM centos:centos7
 #指定作者
 MAINTAINER xxx<xxx@xxx.com>
@@ -422,13 +425,523 @@ docker build -t centosplus:1.0 .
 * path:Dockerfile所在的目录,因为一个目录只能存在一个Dockerfile所以Docker会去改路径下面找对应的Dockerfile文件进行构建
 
 ### 3.4 将微服务工程制作为docker镜像
+1.构建微服务jar包  
+把个人的微服务打成jar包上传到虚拟机  
+
+2.编写Dockerfile  
+```dockerfile
+#基础镜像使用java
+FROM java:8
+#作者
+MAINTAINER cnsukidayo<cnsukidayo@foxmail.com>
+# VOLUME指定临时文件目录为/tmp,在主机 /var/lib/docker 目录下创建了一个临时文件并链接到容器的/tmp
+VOLUME /tmp
+#将微服务jar包添加到容器中并更名为xxx_docker. jar
+ADD cloud-0.0.1-SNAPSHOT.jar  cloud_docker.jar
+#运行jar包
+RUN bash -C 'touch /cloud_docker.jar'
+ENTRYPOINT ["java","-jar","/cloud_docker.jar"]
+#暴露8080端口作为微服务
+EXPOSE 8080
+```
+
+3.构建镜像  
+```shell
+docker build -t cloud_docker:1.0 .
+```
+
+4.运行容器启动测试  
+
+## 4.Docker网络
+**目录:**  
+4.1 Docker网络基本概念介绍  
+4.2 Docker网络模式  
 
 
+### 4.1 Docker网络基本概念介绍  
+1.查看网络情况  
+执行`ifconfig`命令  
+![ifconfig](resources/docker/25.png)  
+* ens33:宿主机的网卡
+* lo:localhost
+* docker0:docker默认创建的网络配置
+
+2.查看docker网络  
+执行`docker network ls` 查看docker所有的网络  
+![docker网络](resources/docker/26.png)  
+Docker会默认创建三大网络模式  
+
+3.Docker网络的作用  
+* 进行Docker网络管理和容器调用之间的规划
+* 容器IP变动时可以通过服务名直接网络通讯不受影响
+
+假设在一台机器上的Docker想要调用另一台机器上的Docker服务,当地址配置正确时是没有问题的,但假如机器重启了dockerIP地址变化了,此时就无法调用了;  
+所以能否通过像nacos注册中心那样通过服务名使docker利用服务名来调用另一台docker  
+
+4.Docker网络模式  
+* bridge:为每一个容器分配、设置IP等并将容器连接到一个docker0;虚拟网桥,<font color="#00FF00">默认为该模式</font>
+* host:容器将不会虚拟出自已的网卡,配置自已的IP等;而是直接使用宿主机的IP和端口
+* none:容器有独立的<font color="#FF00FF">Network namespace</font>,但并没有对其进行任何网络设置,如分配veth pair和网桥连接,IP等
+* container:新创建的容器不会创建自已的网卡和配置自已的IP,而是<font color="#00FF00">和一个指定的容器共享IP和端口范围</font>
+
+### 4.2 Docker网络模式
+**目录:**  
+4.2.1 bridge模式  
+4.2.2 host模式  
+4.2.3 none模式  
+4.2.4 container模式  
+4.2.5 自定义网络  
+
+#### 4.2.1 bridge模式
+1.docker0  
+Docker服务默认会创建一个docker0网桥,它在内核层连通了其他的物理或虚拟网卡,这就将所有容器和本地主机都放到同一个物理网络.Docker默认指定了docker0接口的IP地址和子网掩码,<font color="#00FF00">让主机和容器之间可以通过网桥通信</font>  
+
+2.网桥的工作方式  
+![网桥的工作方式](resources/docker/27.png)  
+如图所示,容器创建默认使用网桥模式,<font color="#00FF00">通过网桥模式就可以实现容器与宿主机之间的通信,容器与容器之间的通信</font>(容器与容器之间无法直接通信,需要通过网桥实现)  
+
+Docker使用Linux桥接,在宿主机虚拟出一个Docker容器网桥(docker0),<font color="#00FF00">docker启动一个容器时会根据Docker网桥的网段分配给容器一个IP地址</font>,成为Container-IP,同时docker网桥是每个容器的默认网关;因为在同一个宿主机内的容器都接入同一个网桥,这样容器之间就能通过容器的Container-IP直接通信  
+
+Docker run的时候,容器创建默认使用网桥模式,使用的就是docker0.在宿主机执行ifconfig就可以看到docker0和通过docker create的网络中出现eth0、eth1、eth2代表网卡一、网卡二、网卡三,lo代表localhost,inet add用来表示网卡的IP地址  
+
+网桥docker0<font color="#00FF00">创建一对对等虚拟设备接口一个叫veth另一个叫eth0</font>,成对匹配  
+整个宿主机的网桥模式都是docker0,类似一个交换机有一堆接口,每个接口叫veth,在宿主机和容器内分别创建一个虚拟接口,并让他们彼此联通(这样一对接口叫veth pair)  
+每个容器实例内部也有一块网卡,每个接口叫eth0  
+docker0上面的<font color="#00FF00">每个veth匹配某个容器实例内部的eth0</font>
+
+*题外话:所以可以推出其实VMWare这种虚拟机软件的网桥也只有一份,通信的时候Windows操作系统通过该网桥与所有Linux虚拟机进行通信*  
+
+3.代码验证  
+运行两个容器  
+```shell
+docker run -d -p 8081:8080 --name tomcat81 billygoo/tomcat8-jdk8
+docker run -d -p 8082:8080 --name tomcat82 billygoo/tomcat8-jdk8
+```
+执行`ip addr`命令查看发现多个两个eth,并且一个后缀是if4一个后缀是if6  
+并且if4的前缀是5,if6的前缀是7
+![执行代码](resources/docker/28.png)  
+
+4.进入容器  
+分别进入两个容器执行`ip addr`可以发现确实每个容器都有一个eth,<font color="#00FF00">并且一个后缀是if5就对应上面的前缀5,一个后缀是if7就对应上面的前缀7</font>  
+并且这里也有前缀一个是6一个是4,<font color="#00FF00">这也对应上面的后缀</font>
+并且这里还有前缀需要
+![容器内部](resources/docker/29.png)  
 
 
+#### 4.2.2 host模式
+1.host模式介绍  
+直接使用宿主机IP地址与外界通信,不在需要额外进行NAT转换  
+容器将不会获得一个独立的Network Namespace,而是和宿主机共用一个Network Namespace.<font color="#00FF00">容器不会虚拟出自已的网卡而是使用宿主机的IP和端口</font>  
+![工作方式](resources/docker/30.png)
+
+2.代码验证  
+```shell
+docker run -d --net host --name tomcat83 billygoo/tomcat8-jdk8
+```
+*提示:这里有个小坑,当使用host模式启动容器的时候就不需要指定-p了,因为此时使用的是宿主机的IP和端口,指定端口映射没有意义*  
+
+3.进入容器  
+执行`ip addr`会发现容器内网络的配置和宿主机网络的配置一致  
+因为此时容器共同宿主机的网络设置  
+显示的结果应该类似如下,<font color="#00FF00">可以看到刚才的两个veth在当前容器中也是能看到的</font>  
+![网络配置](resources/docker/28.png)  
 
 
+#### 4.2.3 none模式
+1.none模式介绍  
+none模式代表禁用网络功能,网卡设置显示只有lo标识  
+在none模式下并不为docker容器进行任何网络配置  
 
+2.代码验证  
+```shell
+docker run -d --net none --name tomcat84 billygoo/tomcat8-jdk8
+```
+
+#### 4.2.4 container模式
+1.container模式介绍  
+新建的容器和已经存在的一个容器共享一个网络IP配置而不是和宿主机共享  
+![工作方式](resources/docker/31.png)  
+
+2.代码验证  
+假设这里还是启动两个Tomcat,即使指定两个Tomcat对外映射不同的端口但还是会报错,因为容器的网络出现了两个端口号为8080的程序,显示端口占用  
+即使用container模式时,这种<font color="#00FF00">网络共享不管是对外还是对内都是共享的</font>  
+
+3.网络关闭  
+假设现在启动两个Ubuntu(Ubuntu不存在端口冲突),此时让后启动的Ubuntu共享先启动的Ubuntu的网络;如果此时Ubuntu1容器宕机,<font color="#FF00FF">则Ubuntu2的引用的Ubuntu1的网络会直接消失,只剩下lo本地网络</font>  
+
+
+#### 4.2.5 自定义网络
+1.创建自定义网络  
+```shell
+# 创建一个名为test_network的网络,网络的类型为bridge
+docker network create test_network
+```
+
+2.启动容器  
+```shell
+docker run -d -p 8081:8080 --net test_network --name tomcat81 billygoo/tomcat8-jdk8
+docker run -d -p 8082:8080 --net test_network --name tomcat82 billygoo/tomcat8-jdk8
+```
+
+3.进入容器  
+进入tomcat81容器后执行`ping tomcat82`发行可以ping通;<font color="#00FF00">此时就可以使用服务名来进行远程调用</font>  
+同理进入tomcat82中`ping tomcat81`也是可以生效的  
+![ping测试](resources/docker/32.png)  
+
+*多提一嘴:此时在新网络中的两个容器如果想ping通默认bridge中的容器是ping不通的,因为跨网桥/网关了,不在同一个网段了*  
+
+## 5.DockerCompose
+**目录:**  
+5.1 DockerCompose介绍  
+5.2 DockerCompose基本环境搭建  
+5.3 DockerCompose上手使用  
+5.4 K8S  
+
+### 5.1 DockerCompose介绍
+DockerCompose是Docker官方的开源项目,负责实现对Docker容器集群的快速编排  
+你需要定义一个YML格式的配置文件<font color="#FF00FF">docker-compose.yml</font>,<font color="#00FF00">写好多个容器之间的调用关系</font>,然后只需要一个命令,就能同时启动/关闭这些容器(感觉和K8S的声明式API有点像?)  
+
+例如要实现一个WEB微服务项目,除了WEB服务容器本身,往往还需要再加上后端的数据库MySQL服务器、redis服务器等等  
+<font color="#00FF00">Compose允许用户通过一个单独的docker-compose.yml模板文件来定义一组相关联的应用容器为一个项目(project)</font>  
+
+1.官网  
+[Docker-compose官网](https://docs.docker.com/compose/compose-file/)  
+[Docker-compose下载地址](https://docs.docker.com/compose/install/)  
+
+2.版本对照表  
+![版本对照表](resources/docker/33.png)  
+这是docker引擎和docker-compose版本的对照表  
+
+3.安装  
+3.1 执行`uname -s`命令得到结果,例如是Linux  
+3.2 执行`uname -m`命令得到结果,例如是x86_64  
+3.3 去github上下载[https://github.com/docker/compose/releases/download/1.29.2/docker-compose-Linux-x86_64](https://github.com/docker/compose/releases/download/1.29.2/docker-compose-Linux-x86_64)  
+这里的Linux和x86_64要替换为上面两步得到的结果  
+实际上这里可以直接访问github的release地址,里面就有各种版本的下载地址  
+3.4 将下载到的内容拷贝到<font color="#00FF00">/usr/local/bin/docker-compose</font>路径下
+3.5 执行`chmod +x /usr/local/bin/docker-compose`  
+3.7 执行`docker-compose --version` 如果显示版本号则代表安装成功  
+3.6 卸载docker-compose可以执行`sudo rm /usr/1oca1/bin/docker-compose`  
+
+4.两要素  
+* 服务:一个个应用的容器实例,例如订单微服务、MySQL容器、redis容器
+* 工程:由一组关联的应用容器组成的<font color="#00FF00">一个完整业务单元</font>,在docker-compose.yml文件中定义  
+
+5.使用三步走  
+* 编写Dockerfile定义各个微服务应用并构建出对应的镜像文件
+* 使用docker-compose.yml定义一个完整业务单元,安排好整体应用中的各个容器服务
+* 执行docker-compose up命令来启动并运行整个应用程序,<font color="#FF00FF">完成一键部署上线</font>  
+
+<font color="#00FF00">说白了它的作用就是一键启动和关闭,准确点的说法是管理集群中的容器</font>  
+
+### 5.2 DockerCompose基本环境搭建
+1.微服务  
+这里使用了之前springcloud的微服务,总之就是有一张订单表,对他进行CRUD  
+接着这里将微服务导出为一个jar包并上传到Linux服务器中的~/software/docker_boot下  
+
+2.编写Dockerfile文件制作镜像  
+```shell
+#基础镜像使用java
+FROM java:8
+#作者
+MAINTAINER cnsukidayo<cnsukidayo@foxmail.com>
+# VOLUME指定临时文件目录为/tmp, 在主机 /var/ib/docker 月录下创建了一个临时文件并链接到容器的/tmp
+VOLUME /tmp
+#将jar包添加到容器中并更名为zzyy_ dockerjar
+ADD docker-boot.jar docker-boot.jar
+#运行jar包
+RUN bash -c 'touch docker-boot.jar'
+ENTRYPOINT ["java","-jar","docker-boot.jar"]
+#暴露8060端口作为微服务
+EXPOSE 8060
+```
+
+3.构建镜像  
+执行`docker build -t docker_boot:1.0 .`
+
+4.不使用compose时该如何部署这个项目  
+* 首先需要启动对应的数据库  
+* 进入数据库创建相应的表结构
+* 启动redis(如果有,本项目没有)
+* 启动微服务
+
+5.启动测试  
+按照步骤4启动后进行测试,发现服务成功启动成功  
+![启动测试](resources/docker/34.png)
+
+6.问题  
+上述没有使用Compose虽然能够成功访问服务,但现在还存在如下问题  
+* 先后启动顺序要求固定,先MySQL+redis服务才能访问成功
+* 多个run命令,要启动多次容器;如果是线上集群,启死你
+* 容器间的启停或宕机,有可能导致IP地址对应的容器实例变化,映射出错;解决方法要么是生产IP写死(不推荐),要么通过服务调用
+
+### 5.3 DockerCompose上手使用
+1.编写docker-compose.yml文件  
+在当前目录~/software/docker_boot(存放Dockerfile文件的目录)下创建一个<font color="#FF00FF">docker-compose.yml</font>配置文件
+```yml
+version: "3" #compose版本号
+
+services: #服务容器实例,下面写服务名
+  dockerBoot: # 服务名 自定义即可;例如这里写成dockerboot服务
+    image: docker_boot:1.2 # 镜像名:版本号,还可以用build构建
+    container_name: ms01 # 容器名 --name 不加容器名会在显示的时候自动加前后缀   当前目录_服务名_数字标号
+    ports: # 端口映射  -p
+      - "8060:8060"
+    volumes: # 容器数据卷  -v
+      - ~/software/docker_boot:/data
+    networks: #网络选择 --network
+      - docker_boot_net # 最底下有定义
+    depends_on: # 依赖项,依赖于下面的项目 项目名即服务名
+      - mysql
+  mysql:
+    image: mysq:5.7
+    #container_name: redis # 容器名 --name 不加容器名会在显示的时候自动加前后缀   当前目录_redis_1
+    networks:
+      - docker_boot_net
+    ports:
+      - "3306:3306"
+    environment: # 环境配置
+      MYSQL_ROOT_PASSWORD: '123456'
+#      MYSQL_ALLOW_EMPTY_PASSWORD: 'no'
+#      MYSQL_DATABASE: 'db2021"
+#      MYSQL_USER: "root"
+#      MYSQL_PASSWORD: "123456"
+    volumes:
+      - $PWD/mysql/db:/var/lib/mysql
+      - $PWD/mysql/conf:/etc/mysql/conf
+      - $PWD/mysql/init:/docker-entrypoint-initdb.d
+    command: --default-authentication-plugin=mysql_native_password #解决外部无法访问问题
+
+networks:
+  docker_boot_net: #网络模式名字,相当于会执行docker network create docker_boot_net命令
+```
+*提示:实际上这种yml配置文件的结果就类似执行的一条条run命令*
+*提示:这里的镜像docker_boot:1.2还不存在!不过当前目录下存在Dokcerfile文件,之后会说明*
+
+2.修改微服务的yml配置文件  
+原本的配置如下,可以看到这里指定了MySQL的地址为192.168.230.128:7901  
+```yml
+server:
+  port: 8060
+spring:
+  application:
+    name: docker-boot
+  datasource:
+    driverClassName: com.mysql.cj.jdbc.Driver
+    username: root
+    password: sukidayo
+    url: jdbc:mysql://192.168.230.128:7901/docker?useUnicode=true&characterEncoding=utf8&characterSetResults=utf8&useSSL=false
+mybatis:
+  mapper-locations: classpath:mybatis/*.xml
+  type-aliases-package: io.github.cnsukidayo.dockert.entity
+  configuration:
+    map-underscore-to-camel-case: true
+```
+
+由于现在使用docker-compose的方式组织,所以可以直接写成服务名(这个服务名是和docker-compose.yml配置文件中对应的)  
+修改内容如下:  
+```yml
+server:
+  port: 8060
+spring:
+  application:
+    name: docker-boot
+  datasource:
+    driverClassName: com.mysql.cj.jdbc.Driver
+    username: root
+    password: sukidayo
+    # 着重在这里
+    url: jdbc:mysql://mysql/docker?useUnicode=true&characterEncoding=utf8&characterSetResults=utf8&useSSL=false
+mybatis:
+  mapper-locations: classpath:mybatis/*.xml
+  type-aliases-package: io.github.cnsukidayo.dockert.entity
+  configuration:
+    map-underscore-to-camel-case: true
+```
+<font color="#00FF00">可以看到非常强大!</font>如果有redis的服务甚至也可以这么配置redis集群  
+
+3.重写打包微服务上传到服务器  
+现在在~/software/docker_boot目录下有三个文件docker-boot.jar、docker-compose.yml、Dockerfile  
+
+4.构建镜像  
+这里还是要先构建docker_boot微服务镜像的  
+执行`docker build -t docker_boot:1.2 .`  
+
+5.执行docker-compose  
+执行`docker-compose up -d`  
+一键部署成功!  
+
+6.一键关闭  
+执行`docker-compose stop`关闭所有的容器  
+
+### 5.4 K8S
+如果还有更多的容器,则需要使用K8S,详情见K8S  
+
+
+## 6.容器监控
+**目录:**  
+6.1 Portainer  
+6.2 CIG(CAdiisor+InfluxDB+Granfana)介绍  
+6.3 CIG部署  
+
+### 6.1 Portainer
+1.Portainer介绍  
+Portainer是<font color="#00FF00">轻量级</font>Docker的可视化工具,方便对docker进行监控;包括单击和集群环境  
+
+2.官方  
+[Portainer官网](https://www.portainer.io/)  
+
+3.下载  
+[Portainer下载地址](https://docs.portainer.io/start/install/server/docker/linux)  
+Portainer也是一个容器,在Linux上执行以下命令安装Portainer  
+```shell
+docker run \
+-p 8000:8000 \
+-p 9000:9000 \
+--name portainer \
+-v /var/run/docker.sock:/var/run/docker.sock \
+-v ~/software/portainer/portainer_data:/data \
+-d portainer/portainer:latest
+```
+
+*提示:第一个挂载不能改/var/run/docker.sock*  
+
+4.访问portainer  
+访问:[http://192.168.230.128:9000/#/init/admin](http://192.168.230.128:9000/#/init/admin)  
+第一次访问会让你注册admin账户  
+![创建账户](resources/docker/35.png)  
+这里密码设置为123456789  
+
+5.选择管理的docker  
+![选择管理的docker](resources/docker/36.png)  
+这里选择<font color="#00FF00">local</font>管理本地的docker  
+
+6.登入成功
+访问portainer主页    
+![主页](resources/docker/37.png)  
+
+7.常规操作  
+![路由](resources/docker/38.png)  
+docker路由的内容如图所示  
+可以点击每个路由操作相关的内容  
+
+### 6.2 CIG(CAdiisor+InfluxDB+Granfana)介绍
+1.问题  
+原生docker在性能监控这一块可以通过`docker stats`命令来完成,但是这就带来就几个问题;  
+<font color="#00FF00">docker stats统计结果只能是当前宿主机的全部容器,数据资料是实时的,没有地方存储、没有健康指标过线预警等功能</font>  
+
+2.监控三剑客  
+这里的监控就类似收集分布式系统日志那样,<font color="#00FF00">Filebeat(日志采集)+ElasticSearch(存储数据)+kibana(页面展示)</font>  
+也类似于Kong的监控,<font color="#00FF00">Prometheus(监控采集)+<font color="#FF00FF">Granfana(展示图表)</font></font> 
+* CAdiisor:监控收集
+  CAdiisor是一个容器资源监控工具,包括容器的内存、CPU、网络IO、磁盘IO等监控,CAdiisor默认存储两分钟的数据,而且只是针对单台物理机;可以将CAdiisor收集到的数据接入到InfluxDB(官方推荐)、redis、kafka、ElasticSearch
+* InfluxDB:存储数据(时序数据库)
+* Granfana:展示图表
+
+### 6.3 CIG部署
+*提示:这里使用docker-compose来部署CIG*  
+1.创建目录  
+执行`mkdir -p ~/software/cig`  
+
+2.创建docker-compose.yml配置文件  
+```yml
+version: '3.1'
+volumes:
+  grafana_data: {}
+services:
+  influxdb:
+    image: tutum/influxdb:0.9
+    # restart: always 重启
+    environment: #设置环境变量,预先创建一个数据库cadvisor
+      - PRE_CREATE_DB=cadvisor
+    ports:
+      - "8083:8083"
+      - "8086:8086"
+    volumes: # 设置挂载容器卷
+      - ./data/influxdb:/data
+
+  cadvisor:
+    image: google/cadvisor
+    links: # 该命令可以连接到influxdb数据库
+      - influxdb:influxsrv
+    command: -storage_driver=influxdb -storage_driver_db=cadvisor -storage_driver_host=influxsrv:8086
+    restart: always
+    ports:
+      - "8082:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:rw
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+
+  grafana:
+    user: "104"
+    image: grafana/grafana
+    links:
+      - influxdb:influxsrv
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    environment:
+      - HTTP_USER=admin
+      - HTTP_PASS=admin
+      - INFLUXDB_HOST=influxsrv
+      - INFLUXDB_PORT=8086 # 设置influxdb的端口
+      - INFLUXDB_NAME=cadvisor
+      - INFLUXDB_USER=root
+      - INFLUXDB_PASS=root
+```
+
+3.执行docker-compose  
+执行`docker-compose up -d`
+
+4.查看是否启动成功  
+执行`docker ps`查看刚才的三剑客是否全部启动成功  
+
+5.浏览相关服务  
+* CAdiisor:http://192.168.230.128:8082
+* influxdb:http://192.168.230.128:8083
+* grafana:http://192.168.230.128:3000
+  默认登录时先使用admin进入然后再设置密码  
+
+
+*提示:这三个服务组件都带有前端页面,不过这里主要看grafana*  
+CAdiisor:  
+![CAdiisor](resources/docker/39.png)  
+influxdb:  
+![influxdb](resources/docker/40.png)  
+grafana:  
+![grafana](resources/docker/41.png)  
+
+6.配置grafana  
+现在grafana还没有内容展示,所以需要配置grafana的数据源  
+![添加数据源](resources/docker/42.png)  
+如图中所示配置数据源,点击Add Data source按钮后可以选择数据库类型,可以看到grafana支持很多种数据库,比如PostgreSQL、MySQL、influxdb  
+<font color="#00FF00">详细配置如下</font>:  
+![详细配置](resources/docker/43.png)  
+URL要填写:`http://InfluxDB:8086`  
+填写完毕之后点击下方的Save&test按钮,如果出现绿勾则代表成功  
+
+7.创建新的观察页面  
+![创建面板](resources/docker/44.png)  
+点击左侧+号在点击Dashboard来到如上图所示的界面  
+接着点击<font color="#00FF00">Add a new panel</font>  
+![panel](resources/docker/45.png)  
+在右侧随便选择一个图像化的面板,可以看到可供选择的面板还是挺多的;这里选择Graph(old)  
+之后随便添加一些配置参数,设置标题信息啥的;设置完成后点击右上角save进行保存  
+
+8.设置数据源  
+点击save后会来到如下界面  
+![数据源](resources/docker/47.png)  
+可以看到此时还没有任何数据,这里按图中所示编辑cig01(刚才创建的面板)  
+
+按照下图所示进行编辑;<font color="#00FF00">参数的说明看图中的文字</font>    
+![编辑](resources/docker/48.png)  
+
+9.监控成功  
+退回到刚才的页面发现这个面板里面的信息开始丰富起来了  
+![监控成功](resources/docker/49.png)  
 
 
 
@@ -472,7 +985,7 @@ C. Docker安装教程
 * `docker attach [containerId]` 进入一个容器;这种方式进入容器用exit退出容器时会导致容器停止
 * `docker rm [containerId] [-f]` 删除一个容器(是容器不是镜像)  
   * `-f`:强制删除
-* `docker run [--name=[containerName]] [--privileged] [-d] [-p masterPort:containerPort] [-v [hostPath]:[containerPaht]:[mode(default=rw)]] [-e environmentKey=environmentValue] [-it bin/bash] [command] [imageName]:[imageVersion] ` 运行一个镜像(注意和start区分)
+* `docker run [--name=[containerName]] [--privileged] [-d] [-p masterPort:containerPort] [-v [hostPath]:[containerPaht]:[mode(default=rw)]] [-e environmentKey=environmentValue] [--net networkMode] [-it bin/bash] [--restart always] [command] [imageName]:[imageVersion] ` 运行一个镜像(注意和start区分)
   * `imageName`(必填):镜像名称
   * `imageVersion`(必填):镜像版本
   * `--privileged`(必填):加强挂载权限,推荐使用以后就带上该参数就行
@@ -481,11 +994,19 @@ C. Docker安装教程
   * `--name [containerName]`:将容器取名为containerName
   * `-d`:以后台运行方式运行容器并返回容器ID;与`-it`互斥使用
   * `-p masterPort:containerPort`:将容器的containerPort端口映射到宿主机的masterPort
+  * `--net networkMode`:指定容器启动时的网络模式
+    * `networkMode`取值如下,详情见4.1 Docker网络基本概念介绍=>4.Docker网络模式
+      * `bridge`:网桥模式
+      * `host`:主机模式
+      * `none`:none模式
+      * `container:containerID` containerID为目标容器的ID
+      * `customeNetWork` 自定义网络
   * `-it  bin/bash`:以交互模式运行容器;它与<font color="#00FF00">docker exec -it [containerId] /bin/bash</font>命令的区别在于,docker exec是容器已经启动的情况下进入容器
   * `-v [hostPath]:[containerPaht]:[mode(default=rw)]`  挂载容器文件路径到本机;将containerPaht(容器)路径的文件挂载到hostPath(主机)
     * `mode`:容器读写挂载文件的模式;有rw和ro两种模式
       * `rw`(默认):容器内部可以读写挂载的目录
       * `ro`:容器内部只能读取挂载的目录,<font color="#00FF00">主机不受限制</font>
+  * `--restart always`:是否失败重启/开机启动
   * `command`:启动参数
   * 退出容器的时候有两种退出方式,<font color="#00FF00">一种是使用exit直接退出,另一种是使用Ctrl+p+q</font>  
   	<font color="#FF00FF">如果是利用docker run命令进入的容器,则exit的退出方式会连带将容器停止</font>  
@@ -517,6 +1038,7 @@ C. Docker安装教程
 	* `fileName`(必填):要导入的镜像压缩包
 	* `imageName`(必填):镜像名称,该名称自拟
 	* `imageVersion`(必填):镜像版本,该版本自拟
+* `docker stats` 监控容器运行的资源占用情况
 
 #### 3.版本控制相关  
 * `docker commit -m "[commitMessage]" -a "[author]" [containerId] [targetImageName]:[targetImageVersion]` 提交containerId对应的容器并创建一个新的镜像
@@ -539,15 +1061,34 @@ C. Docker安装教程
   * `newImageVersion`(必填):构建的镜像的版本
   * `path`(必填):Dockerfile所在的目录,因为一个目录只能存在一个Dockerfile所以Docker会去改路径下面找对应的Dockerfile文件进行构建
 
-
-
-
-#### 3.网络相关
+#### 4.网络相关
 * `docker network ls` 查看docker所有的网络
 * `docker network rm [netWorkId]` 根据network的ID移除一个docker网络
-* `docker network create [netWordName]` 创建一个docker网络,网络名称为[netWordName];docker网络在搭建nacos集群的时候会用到
+* `docker network create [netWordName] [-d networkdMode]` 创建一个docker网络,网络名称为[netWordName]
+  * `-d networkdMode` 网络的模式,可以取bridge(默认)、host、none
+* `docker network connect`
+* `docker network disconnect`
+* `docker network inspect [netWorkId]` 查看某个网络的详细信息
+* `docker network prune` 删除所有无效网络
 
-#### 4.其它  
+#### 4.Compose相关
+* `docker-compose -h` 查看帮助
+* `docker-compose up [-d]` 启动所有docker-compose服务
+  * `-d`:启动所有docker-compose服务并后台运行
+* `docker-compose down` 停止并删除容器、网络、卷、镜像
+* `docker-compose exec [ymlID]` 进入容器实例内部
+  * `ymlID`:这里进入某个容器时是根据yml配置文件中定义的容器id
+* `docker-compose ps` 展示当前docker-compose编排过的运行的所有的容器 
+* `docker-compose top` 展示当前docker-compose编排过的容器进程 
+* `docker-compose logs [ymlId]` 查看ymlID指定的容器日志  
+  * `ymlID`:yml配置文件中指定的某容器ID
+* `docker-compose config [-q]` 检查当前路径下的yml配置文件是否有语法错误
+  * `-q` 只输出错误信息
+* `docker-compose restart` 重启服务
+* `docker-compose start` 启动服务
+* `docker-compose stop` 停止服务
+
+#### 6.其它  
 * `docker version` 查看docker版本信息
 * `docker info` docke概要说明
 * `docker --help` docker帮助命令
