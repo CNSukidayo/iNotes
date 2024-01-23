@@ -33,9 +33,7 @@
 !Java基础大增强/resources/**
 !Java基础大增强/*.md
 !Linux
-!Linux/Linux命令.md
-!Linux/resources
-!Linux/resources/**
+!Linux/**
 !spring
 !spring/spring-logging.md
 !spring/Spring.md
