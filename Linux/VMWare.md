@@ -57,7 +57,11 @@ DNS1="144.144.144.144"
 6.重启网络  
 执行`systemctl restart network`  
 
-7.测试  
+7.设置ssh连接  
+执行`vim /etc/ssh/sshd_config`然后将#UseDNS yes改为<font color="#00FF00">UseDNS no</font>  
+接着执行`systemctl restart sshd`即可  
+
+8.测试  
 虚拟机测试ping百度  
 宿主机与虚拟机互相ping通  
 
