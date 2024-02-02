@@ -143,13 +143,13 @@ Pod自身<font color="#00FF00">不具有自愈能力,如果Pod被调度到的节
 K8S中有很多对象,例如Pod、存储卷等;如果某个K8S对象声明自已的声明周期与某个Pod相同,那么该K8S对象在Pod存在的期间是会一直存在的,如果Pod因为任何原因被删除或替换,则该K8S对象也会被删除  
 
 2.Pod的阶段(状态)  
-|取值|描述|
-|:-:|:-:|
-|Pending(悬决)|Pod已被Kubernetes系统接受,但有一个或者多个容器尚未创建亦未运行.此阶段包括等待Pod被调度的时间和通过网络下载镜像的时间.|
-|Running(运行中)|Pod已经绑定到了某个节点,Pod中所有的容器都已被创建.至少有一个容器仍在运行,或者正处于启动或重启状态|
-|Succeeded(成功)|Pod中的所有容器都已成功终止,并且不会再重启.|
-|Failed(失败)|Pod 中的所有容器都已终止,并且至少有一个容器是因为失败终止.也就是说,容器以非0状态退出或者被系统终止.|
-|Unknow(未知)|因为某些原因无法取得Pod的状态.这种情况通常是因为与 Pod 所在主机通信失败. |
+|      取值       |                                                         描述                                                          |
+|:---------------:|:---------------------------------------------------------------------------------------------------------------------:|
+|  Pending(悬决)  | Pod已被Kubernetes系统接受,但有一个或者多个容器尚未创建亦未运行.此阶段包括等待Pod被调度的时间和通过网络下载镜像的时间. |
+| Running(运行中) |           Pod已经绑定到了某个节点,Pod中所有的容器都已被创建.至少有一个容器仍在运行,或者正处于启动或重启状态           |
+| Succeeded(成功) |                                      Pod中的所有容器都已成功终止,并且不会再重启.                                      |
+|  Failed(失败)   |          Pod 中的所有容器都已终止,并且至少有一个容器是因为失败终止.也就是说,容器以非0状态退出或者被系统终止.          |
+|  Unknow(未知)   |                       因为某些原因无法取得Pod的状态.这种情况通常是因为与 Pod 所在主机通信失败.                        |
 
 > 1.当一个Pod被删除时,执行kubectl命令会展示这个Pod的状态为Terminating(终止),这个Terminating状态<font color="#00FF00">并不是Pod阶段之一</font>,这表明Pod可以以一种优雅的方式终止,可以使用`--force`参数来强制终止该Pod
 > 2.如果某节点宕机或与集群中的其它节点失联,K8S会实施一种策略,将失去节点上运行的所有Pod的阶段设置为Faild
@@ -787,6 +787,9 @@ operator为操作,可取值有:
 **目录:**  
 2.1 Controller控制器的基本介绍  
 2.2 Deployment  
+2.3 StatefulSet  
+2.4 DaemonSet  
+2.5 Job  
 
 
 ### 2.1 Controller控制器的基本介绍
@@ -806,17 +809,246 @@ K8S通常不会直接创建Pod,而是通过Controller来管理Pod;controller中�
 ![如何管理Pod](resources/K8S/21.png)  
 例如图中有三个节点,对应有两个控制器Deployment1和Deployment2;它们是通过标签来管理目标Pod  
 
+4.控制器不能解决的问题  
+* 不能为Pod提供网络服务  
+  比如之前一直到本章结束的所有Pod示例,都无法访问Pod中的Nginx  
+* 不能实现多个Pod间的负载均衡
+
+目前所有的Pod都是不能访问的,而且K8S也没有提供类似docker中将容器的端口映射到宿主机的形式,而是通过为每个Pod指定不同的IP,后续通过<font color="#FF00FF">service最为统一的入口</font>来自动感知Pod对外暴露的情况,从而提供访问
 
 ### 2.2 Deployment  
+**目录:**  
+2.2.1 构建Deployment  
+2.2.2 Deployment动态扩缩  
+2.2.3 Deployment回滚  
+
+
+
+#### 2.2.1 构建Deployment
 1.概念介绍  
 一个Dseployment为Pod和ReplicaSet提供声明式的更新能力  
 你负责描述Deployment中的目标状态,而Deployment控制器以受控速率更改实际状态,使其变为期望状态  
 
+2.创建Deployment  
+*提示:在IDEA中可以输入kdep来快速创建Deployment模板*  
+```yml
+apiVersion: apps/v1
+# 类型是Deployment
+kind: Deployment
+metadata:
+  # controller的名字
+  name: nginx-deployment
+  # controller的标签,注意不是Pod的标签
+  labels:
+    app: nginx-deployment
+
+spec:
+  # 默认有几个副本,这里是3
+  replicas: 3
+  selector:
+    # 选择控制器要控制带有哪些标签的Pod
+    matchLabels:
+      app: nginx
+  # 下面就是类似Pod的配置信息,表示当前Deployment要控制哪些Pod
+  # 注意,这里的值必须和上面的matchLabels指定的标签对应上
+  template:
+    metadata:
+      name: nginx  #指定pod的名字
+      labels:
+        app: nginx #指定pod的标签
+    spec:
+      containers:
+        - name: nginx #容器的名字
+          image: nginx:1.21
+          imagePullPolicy: IfNotPresent
+      restartPolicy: Always
+```
+
+*提示:这个地方的标签很多可能会混淆,首先第一个标签是控制器自已的标签,第二个标签是指定控制器控制带有哪些标签的Pod(因为控制器是根据Pod的标签进行控制的),第三个标签就是给内部Pod打上的标签(和之前Pod那一章一样);<font color="#00FF00">另外第二个标签必须和第三个标签对应</font>*  
+
+3.测试运行  
+执行`kubectl apply -f nginx-deployment.yml` 创建Deployment控制器  
+
+4.查看控制器  
+![查看控制器](resources/K8S/22.png)  
+可以看到这里的相关命令也发送了变化  
+<font color="#00FF00">运行起来的deployment也是可以通过`kubectl get Pods`查看到的</font>  
+所以可以理解为<font color="#DDDD00">Deployment(controller)=Deployment(controller)+Pod  </font>
+所以在附录=>K8S相关命令 <font color="#FF00FF">既有Pod相关的又有Deployment相关的</font>  
 
 
+#### 2.2.2 Deployment动态扩缩
+1.查看controller控制副本数量  
+* `kubectl get rs` 查看副本状态,该命令可以查看controller控制的Pod的数量信息;期望的副本数量、已经运行的副本数量
+* `kubectl scale deployment [deploymentName] --replicas=[number]` 修改deployment的副本数量  
+  * `deploymentName`:deployment的名称
+  * `number`:需要修改的目标数量
 
 
+#### 2.2.3 Deployment回滚
+1.版本记录  
+以下面这个deployment举例  
+```yml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+  labels:
+    app: nginx-deployment
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      name: nginx
+      labels:
+        app: nginx
+    spec:
+      containers:
+        - name: nginx 
+          image: nginx:1.21
+          imagePullPolicy: IfNotPresent
+      restartPolicy: Always
+```
+<font color="#00FF00">只有当spec.template下面的内容发生改变时才会触发Deployment的版本上线(例如这里Pod的标签和容器)</font>  
 
+2.相关命令  
+* `kubectl rollout status deployment [deploymentName]` 查看deployment的上线状态
+* `kubectl rollout history deployment [deploymentName] --revision=[REVISION]` 查看deployment的历史版本信息
+  * `--revision=[REVISION]` 查看指定版本(REVISION)的详情信息
+* `kubectl rollout undo deployment [deploymentName] [--to-revision=[REVISION]]` 回退到指定版本
+  * `--to-revision=[REVISION]` 回退到的指定版本,REVISION是版本号
+    如果不填写当前参数,默认回退到上一个版本
+* `kubectl rollout restart deployment [deploymentName]` 重新部署
+* `kubectl rollout pause deployment [deploymentName]` 暂停运行,暂停后对deployment的修改不会立即生效(即使用apply命令应用deploymentYml配置文件不会立即生效),恢复后才应用设置
+* `kubectl rollout resume deployment [deploymentName]` 恢复运行
+* `kubectl rollout resume deployment [deploymentName]` 恢复运行
+
+3.回退时的特性  
+![回退特性](resources/K8S/24.png)  
+假设现在有三个版本1、2、3;现在要从版本3回退到版本2,<font color="#00FF00">则回退之后会创建一个新的版本4它的内容来自版本2,并且版本2将被删除(因为4和2的内容一致,所以<font color="#FF00FF">回退会创建新版本</font>)</font>  
+
+
+### 2.3 StatefulSet
+1.基本介绍  
+StatefulSet是用于管理<font color="#00FF00">有状态应用</font>的工作负载API对象  
+* 无状态应用:应用本身不存储任何数据的应用称为无状态应用
+* 有状态应用:应用本身需要存储相关数据的应用称为有状态应用
+
+StatefulSet用来管理某Pod集合的部署和扩缩,<font color="#00FF00">并为这些Pod提供持久存储和持久标识符</font>  
+![持久标识](resources/K8S/25.png)  
+如上图所示,正常我们创建的例如MySQL应用;如果Pod宕机了重启MySQL应用中的数据也没了;之前在docker中的做法是使用挂载的方式来保留数据,在K8S中推荐将这些数据保存到统一的NFS(Network File System)中去,但是保存的时候如果使用deployment,则每个新的Pod都会将数据保存在不同的位置;<font color="#00FF00">此时就可以使用StatefulSet让这种类型的Pod始终保存到一个位置,尽管它们是不同的Pod</font><font color="#FF00FF">也相当于一种绑定机制</font>  
+
+<font color="#00FF00">实际上StatefulSet的本意是部署有粘性ID的Pod(不管Pod部署到哪里,是否重新创建粘性ID保持不变)</font>,只是说这种特性很方便地能够部署有状态应用  
+
+2.特点  
+* 稳定的、唯一的网络标识符
+  类似Docker里面的网络,可以直接通过服务名来调用对应的Pod服务;而不是根据IP,因为IP始终在变化
+* 稳定的、持久的存储
+* 有序的、优雅的部署和扩缩
+* 有序的、自动的滚动更新
+
+### 2.4 DaemonSet
+1.介绍  
+DaemonSet确保所有节点或某些节点上运行一个DaemonSet类型的Pod;<font color="#FF00FF">当有节点加入集群时会为它们自动新增一个Pod</font>  
+<font color="#00FF00">DaemonSet类型的Pod只允许存在一个,如果想运行不同类型的DaemonSet是不被允许的</font>  
+
+2.DaemonSet的应用场景  
+* 在每个节点上运行集群守护进程
+* 在每个节点上运行日志收集守护进程
+* 在每个节点上运行监控守护进程
+
+3.使用DaemonSet  
+```yml
+apiVersion: apps/v1
+# 主要就是修改了这一块的内容  
+kind: DaemonSet
+metadata:
+  name: fluentd-elasticsearch
+  namespace: kube-system
+  labels:
+    k8s-app: fluentd-logging
+spec:
+  selector:
+    matchLabels:
+      name: fluentd-elasticsearch
+  template:
+    metadata:
+      labels:
+        name: fluentd-elasticsearch
+    spec:
+      tolerations:
+      # 这些容忍度设置是为了让该守护进程集在控制平面节点上运行
+      # 如果你不希望自己的控制平面节点运行 Pod，可以删除它们
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule
+      - key: node-role.kubernetes.io/master
+        operator: Exists
+        effect: NoSchedule
+      containers:
+      - name: fluentd-elasticsearch
+        image: quay.io/fluentd_elasticsearch/fluentd:v2.5.2
+        resources:
+          limits:
+            memory: 200Mi
+          requests:
+            cpu: 100m
+            memory: 200Mi
+        volumeMounts:
+        - name: varlog
+          mountPath: /var/log
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - name: varlog
+        hostPath:
+          path: /var/log
+```
+
+### 2.5 Job
+1.介绍  
+见名思意,Job类型的Pod本质上就是一个Job,当一个Job运行完毕之后就会立即结束,不像之前的Pod是一直运行的  
+<font color="#00FF00">Job会创建一个或多个Pod,并将继续重试Pod的执行,直到指定数量的Pod成功终止</font>;也就是说可以指定Job执行的次数(数量),如果没有成功则会一直重试  
+
+2.使用Job  
+```yml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pi
+spec:
+  # ttl自动删除;即当Job运行完成之后多少秒自动删除当前Pod,该属性建议加上;否则会对ApiServer造成压力
+  ttlSecondsAfterFinished: 100
+  template:
+    spec:
+      containers:
+      # 这是一个计算PI值的容器,大约需要10s完成
+      - name: pi
+        image: perl:5.34.0
+        command: ["perl",  "-Mbignum=bpi", "-wle", "print bpi(2000)"]
+      restartPolicy: Never
+  # 当前任务出现失败时,最大的重试次数;超过这个次数则该Pod内的所有容器全部运行失败
+  backoffLimit: 4
+```
+
+3.测试运行  
+执行以下命令  
+```shell
+mkdir -p ~/controller
+# 创建对应Job的yml,并填入第2步的yml配置信息
+vim ~/controller/job-pi.yml
+cd  ~/controller
+kubectl apply -f job-pi.yml
+# 查看Pod的运行状态,像这种Job类型的Pod一旦运行完毕就立即complete
+kubectl get pods -o wide
+# 查看Pi值计算的结果,查看运行日志;把podName替换为对应的即可
+kubectl logs [podName]
+```
+
+执行效果如下  
+![Job](resources/K8S/26.png)  
 
 
 
@@ -1119,7 +1351,7 @@ yaml文件由两部分组成,分别是:控制器定义、被控制对象
 查看该文件:
 ![yaml](resources/K8S/23.png)
 |   字段名   |    描述    |
-| :--------: | :--------: |
+|:----------:|:----------:|
 | apiVersion |  API版本   |
 |    kind    |  资源类型  |
 |  metadata  | 资源元数据 |
@@ -1455,20 +1687,26 @@ kubeadm join 192.168.230.130:6443 --token mvq64p.kkzenbymccwvii9g \
 ### B.K8S命令大全  
 *提示:所有的命令都*
 #### 1. Pod相关  
-* `kubectl get pods [-n [namespace(default=default)]] [-A] [-o wide] [-o yaml] [-w] [--show-labels] [-l [rule]]` 查询所有的pod
+* `kubectl get [pods|deployments] [-n [namespace(default=default)]] [-A] [-o [wide|yaml|json]] [-w] [--show-labels] [-l [rule]]` 查询
+  * `pods|deployments`:查询类型
+    * pods:查看所有的pod
+    * deployments:查看所有的deployments
   * `-n [namespace]`:指定查询的命名空间  
   K8S集群启动之后存在两个命名空间(default和kube-system),命名空间的作用是用于归类Pod的;如果不指定该参数,默认会查询default命名空间的所有Pod
   * `-A`:查询所有命名空间的Pod
-  * `-o wide`:查看Pod的详情信息
+  * `-o [wide|yaml|json]`:查看Pod的详情信息
+    <font color="#00FF00">wide|yaml|json:查询类型</font>
+    * wide:以表格的方式输出详情信息
     <font color="#00FF00">返回信息说明:</font>  
-    * name:pod的名称
-    * ready:pod中所有容器的运行情况
-    * status:pod运行的状态
-    * restarts:pod重启的次数
-    * age:年龄(运行的时长)
-    * ip:pod运行的IP地址
-    * node:pod运行在集群中的那个节点上
-  * `-o yaml` 输出pod原本的定义信息(即pod的yml格式信息)
+      * name:pod的名称
+      * ready:pod中所有容器的运行情况
+      * status:pod运行的状态
+      * restarts:pod重启的次数
+      * age:年龄(运行的时长)
+      * ip:pod运行的IP地址
+      * node:pod运行在集群中的那个节点上
+    * yaml:输出pod原本的定义信息(即pod的yml格式信息),这种输出信息更全面
+    * json:输出json格式
   * `-w`:实时监控Pod的状态
   * `--show-labels`:查看当前Pod有哪些标签
   * `[-l [rule]]` 根据label标签筛选出想要的Pod
@@ -1487,11 +1725,14 @@ kubeadm join 192.168.230.130:6443 --token mvq64p.kkzenbymccwvii9g \
   例如:<font color="#00FF00">kubectl run nginx --image=nginx:1.19</font>
 * `kubectl apply -f [podYml]` 使用`podYml`对应的配置文件创建Pod
   详情见:1.2 声明式Pod
-* `kubectl describe [pod [podName]]` 查看某个详细信息
-  * `[pod [podName]]` 查看某个pod的详细信息,podName的值可以通过`kubectl get pods`得到
-* `kubectl delete [pod [podName]] [-f [podYml]]` 删除pod
+* `kubectl describe [pod [podName]] [deployment [deploymentName]]` 查看某个详细信息
+  * `pod [podName]` 查看某个pod的详细信息,podName的值可以通过`kubectl get pods`得到
+  * `deployment [deploymentName]` 查看某个deployment的详细信息
+* `kubectl delete [pod [podName]] [-f [podYml]] [deployment [deployment] [-f [deploymentYml]]` 删除
   * `pod [podName]` 删除某个pod,podName的值可以通过`kubectl get pods`得到
   * `-f [podYml]` 根据创建pod时使用的yml来删除pod
+  - - -
+  * `deployment [deployment]` 删除某个deployment
 * `kubectl exec -it [podName] [-c [containrName]] -- bash` 进入某个Pod中的容器
   * `-c [containrName]` 指定进入哪一个容器,因为一个Pod里面可能有很多容器,所以这里需要指定进入Pod的哪个容器
   *提示:如果这里没有通过-C指定进入Pod中的哪个容器,则默认会进入Pod中的第一个容器*
@@ -1522,6 +1763,24 @@ kubeadm join 192.168.230.130:6443 --token mvq64p.kkzenbymccwvii9g \
   * `NoShedule`:固定写法表示打污点,和NoShedule-二选一使用
   * `NoShedule-`:删除节点的污点
 
+#### 3.Controller相关  
+Controller相关的命令和Pod相关的命令非常类似,灵活调整使用就可以了  
+运行起来的deployment也是可以通过`kubectl get Pods`查看到的  
+* `kubectl get rs` 查看副本状态,该命令可以查看controller控制的Pod的数量信息;期望的副本数量、已经运行的副本数量
+* `kubectl scale deployment [deploymentName] --replicas=[number]` 修改deployment的副本数量  
+  * `deploymentName`:deployment的名称
+  * `number`:需要修改的目标数量
+* `kubectl rollout status deployment [deploymentName]` 查看deployment的上线状态
+* `kubectl rollout history deployment [deploymentName] --revision=[REVISION]` 查看deployment的历史版本信息
+  * `--revision=[REVISION]` 查看指定版本(REVISION)的详情信息
+* `kubectl rollout undo deployment [deploymentName] [--to-revision=[REVISION]]` 回退到指定版本
+  * `--to-revision=[REVISION]` 回退到的指定版本,REVISION是版本号
+    如果不填写当前参数,默认回退到上一个版本
+* `kubectl rollout restart deployment [deploymentName]` 重新部署
+* `kubectl rollout pause deployment [deploymentName]` 暂停运行,暂停后对deployment的修改不会立即生效(即使用apply命令应用deploymentYml配置文件不会立即生效),恢复后才应用设置
+* `kubectl rollout resume deployment [deploymentName]` 恢复运行
+* `kubectl rollout resume deployment [deploymentName]` 恢复运行
+
 
 #### 6.其它  
 * `kubectl [command] --help` 查看kubectl某条命令的帮助
@@ -1529,6 +1788,8 @@ kubeadm join 192.168.230.130:6443 --token mvq64p.kkzenbymccwvii9g \
 * `kubectl get apiservices` 查看K8S提供的所有API情况(对外暴露的所有API接口)
 
 ### C.PodYml规约
+
+#### 1.Pod类型  
 ```yml
 # api的版本
 apiVersion: v1
@@ -1675,4 +1936,36 @@ spec:
       effect: "NoSchedule"
 ```
 
+#### 2.Deployment类型  
+```yml
+apiVersion: apps/v1
+# 类型是Deployment
+kind: Deployment
+metadata:
+  # controller的名字
+  name: nginx-deployment 
+  # controller的标签,注意不是Pod的标签
+  labels:
+    app: nginx-deployment 
 
+spec:
+  # 默认有几个副本,这里是3
+  replicas: 3 
+    selector:
+    # 选择控制器要控制带有哪些标签的Pod
+    matchLabels:
+      app: nginx
+  # 下面就是类似Pod的配置信息,表示当前Deployment要控制哪些Pod
+  # 注意,这里的值必须和上面的matchLabels指定的标签对应上
+  template:
+    metadata:
+      name: nginx  #指定pod的名字
+      labels:
+        app: nginx #指定pod的标签
+    spec:
+      containers:
+        - name: nginx #容器的名字
+          image: nginx:1.21
+          imagePullPolicy: IfNotPresent
+      restartPolicy: Always
+```
