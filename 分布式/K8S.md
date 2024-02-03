@@ -1,6 +1,8 @@
 # 目录:
 1.Pod  
 2.Controller控制器  
+3.Service  
+4.存储  
 
 **附录:**  
 A.K8S基本环境搭建  
@@ -438,7 +440,7 @@ Kubernetes Metrics Server(Kubernetes指标服务器),它是一个可扩展的、
 
 4.指定内存请求和限制  
 ```yml
-#内存资源的基本单位是字节（byte）。你可以使用这些后缀之一，将内存表示为 纯整数或定点整数：E、P、T、G、M、K、Ei、Pi、Ti、Gi、Mi、Ki。 例如，下面是一些近似相同的值：128974848, 129e6, 129M, 123Mi
+#内存资源的基本单位是字节（byte）.你可以使用这些后缀之一,将内存表示为 纯整数或定点整数：E、P、T、G、M、K、Ei、Pi、Ti、Gi、Mi、Ki. 例如,下面是一些近似相同的值：128974848, 129e6, 129M, 123Mi
 apiVersion: v1
 kind: Pod
 metadata:
@@ -981,7 +983,7 @@ spec:
     spec:
       tolerations:
       # 这些容忍度设置是为了让该守护进程集在控制平面节点上运行
-      # 如果你不希望自己的控制平面节点运行 Pod，可以删除它们
+      # 如果你不希望自己的控制平面节点运行 Pod,可以删除它们
       - key: node-role.kubernetes.io/control-plane
         operator: Exists
         effect: NoSchedule
@@ -1050,11 +1052,793 @@ kubectl logs [podName]
 执行效果如下  
 ![Job](resources/K8S/26.png)  
 
+## 3.Service
+**目录:**  
+3.1 Service基本概念  
+3.2 Service负载均衡  
+3.3 Service的多端口  
+3.4 Service的类型  
+3.5 内部通讯  
+
+
+### 3.1 Service基本概念
+K8S的Service的作用是能够将Pod上运行的网络程序公开为网络服务的API  
+
+1.Service的作用  
+如果有一组前端Pod想要连接后端Pod,那么前端如何找出并跟踪要连接的IP地址,以便前端可以负载均衡地使用后端提供的服务  
+![前端发现后端](resources/K8S/27.png)  
+<font color="#00FF00">此时就可以通过Service来解耦这种关联</font>,前端并不需要去找后端;直接通过service中间层来实现;service主要是做K8S集群内部流量的转发;(其实nacos也能做到这一点,感觉没啥必要)  
+![service](resources/K8S/28.png)  
+
+2.特性  
+* Service通过label关联对应的Pod  
+  和controller一样,<font color="#00FF00">service也是通过label标签来关联控制对应的Pod</font>
+* Service生命周期不跟Pod绑定,不会因为Pod重新创建而改变IP;service一旦创建IP不会改变
+* 提供了负载均衡,自动转发流量到不同的Pod
+* 可对集群外部提供访问端口
+* 集群内部可通过服务名称进行访问
+
+3.使用service  
+```yml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: deploy-nginx
+  labels:
+    app: deploy-nginx
+spec:
+  replicas: 1
+  template:
+    metadata:
+      name: service-nginx
+      labels:
+        app: service-nginx
+    spec:
+      containers:
+        - name: service-nginx
+          image: nginx:1.21
+          imagePullPolicy: IfNotPresent
+      restartPolicy: Always
+  selector:
+    matchLabels:
+      app: service-nginx
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: service-nginx
+spec:
+  selector:
+    # 这里的标签要与Pod的标签一致,而不是deployment的标签
+    # 即spec.template.metadata.labels
+    app: service-nginx
+  ports:
+    # 协议,一般就是TCP/UDP
+    - protocol: TCP
+      # Pod内部的端口号,这里就是nginx的默认端口号80
+      # 这个端口是需要指定的,相当于端口映射中容器端的端口
+      targetPort: 80
+      # service对集群内暴露的端口号
+      port: 80
+  type: NodePort
+```
+*提示:在同一个Yml中不同的对象使用---进行分割*  
+
+
+4.访问测试  
+*提示:运行成功之后会创建一个deployment,一个Service*
+```shell
+# 查看当前的所有service
+kubectl get services
+# 访问nginx
+curl 10.96.40.146:80
+```
+![执行效果](resources/K8S/29.png)  
+成功打印nginx的首页信息  
+注意这里的IP,10.96.40.146是集群内部的IP;集群内部可以访问到这个IP;所以该IP是不对外暴露的  
+这里在PORT列中显示了两个端口,<font color="#00FF00">80端口是service像K8S集群内部暴露的端口,32743是K8S向集群外部暴露的端口</font>  
+
+5.外部访问  
+上述说过10.96.40.146是集群内部的IP,如果想要在外部访问,则需要使用后面生成的`32743`这个端口,访问的IP是三个节点的IP(node1、node2、node3)  
+![访问](resources/K8S/30.png)  
+
+
+### 3.2 Service负载均衡  
+1.动态扩容  
+接着使用3.1的deployment,执行`kubectl scale deployment deploy-nginx --replicas=4`将Nginx动态扩容为4台
+![动态扩容](resources/K8S/31.png)  
+
+2.修改n3节点上的nginx  
+*提示:这里为了凸显出负载均衡的效果,需要修改n3节点上nginx默认返回的主页信息*  
+在第一步中已经启动了四个nginx,其中两台在n2节点上,两台在n3节点上;只不过这里图中没有显示出来  
+执行`kubectl exec -it [podName] -- bash`进入两个n3节点,修改其对应的文件  
+```shell
+# 进入nginx的目录
+cd /usr/share/nginx/html/  
+# 修改index.html文件内容
+echo "NGINX-3" > index.html
+```
+
+3.访问测试  
+此时疯狂访问`某节点的IP`+`32743`就可以实现负载均衡了,一定要访问的多;否则负载均衡不会生效  
+
+### 3.3 Service的多端口  
+```yml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: deploy-nginx
+  labels:
+    app: deploy-nginx
+spec:
+  replicas: 1
+  template:
+    metadata:
+      name: service-nginx
+      labels:
+        app: service-nginx
+    spec:
+      containers:
+        - name: service-nginx
+          image: nginx:1.21
+          imagePullPolicy: IfNotPresent
+      restartPolicy: Always
+  selector:
+    matchLabels:
+      app: service-nginx
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: service-nginx
+spec:
+  selector:
+    app: service-nginx
+  # ports字段本质是一个数组
+  ports:
+    # 协议,一般就是TCP/UDP
+    - protocol: TCP
+      # 暴露多端口必须指定名称
+      name: read
+      # Pod内部的端口号,这里就是nginx的默认端口号80
+      # 这个端口是需要指定的,相当于端口映射中容器端的端口
+      targetPort: 80
+      # service对集群内暴露的端口号
+      port: 8080
+      # service对集群外暴露的端口号,范围在30000-32767之间
+      # 如果不指定的话由K8S自已来暴露,就像上面的32743端口一样
+      nodePort: 31001
+    - protocol: TCP
+      # 暴露多端口必须指定名称
+      name: write
+      targetPort: 80
+      port: 8081
+      nodePort: 31002
+  # service的类型
+  type: NodePort
+```
+
+### 3.4 Service的类型
+1.介绍  
+这里service的类型实际上就是指代刚才编写的yml中的spec.type属性  
+
+2.分类  
+* `ClusterIP`:在集群内部暴露service,只能被集群内部的其它对象访问,通常用于内部服务发现,<font color="#00FF00">不向集群外部暴露</font>
+  service一般还是倾向于对内部暴露服务,而不是外部
+* `NodePort`:将service暴露在Node的某个端口上,从而可以通过Node的IP地址和端口号来访问service,通常用于开发和测试环境
+* `LoadBalancer`:通过云服务商提供的负载均衡器来将Service暴露到公网上,使得外部用户可以访问Service
+* `ExternalName`:将Service映射到一个DNS名称上,从而可以通过DNS名称来访问Service,通常用于访问外部服务
+
+3.ClusterIP类型  
+这是最常用的Service类型之一.在集群内部创建一个虚拟IP地址,<font color="#00FF00">它可以被其他在同一集群内的Pod访问,但不能被集群外部的请求所访问</font>.这种类型的服务通常用于内部服务的暴露,例如数据库或者缓存服务.比如在一个 Web应用中,你可能需要连接到一个数据库,但是这个数据库并不需要在应用之外暴露.这时候,你可以使用ClusterIP类型的Service,让应用可以访问到数据库.        
+也就是下面这张图中的<font color="#00FF00">CLUSTER-IP</font>是不可以被外部访问的,<font color="#FF00FF">只能被集群内部访问</font>;并且可以看到该service也没有了对外暴露的端口  
+![执行效果](resources/K8S/32.png)
+
+4.NodePort类型  
+* 这种类型的Service将会创建一个端口,<font color="#00FF00">并绑定到每个集群节点上</font>(3.1章演示的时候就是所有的节点都可以访问对外暴露的端口),从而允许外部流量访问Service.这个类型通常用于公共服务的暴露,例如Web应用或者API.比如你需要在集群外部访问到一个运行在集群中的Web应用,你就可以创建一个NodePort类型的Service,通过指定Service的`nodePort`字段,来将Service暴露给集群外部.
+* 如果你将type字段设置为NodePort,则Kubernetes控制平面将在--service-node-port-range标志指定的范围内分配端口(默认值:30000-32767)
+
+5.LoadBalancer类型  
+这种类型的Service类似于NodePort,但是会在云厂商中创建一个负载均衡器.这个类型通常用于在云平台上部署应用.云平台的负载均衡器将流量分发到集群中的节点.这个类型的Service只能在云平台上使用,并且需要云厂商提供支持.  
+
+6.ExternalName类型  
+这种类型的Service允许Service到任何需要访问的CNAME DNS条目的转发.与其它类型的Service不同,它并不会代理请求到任何Pod.相反,它将请求转发到配置的外部地址.这种类型的Service通常用于将服务代理到集群外部的其他服务.比如你有一个运行在外部网络上的服务,你希望在Kubernetes集群中使用该服务,这时候你可以创建一个ExternalName类型的Service,将服务的DNS解析到Kubernetes集群中.  
+
+### 3.5 内部通讯  
+1.需求  
+这里需要在K8S集群中启动一个MySQL,接着启动一个nginx;通过nginx来访问MySQL  
+
+2.编写配置文件  
+在~/service下创建mysql.yml  
+```yml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: deploy-mysql
+  labels:
+    app: deploy-mysql
+spec:
+  selector:
+    matchLabels:
+      app: mysql
+  replicas: 1
+#pod
+  template:
+    metadata:
+      labels:
+        app: mysql
+    spec:
+      containers:
+        - name: mysql
+          image: mysql/mysql-server:8.0
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              value: root
+          ports:
+            - name: mysql
+              containerPort: 3306
+---
+#Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: service-mysql
+spec:
+  selector:
+    app: mysql
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: 3306
+  type: ClusterIP
+```
+
+在~/service下创建nginx-c.yml配置文件  
+```yml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: deploy-nginx-1
+  labels:
+    app: nginx
+spec:
+  selector:
+    matchLabels:
+      app: nginx
+  replicas: 1
+#pod
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      hostNetwork: true
+      containers:
+        - name: nginx
+          image: nginx:latest
+          #command: ["/bin/sh", "-c"]
+          #args:
+          #- apt-get update && apt-get install -y mysql-client && nginx -g 'daemon off;'
+          ports:
+            - name: http
+              containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx
+spec:
+  selector:
+    app: nginx
+  ports:
+    - name: http
+      port: 8081
+      targetPort: 80
+  type: ClusterIP
+```
+
+3.测试运行  
+接着进入~/service目录下执行  
+`kubectl apply -f mysql.yml  -f nginx-c.yml` 启动两个配置文件    
+查看一下service运行的情况  
+![service运行情况](resources/K8S/33.png)  
+执行`kubectl exec -it [mysqlPodName] -- bash` 执行该命令进入nginx容器
+进入容器后,使用服务名来调用nginx  
+![调用nginx](resources/K8S/34.png)  
+此时就实现了K8S集群节点MySQL访问nginx  
+注意由于这里使用的是ClusterIP类型的service,<font color="#00FF00">所以暴露的端口是针对集群内部的</font>,而不是针对集群外部的访问  
+
+
+## 4.存储  
+**目录:**  
+4.1 基本概念介绍  
+4.2 卷的使用  
 
 
 
+### 4.1 基本概念介绍  
+1.卷(volume)  
+Pod中允许的Container的文件在磁盘上是临时存放的,这就会带来两个问题;一是当容器崩溃时文件丢失;二是在同一个Pod中会运行多个容器,这些容器想共享文件系统  
+<font color="#00FF00">K8S的volume这一抽象概念将解决这两个问题</font>  
+卷说白了就是Pod中的容器不再自已管理自已的文件系统,而是将文件统一交由K8S的卷进行管理;就是之前的那张图  
+![共享系统](resources/K8S/11.png)  
+
+2.卷的类型  
+*提示:卷的类型就是卷的多种实现方式,例如本地存储、网络存储等*  
+K8S支持很多类型的卷<font color="#00FF00">,Pod可以同时使用任意数目的卷;临时卷(一种卷类型)的生命周期和Pod相同,但持久卷(一种卷类型)可以比Pod的生命周期更长;</font>对于任何类型的卷,容器重启都不会使卷丢失(言外之意即临时卷会随着Pod的终止而销毁)  
+<font color="#00FF00">临时卷和持久卷又可以分为以下几种类型:</font>  
+* `ConfigMap`:可以将配置文件以键值对的形式保存到ConfigMap中,并且可以在Pod中以文件或环境变量的形式使用.ConfigMap可以用来存储不敏感的配置信息,如应用程序的配置文件
+* `EmptyDir`:是一个空目录,可以在Pod中用来存储临时数据,当Pod被删除时,该目录也会被删除.这种类型就是临时卷
+* `Local`:将本地文件系统的目录或文件映射到Pod中的一个Volume中,可以用来在Pod中共享文件或数据.  
+  这种方式会使得pod与节点之间的粘性提高
+* `NFS`:将网络上的一个或多个NFS共享目录挂载到Pod中的Volume中,可以用来在多个Pod之间共享数据.
+* `Secret`:<font color="#00FF00">将敏感信息以密文的形式保存到Secret中</font>,并且可以在Pod中以文件或环境变量的形式使用.Secret可以用来存储敏感信息,如用户名密码、证书等.
+
+3.使用方式  
+```yml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: configmap-pod
+spec:
+  containers:
+    - name: test
+      image: busybox:1.28
+      # 声明当前容器需要使用哪些卷,将当前容器内的路径映射到哪个卷上
+      volumeMounts:
+     		..........
+  # 这是一个数组,声明当前Pod提供哪些卷;这些卷可以供容器使用;和volumeMounts形成一种绑定的关系
+  volumes:
+  	............
+```
+
+### 4.2 卷的使用  
+**目录:**  
+4.2.1 EmptyDir  
+4.2.2 HostPath  
+4.2.3 NFS  
+4.2.4 PV&PVC  
+4.2.5 动态供给  
 
 
+#### 4.2.1 EmptyDir  
+1.EmptyDir的使用示例  
+```yml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: emptydir-deployment
+  labels:
+    app: emptydir-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: emptydir-deployment
+  template:
+    metadata:
+      name: emptydir-deployment
+      labels:
+        app: emptydir-deployment
+    spec:
+      containers:
+        - name: writer
+          image: busybox:1.28
+          command: [ "/bin/sh", "-c", "echo 'Hello World!' > /data/hello.txt ; sleep 3600" ]
+          volumeMounts:
+            # 需要注意的是这里有一个name,这里的name要和下面Pod的卷对应上
+            # 表示将当前容器的/data目录挂载到Pod的对应volume卷上
+            - name: shared-data
+              mountPath: /data
+        - name: reader
+          image: busybox:1.28
+          command: [ "/bin/sh", "-c", "cat /data/hello.txt ; sleep 3600" ]
+          volumeMounts:
+            # 同理这里也是把当前容器的/data目录挂载到容器对应的卷上
+            - name: shared-data
+              mountPath: /data
+      restartPolicy: Always
+      volumes:
+          # 指定当前Pod的卷名称
+        - name: shared-data
+          # 指定volume类型为emptyDir
+          emptyDir: {}
+```
+
+2.测试运行  
+这里查看一下`reader`这个容器的日志看是否打印了Hello World!即可  
+![测试运行](resources/K8S/35.png)  
+
+3.总结  
+EmptyDir是由K8S在宿主机上维护的临时目录;其优点是<font color="#00FF00">能够方便地为Pod中的容器提供共享存储</font>,不需要额外的配置.
+当Pod被删除后该目录也随之被删除  
+
+#### 4.2.2 HostPath
+1.HostPath使用示例  
+```yml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: busybox-hostpath
+  labels:
+    app: busybox-hostpath
+spec:
+  containers:
+    - name: busybox
+      image: busybox:1.28
+      command: [ "/bin/sh", "-c", "echo 'hello' > /data/data.txt && sleep 3600" ]
+      volumeMounts:
+        # 要使用的卷名称
+        - name: data
+          # 挂载路径
+          mountPath: /data
+  volumes:
+    # 指定当前Pod有哪些卷
+    - name: data
+      # hostPath类型指定该卷挂载到宿主机的哪个目录上
+      hostPath:
+        path: /root/data/
+```
+
+2.测试运行  
+运行成功之后通过`kubectl get pods -o wide`命令查看当前的Pod在哪个节点上  
+进入到与之对应的节点上,进入/root/data/目录下就能够看到data.txt了  
+
+3.总结  
+如果Pod被销毀了,hostPath对应的目录还是会被保留;不过一旦Host崩溃了,hostPath也就无法访问了.<font color="#00FF00">并且采用这种方式会增强Pod与节点的耦合度</font>,体现在上面的例子中就是产生的data.txt只存在于当前的节点上,如果Pod被调度到另外的节点上这些数据就无法得到  
+<font color="#00FF00">生产上这种类型的卷用的不多(可用性太差)</font>  
+
+
+#### 4.2.3 NFS  
+1.NFS(Network File System)使用示例  
+*提示:NFS的示例之前在StatefulSet有相关的介绍,只不过那边暂时跳过了很多内容*  
+```yml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nfs-deploy
+  labels:
+    app: nfs-deploy
+spec:
+  selector:
+    matchLabels:
+      app: nfs
+  replicas: 1
+  #pod
+  template:
+    metadata:
+      name: nfs
+      labels:
+        app: nfs
+    spec:
+      containers:
+        - name: busybox
+          image: busybox:1.28
+          command: ["/bin/sh","-c","echo 'hello,world' > /data/data.txt && sleep 3600" ]
+          volumeMounts:
+             - name: nfs-vloume #挂载路径别名
+               mountPath: /data  #要挂载的路径
+          imagePullPolicy: IfNotPresent
+      volumes:
+        - name: nfs-vloume  #与挂载路径名字一致
+          nfs:
+            # 指定挂载到NFS机器上的哪个目录
+            path: /root/nfs/data 
+            # NFS 服务器的IP
+            server: 192.168.91.25 
+```
+
+2.总结  
+相对于emptyDir和hostPath,这种volume类型的最大特点就是不依赖Kuberees Volume的底层基础设施由独立的存储系统管理,<font color="#00FF00">与Kubernetes集群是分离的</font>.数据被持久化后,即使整个Kubernetes崩溃也不会受损.  
+<font color="#00FF00">当然使用NFS也会增加运维的成本,所以为了解决这种问题,引入了PV&PVC</font>  
+
+#### 4.2.4 PV&PVC  
+1.问题  
+拿上述NFS使用volume来距离,Pod必须事先知道以下几个信息:  
+* 必须知道当前的volume类型,并且volume已经被创建好
+* 必须知道volume的具体地址信息
+
+但是通常Pod是开发人员维护的,而volume则通常是由存储系统的管理员维护,所以开发人员要想获得上述的信息,就必须询问运维人员,<font color="#00FF00">这就造成了职责的耦合</font>  
+
+2.PV&PVC基本介绍  
+K8S给出的解决方案是`Persistent Volume`和`Persistent Volume Claim`  
+* `Persistent Volume`(PV):<font color="#00FF00">是外部存储系统中的一块存储空间,由管理员创建和维护</font>.与Volume一样,PV具有持久性,生命周期独立于Pod  
+* `Persistent Volume Claim`(PVC):PVC是对PV的申请,<font color="#00FF00">通常由普通用户创建和维护</font>.需要为Pod分配存储资源时,用户可以创建一个PVC,指明存储资源容量大小和访问模式.
+  之后K8S会根据用户创建的PVC自动查找并提供满足要求的PV
+  通过PVC用户只需要告诉K8S当前Pod需要什么样的存储资源,而不必关心真正的空间从哪里分配、如何访问等底层细节信息.
+  这些Store Provider的底层信息交给管理员处理,只有管理员需要真正关心如何创建PV;  
+  <font color="#FF00FF">说白了就是开发人员只管怎么用,具体怎么实现交给运维</font>
+
+3.创建PV  
+```yml
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: nfs-pv
+spec:
+  capacity:
+    # 指定容量大小
+    storage: 1Gi
+  # 访问模式 
+  accessModes: 
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: nfs
+  nfs:
+    path: /{nfs-server目录名称}
+    server: {nfs-server IP 地址}
+```
+* `accessModes`:访问模式
+  * `ReadWriteOnce`:表示PV能以读写的方式挂载到单个节点上
+    这个PV只能被某个节点以PV的方式挂载,如果尝试将该PV挂载到多个节点就会失败
+  * `ReadOnlyMany`:表示PV能以只读模式挂载到多个节点上
+  * `ReadWriteMany`:表示PV能以读写模式挂载到多个节点上
+* `persistentVolumeReclaimPolicy`:指定PV的回收策略
+  * `Retain`:在PVC被删除后,保留PV和其数据;如果需要删除PV需要手动清理<font color="#00FF00">(推荐)</font>
+  * `Delete`:在PVC被删除后,自动删除PV和其中的数据
+  * `Recycle`:在PVC被删除后,它只会删除PV中的数据,接着保留当前PV供之后使用
+* `storageClassName`:相当于为PV设置一个分类,例如这里为当前PV设置的分类是nfs;以后PVC在寻找该类型的PV时寻找就更加方便
+
+运行成功后执行`kubectl get pv`来查看PV的情况
+
+4.创建PVC  
+```yml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nfs-pvc
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 1Gi
+   # 通过PV分类进行快速
+  storageClassName: nfs
+  # 也可以通过标签的方式快速匹配PV,这里标签就和上面PV的标签匹配了
+  #selector:  
+  #  matchLabels:
+  #    name: nfs-pv
+```
+
+运行成功后执行`kubectl get pvc`来查看PV的情况  
+![绑定](resources/K8S/36.png)  
+运行成功之后会发现此时的PV和PVC已经绑定了,<font color="#00FF00">PV和PVC是一一绑定的</font>,一旦绑定就不能再被绑定了  
+
+5.使用PVC  
+```yml
+apiVersion: apps/v1
+kind: Pod
+metadata:
+  name: pv-pvc-deploy
+spec:
+  selector:
+    matchLabels:
+      app: pv-pvc
+  replicas: 1
+  #pod
+  template:
+    metadata:
+      name: pv-pvc
+      labels:
+        app: pv-pvc
+    spec:
+      containers:
+        - name: busybox
+          image: busybox:1.28
+          command: ["/bin/sh"]
+          args: ["-c", "while true; do echo 'Hello NFS!' >> /data/index.html; sleep 1; done"]
+          volumeMounts:
+            # 申明使用哪个卷
+            - name: nfs-vloume
+              # 挂载的路径
+              mountPath: /data  #挂载路径
+      volumes:
+        # 申明Pod的volume
+        - name: nfs-vloume
+          # 引用PVC
+          persistentVolumeClaim:
+            # 通过标签匹配
+            claimName: nfs-pvc
+```
+
+6.删除测试  
+删除PV或PVC的方式和之前删除Pod的方式一致;这里如果删除了Pod对PV或PVC是没有影响的,因为它们之间本质上是不同的API对象  
+在当前`Retain`的这种策略下,假设删除了PVC;则PV是不会有任何影响的,如果此时重新启动PVC则<font color="#00FF00">PV和PVC之间是不会相互关联的</font>因为此时的PV已经有数据了,后续想要与它绑定的PVC是无法绑定的  
+接着这里吧PV删除,<font color="#00FF00">PV删除后保存在NFS中的数据是不会被删除的(在Retain策略下)</font>  
+所以如果还想要让新的PVC绑定PV,就必须创建一个新的PV  
+
+
+#### 4.2.5 动态供给
+1.基本概念  
+在上面的示例中,必须先创建PV再创建PVC最后Pod才能使用PVC,这种方式叫做<font color="#00FF00">静态供给</font>  
+<font color="#00FF00">动态供给</font>的意思是如果没有满足条件的PVC条件的PV会动态创建PV;动态供给是通过`StorageClass`来实现的  
+`StorageClass`就相当于Java中的类,在动态创建PV的时候这个PV的定义信息(类信息)就是定义在StorageClass中的  
+但是StorageClass只是存放定义信息,真正创建的时候需要一个<font color="#00FF00">制备器(provisioner)</font>;  
+但是provisioner创建PV的时候又遇到一个问题,正常的PV创建是通过编写pvYml,然后通过`kubectl`命令来进行创建的,<font color="#00FF00">这是K8S管理通过APIServer实现的</font>;但是provisioner本身是没有这个权限去创建PV的,所以为了让provisioner有足够的权限创建PV还必须拥有创建PV的K8S权限;也称为<font color="#FF00FF">RBAC</font>(基于角色的访问控制)  
+使用动态供给的三个组件:<font color="#FF00FF">PVC、StorageClass、provisioner</font>  
+
+2.创建provisioner  
+```yml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nfs-client-provisioner
+  labels:
+    app: nfs-client-provisioner
+  # replace with namespace where provisioner is deployed
+  namespace: kube-system
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: nfs-client-provisioner
+      # pod
+  template:
+    metadata:
+      labels:
+        app: nfs-client-provisioner
+    spec:
+      serviceAccountName: nfs-client-provisioner
+      containers:
+        - name: nfs-client-provisioner
+          image: chronolaw/nfs-subdir-external-provisioner:v4.0.2
+          volumeMounts:
+            - name: nfs-client-root
+              mountPath: /persistentvolumes
+          env:
+            - name: PROVISIONER_NAME
+              value: k8s-sigs.io/nfs-subdir-external-provisioner    #与stroageclass中provisioner 对应
+            - name: NFS_SERVER
+              value: 192.168.91.25
+            - name: NFS_PATH
+              value: /root/nfs/data
+      volumes:
+        - name: nfs-client-root
+          nfs:
+            server: 192.168.91.25
+            path: /root/nfs/data
+```
+
+3.创建RBAC  
+这是给provisioner赋权的YML  
+```yml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nfs-client-provisioner
+  # replace with namespace where provisioner is deployed
+  namespace: kube-system
+---
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: nfs-client-provisioner-runner
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "update"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "update", "patch"]
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: run-nfs-client-provisioner
+subjects:
+  - kind: ServiceAccount
+    name: nfs-client-provisioner
+    # replace with namespace where provisioner is deployed
+    namespace: kube-system
+roleRef:
+  kind: ClusterRole
+  name: nfs-client-provisioner-runner
+  apiGroup: rbac.authorization.k8s.io
+---
+kind: Role
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: leader-locking-nfs-client-provisioner
+  # replace with namespace where provisioner is deployed
+  namespace: kube-system
+rules:
+  - apiGroups: [""]
+    resources: ["endpoints"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+---
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: leader-locking-nfs-client-provisioner
+  # replace with namespace where provisioner is deployed
+  namespace: kube-system
+subjects:
+  - kind: ServiceAccount
+    name: nfs-client-provisioner
+    # replace with namespace where provisioner is deployed
+    namespace: kube-system
+roleRef:
+  kind: Role
+  name: leader-locking-nfs-client-provisioner
+  apiGroup: rbac.authorization.k8s.io
+
+```
+
+4.创建StorageClass  
+```yml
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  # 与StatefulSet中的storageClassName保持一致
+  name: mysql-nfs-sc 
+# 与provider中的PROVISIONER_NAME值对应
+provisioner: k8s-sigs.io/nfs-subdir-external-provisioner 
+parameters:
+  onDelete: "remain"
+```
+
+5.使用StorageClass  
+这里以MySQL举例子  
+```yml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mysql
+  labels:
+    app: mysql
+spec:
+  selector:
+    matchLabels:
+      app: mysql
+  serviceName: mysql #headless 无头服务  保证网络标识符唯一  必须存在
+  replicas: 1
+#Pod
+  template:
+    metadata:
+      name: mysql
+      labels:
+        app: mysql
+    spec:
+      containers:
+        - name: mysql
+          image: mysql/mysql-server:8.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              value: root
+          volumeMounts:
+            - mountPath: /var/lib/mysql  # 挂载路径
+              name: data                 # 挂载别名
+          ports:
+            - containerPort: 3306
+      restartPolicy: Always
+  # 声明动态创建数据卷模板;不再使用volumes
+  volumeClaimTemplates:
+    - metadata:
+        name: data      #  与挂载别名一致
+      spec:
+        accessModes:    #  访问模式
+          - ReadWriteMany
+        # 与storageClass中Name保持一致
+        storageClassName: mysql-nfs-sc   
+        resources:
+          requests:
+            storage: 2G
+```
+
+6.测试运行  
 
 
 ## 1.基本概念介绍
@@ -1687,10 +2471,13 @@ kubeadm join 192.168.230.130:6443 --token mvq64p.kkzenbymccwvii9g \
 ### B.K8S命令大全  
 *提示:所有的命令都*
 #### 1. Pod相关  
-* `kubectl get [pods|deployments] [-n [namespace(default=default)]] [-A] [-o [wide|yaml|json]] [-w] [--show-labels] [-l [rule]]` 查询
+* `kubectl get [pods|deployments|service|pv|pvc] [-n [namespace(default=default)]] [-A] [-o [wide|yaml|json]] [-w] [--show-labels] [-l [rule]]` 查询
   * `pods|deployments`:查询类型
     * pods:查看所有的pod
     * deployments:查看所有的deployments
+    * service:查看所有的service
+    * pv:查看所有的pv
+    * pvc:查看所有的pvc
   * `-n [namespace]`:指定查询的命名空间  
   K8S集群启动之后存在两个命名空间(default和kube-system),命名空间的作用是用于归类Pod的;如果不指定该参数,默认会查询default命名空间的所有Pod
   * `-A`:查询所有命名空间的Pod
