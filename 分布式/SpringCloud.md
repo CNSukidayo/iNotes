@@ -3977,6 +3977,8 @@ SOA使用治理中心ESB,ESB会管理所有的服务(模块),每个服务都需�
 **一种可用的微服务架构**  
 ![架构图](resources/springcloud/2.png)  
 *提示:最外层的流量肯定还是走NGINX的,NGINX要通过负载均衡的算法把流量转到网关上,当然在这中间可以做分片*  
+这里的Kong实际上是<font color="#00FF00">kubernetes-ingress-controller</font>并且Kong在转发外部流量的时候是通过K8S的服务名来完成的(这点是推测,但至少不可能是IP地址;因为节点的IP是会变的)  
+
 
 **名词解释:**  
 * 水平扩容:增加节点的数量

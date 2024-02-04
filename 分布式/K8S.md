@@ -3,10 +3,15 @@
 2.Controller控制器  
 3.Service  
 4.存储  
+5.Ingress  
+6.命名空间  
+7.Helm  
+8.K8S部署微服务实战  
 
 **附录:**  
 A.K8S基本环境搭建  
-
+B.K8S命令大全  
+B.PomYml规约  
 
 
 ## 1.Pod  
@@ -955,7 +960,7 @@ StatefulSet用来管理某Pod集合的部署和扩缩,<font color="#00FF00">并�
 ### 2.4 DaemonSet
 1.介绍  
 DaemonSet确保所有节点或某些节点上运行一个DaemonSet类型的Pod;<font color="#FF00FF">当有节点加入集群时会为它们自动新增一个Pod</font>  
-<font color="#00FF00">DaemonSet类型的Pod只允许存在一个,如果想运行不同类型的DaemonSet是不被允许的</font>  
+<font color="#00FF00">DaemonSet类型的Pod只允许存在一个(即每个节点有且仅会运行这一个Pod)</font>  
 
 2.DaemonSet的应用场景  
 * 在每个节点上运行集群守护进程
@@ -1353,6 +1358,8 @@ spec:
 **目录:**  
 4.1 基本概念介绍  
 4.2 卷的使用  
+4.3 ConfigMap  
+4.4 Secret  
 
 
 
@@ -1840,349 +1847,516 @@ spec:
 
 6.测试运行  
 
+### 4.3 ConfigMap  
+1.基本介绍  
+在K8S中,<font color="#00FF00">ConfigMap是一种用于存储非敏感信息的K8S对象</font>它用于存储配置数据,ConfigMap通常用于容器镜像中的配置文件,命令行参数和环境变量等  
+假设现在运行一个Springboot微服务,那么就可以将该微服务的配置使用ConfigMap来进行管理;亦或是Redis服务的配置文件也可以放到ConfigMap中进行管理  
 
-## 1.基本概念介绍
-### K8S涉及的功能有:  
-1. 自动装箱:基于容器的自动部署功能
-2. 自我修复:当容器失败时,会对容器进行重启.当所部署的Node节点有问题时,会对容器进行重新部署和重新调度;类似熔断、分布式的思想.
-3. 水平扩展:K8S可以对容器(应用)进行规模夸大或剪裁(缩小);概念类似集群,高峰期的时候可以开多个应用,低流量期间可以减少应用个数.
-4. 服务发现:和微服务的概念一致;负载均衡.多个应用对外提供统一的入口,然后内部可以将多个请求分摊到不同的容器上;类似于虚拟化(虚拟设备的概念)
-5. 滚动更新:可以根据应用的变化,对应用容器运行的应用,进行一次或批量式更新.
-6. 版本回退:可以根据应用部署的情况,对容器中运行的应用,进行历史版本的回退.
-7. 密码配置管理:类似热部署的概念,不需要重启整个应用.
-8. 存储编排:自动实现存储系统挂载及应用;存储系统可以来自本地目录、网络存储、公有云存储服务.
-9. 批处理:提供一次性、定时任务;满足批量数据分析和处理的场景.
+可以通过三种方式将ConfigMap中的配置数据注入到Pod中:  
+* 环境变量注入:将配置数据注入到Pod中的容器环境变量中
+* 配置文件注入:将配置数据注入到Pod中的容器文件系统中,容器可以读取这些文件
+* 命令行参数注入:将配置数据注入到容器的命令行参数中
 
-### 集群架构组件图:
-![集群架构组件图](resources/K8S/1.png)
+2.优点  
+* 避免了硬编码,将配置数据与应用代码分离
+  这点其实nacos可以做,但如果不是Java生态的话可以考虑用K8S做?但估计支持也不是很完善,个人感觉这个优点聊胜于无
+* 便于维护和更新,可以单独修改ConfigMap而不需要重新构建镜像
+  原本如果需要修改Pod中容器的配置是需要重启的(就类似docker),<font color="#00FF00">使用ConfigMap就不需要重启</font>
+* 可以通过多种方式注入配置数据,更加灵活
+* 可以通过K8S的自动化机制对ConfigMap进行版本控制或回退
+  就是做到类似nacos中远程配置的版本管理
+* ConfigMap可以被多个Pod共享,减少了配置数据的重复存储;这个优点感知不强
 
-Node(节点)分为MasterNode(主控节点)和WorkerNode(工作节点).  
-MasterNode内部由三部分组成:APIS(API Server)、Scheduler、controller-manager、etcd;MasterNode的主要功能就是做管理的.
-* APIServer:集群的统一入口(就是系统对外的接口,你系统暴露的接口)各个组件的协调者,基于Restful风格的请求方式;交给etcd进行存储.
-* Scheduler:完成节点调度的,选择一个WorkderNode进行节点调度.
-* controller-manager:集群中后台的统一任务的管理,一个资源对应一个控制器;进行模块(节点)映射的.
-* etcd:存储系统,用于保存集群(K8S本身)中的一些相关数据.
-WorkerNode由两部分组成:kubelet、kube-proxy
-* kubelet:Master如何管理WorkerNode?实际上是通过在WorkerNode中派遣一个代表kubelet来完成的.由kubelet来管理本机容器.
-* kube-proxy:实现网络代理,可以实现负载均衡等操作.
 
-### K8S的核心概念有:
-* pod:最小部署单元;它是一组容器的集合.一个pod中的容器是共享网络的;生命周期是短暂的(服务器重启pod就不存在了)
-* controller:确保预期的pod副本数量,分为有状态应用部署、无状态用用部署.无状态就是可以随便用,有状态就是有特定的启动条件.确保所有的node运行同一个pod(用的不多,但也是一种功能)、一次性任务和定时任务.
-* Service:定义一组Pod的访问规则.  
-总体流程可以总结为:通过Service统一入口进行访问,由controller创建Pod进行部署.
+3.定义ConfigMap  
+*提示:ConfigMap也是K8S的一种对象*  
+3.1 使用命令的方式创建ConfigMap  
+* `kubectl create configmap [configMapName] --from-literal=[key0]=[value0] --from-literal=[key1...]=[value1...]` 
+  * `configMapName`:填写当前configmap的名称
+  * `key0`:给定一个键值对Key
+  * `value0`:给定键值对key0对应的value0
+* `kubectl get configmap`查看所有的configMap
+* `kubectl describe configmap [configMapName]` 查看configMapName的详情信息
 
-### 平台规划和部署:
-1. 搭建K8S环境平台规划
-2. 服务器硬件配置要求
-3. 搭建K8S集群部署方式
 
-1.平台规划部署  
-分类:单集群master、多集群master
-
-单集群Master:
-![单Master集群](resources/K8S/2.png)
-缺点:Matser一旦宕机就无法管理WorkerNode
-
-多集群Master:
-![单Master集群](resources/K8S/3.png)
-特点:需要添加一个中间的负载均衡来完成MasterNode与WorkderNode之间的交互.是一种高可用的集群.
-
-2.服务器硬件配置要求  
-配置越高越好
-
-3.搭建K8S集群部署方式  
-分类:分为两种部署方式,分别为kubeadm、二进制(bin)
-
-### kubeadm部署方式之kubeadm:  
-<a id="doKubeadm"></a>
-
-提示:对每一个节点执行以下内容  
-1.关闭防火墙  
-`systemctl stop firewalld`  
-2.关闭selinux  
-`sed -i 's/enforcing/disabled' /etc/selinux/config` 永久关闭  
-`setenforce 0` 临时关闭  
-3.关闭swap交换分区  
-`swapoff -a` 临时关闭  
-`sed -ri 's/.*swap.*/#&/' /etc/fstab` 永久关闭
-
-4.根据规划设置主机名称  
-`hostnamectl set-hostname [yourNmae]`  
-例如:  
-hostnamectl set-hostname k8smaster 设置master主机的名称为该名称为k8smaster
-hostnamectl set-hostname k8snode1 设置node1主机的名称为k8snode1
-hostnamectl set-hostname k8snode1 设置node2主机的名称为k8snode2
-
-5.在master主机上修改hosts  
-路径:/etc/hosts  
-说明:现在一共三台主机,一台master,两台node 根据master主机的IP和node主机的IP添加hosts文件内容  
-例如:  
-``` c
-192.168.217.131 k8smaster  
-192.168.217.132 k8sndoe1  
-192.168.217.133 k8snode2  
+3.2 使用配置文件的方式创建ConfigMap(推荐)  
+```yml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  # 就对应上述的configMapName
+  name: my-config
+data:
+  app: nginx
+  version: 3.0
 ```
 
-6.将桥接的IPV4流量传递到iptables的链上  
-提示:三个节点需要全部设置  
-`vi /etc/sysctl.d/k8s.conf` 第一次该文件应该不存在  
-<font color="#00FF00">net.bridge.bridge-nf-call-ip6tables = 1</font>  
-<font color="#00FF00">net.bridge.bridge-nf-call-iptables = 1</font>  
-`sysctl --system`  运行该名称使得配置生效
-
-7.时间同步  
-`yum install ntpdate -y`  
-`ntpdate time.windows.com`
-
-8.所有节点安装Docker  
-`wget https://mirrors.aliyun.com/docker-ce/linux/centos/docker-ce.repo -O /etc/yum.repos.d/docker-ce.repo`    
-`yum -y install docker-ce-18.06.1.ce-3.el7`  
-`systemctl enable docker && systemctl start docker` 设置docker开机启动  
-`docker --version`显示的结果为:
-Docker version 18.06.1-ce, build e68fc7a 代表启动成功  
-在/etc/dockerdaemon.json中添加如下内容:  
-`vi /etc/docker/daemon.json`  
-```json
-{
-    "registry-mirrors": ["https://b9pmyelo.mirror.aliyuncs.com"]
-}
-```
-`systemctl restart docker` 重启docker
-
-9.添加阿里云YUM软件源  
-提示:针对所有节点  
-`vi /etc/yum.repos.d/kubernetes.repo`
-```properties
-[kubernetes]
-name=Kubernetes
-baseurl=https://mirrors.aliyun.com/kubernetes/yum/repos/kubernetes-el7-x86_64
-enabled=1
-gpgcheck=0
-repo_gpgcheck=0
-gpgkey=https://mirrors.aliyun.com/kubernetes/yum/doc/yum-key.gpg https://mirrors.aliyun.com/kubernetes/yum/doc/rpm-package-key.gpg
+SpringBoot使用ConfigMap示例:  
+```yml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+data:
+  # key就是springboot中配置文件的名称,value必须以竖线|开头
+  # 接着换行写入你希望在application.yml中写入的配置信息
+  application.yml: |
+    server:
+      port: 8080
 ```
 
-10.所有节点安装kubeadm、kubelet、kubectl  
-`yum install -y kubelet-1.18.0 kubeadm-1.18.0 kubect1-1.18.0`  
-`systemctl enable kubelet` 设置为开机自启
-
-11.在master节点上执行下述命令  
-注意:将apiserver-advertise-address后面的值改为当前master的IP地址  
-`kubeadm init --apiserver-advertise-address=192.168.217.131 --image-repository registry.aliyuncs.com/google_containers --kubernetes-version v1.18.0 --service-cidr=10.96.0.0/12 --pod-network-cidr=10.244.0.0/16`  
-执行该命令将会去云端拉取相关的image(docker中的概念)到docker中,实际上拉取的内容就是之前在Master节点中提到的Master节点的相关的组件,例如controller、apiService等.
-![docker images](resources/K8S/4.png)
-完成之后系统会提示相关的友好信息
-![docker images](resources/K8S/5.png)
-首先执行第一个绿色方框的内容,需要根据具体的运行的情况来执行!  
-`mkdir -p $HOME/.kube`  
-`sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config`  
-`sudo chown $(id -u):$(id -g) $HOME/.kube/config`
-
-运行完毕之后调用`kubectl get nodes`方法来查看结果
-![kubectl get nodes](resources/K8S/6.png)
-
-在WorkderNode节点中执行第二个绿色方框的内容,不是在master节点中执行!需要根据具体的运行的情况来执行!  
-`kubeadm join 192.168.217.131:6443 --token wml7nm.plkx6spwpcpt6myk \`
-`--discovery-token-ca-cert-hash sha256:1e77ada31e93285d265c5a252ed4a6f22a13b269069135dc1fa554b3fb8b24a4`  
-添加完成之后,回到master节点运行如下命令查看节点的添加情况  
-`kubectl get nodes`
-![kubectl get nodes](resources/K8S/7.png)
-默认token有效期为24小时,当过期之后,该token就不可用了.这时就需要重新创建token,操作如下:  
-`kubeadm token create --print-join-command`
-
-12.部署CNI网络插件  
-问题:根据上面的截图可以发现,目前所有的节点都是NoReady这是因为缺少了一个网络插件导致的,所以现在要配置该网络插件.  
-`kubectl apply -f https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml`  
-如果该文件实在无法下载,则直接将该文件拉取到本地,然后依旧执行  
-`kubectl apply -f kube-flannel.yml`  
-效果如下:
-![kubectl apply -f kube-flannel.yml](resources/K8S/8.png)
-运行完毕之后,调用`kubectl get pods -n kube-system`命令以及`kubectl get nodes`查看效果:
-![kubectl get pods -n kube-system](resources/K8S/9.png)
-![kubectl get pods -n kube-system](resources/K8S/10.png)
-
-13.测试kubernetes集群  
-`kubectl create deployment nginx --image=nginx`  
-运行完毕之后调用`kubectl get pods`命令就可以看到刚才拉取的nginx了
-![nginx](resources/K8S/11.png)
-稍等一会等到nginx变为running状态后可以,可以对外暴露端口  
-![nginx](resources/K8S/12.png)
-`kubectl expose deployment nginx --port=80 --type=NodePort`  
-`kubectl get pod,svc` 调用该命令查看对外暴露的端口
-![nginx port](resources/K8S/13.png)
-此时找任意一个WorkderNode的节点的IP+看到的端口(这里是30436),就可以访问到nginx了.(这里WorkderNode1节点的IP为192.168.217.132)
-![nginx port](resources/K8S/14.png)
-
-### kubeadm部署方式之二进制(bin):  
-1.[执行kubeadm的1~7步](#doKubeadm)也是对每个节点执行该步骤,现在一共两个节点,一个master一个worker.
-
-2.将TLS.tar.gz压缩包复制到master机器中并且解压缩.  
-`tar zxvf TLS.tar.gz`
-![nginx port](resources/K8S/17.png)  
-进入TLS目录下,执行`./cfssl.sh`脚本文件,然后在该目录下会出现一个etcd文件夹,进入该文件夹.  
-调用`cat generate_etcd_cert.sh`查看脚本文件的内容
-![generate_etcd_cert](resources/K8S/18.png)
-接着执行绿色方框内的第一行的内容,执行完毕之后会生成ca.pem和ca-key.pem这两个证书.  
-`cfssl gencert -initca ca-csr.json | cfssljson -bare ca -`  
-接着运行`vi server-csr.json`命令编辑json文件的内容
-修改hosts部分的IP为当前master和worker节点的IP
-```json
-{
-    "CN":"etcd",
-    "hosts":[
-        "192.168.217.134",
-        "192.168.217.135"
-        ],
-    "key":{
-        "algo":"rsa",
-        "size":2048
-    },
-    "names":[
-        {
-            "C":"CN",
-            "L":"BeiJing",
-            "ST":"BeiJing"
-        }
-    ]
-}
+3.3 通过文件创建  
+```shell
+echo -n admin >./username
+echo -n 123456 > ./password
+# 使用这种方式创建的ConfigMap,它的key就是文件名,value就是文件的内容
+# 例如这里就是两队键值对 username=admin password=123456
+kubectl create configmap myconfigmap --from-file=./username --from-file=./password
 ```
 
-接着执行绿色方框的下面一条命令  
-`cfssl gencert -ca=ca.pem -ca-key=ca-key.pem -config=ca-config.json -profile=www server-csr.json | cfssljson -bare server`  
-此时运行ls可以看到出现server开头的以pem结尾的证书文件,分别是:ca-key.pem、ca.pem、server-key.pem、server.pem  
-
-3.为etcd和apiserver自签证书  
-由来:集群内部需要证书,外部访问需要证书,颁发需要可信任的证书.  
-将etcd.tar.gz文件复制到master本机上进行解压缩  
-`tar zxvf etcd.tar.gz`  
-进入`cd etcd/ssl/`目录,将该目录下的三个证书文件删除.  
-进入`cd etcd/cfg/`目录,编辑etcd.conf文件,将ETCD_LISTEN_PEER_URLS、ETCD_LISTEN_CLIENT_URLS、ETCD_INITIAL_ADVERTISE_PEER_URLS、ETCD_ADVERTISE_CLIENT_URLS字段的值改为当前master本机的IP.  
-注意将ETCD_INITIAL_CLUSTER字段中的etcd-1和tecd-2改成当前master和worker节点的IP.
-![master](resources/K8S/19.png)
-将之前TLS生成的证书复制到当前的ssl目录下面,进入到etcd文件夹内,运行以下命令:  
-`cp /root/k8s/TLS/etcd/{ca,server,server-key}.pem ssl/`
-![master](resources/K8S/20.png)  
-将master节点中etcd文件复制到worker节点中  
-`scp -r etcd root@192.168.217.135:/opt/`  
-[etcd]是当前复制的文件夹;[root]是目标linux的用户名;[192.168.217.135]是目标主机的IP地址;冒号后面是将该文件夹复制到那个目录下面.
-进入到etcd的上一级目录,将刚才从etcd.tar.gz压缩包中解压出来的etcd.service文件复制到worker节点中.  
-`scp etcd.service root@192.168.217.135:/usr/lib/systemd/system/`  
-etcd.service实际上是一个可执行文件,同理也将该文件复制到本机master节点的/usr/lib/systemd/system/目录下  
-`cp etcd.service /usr/lib/systemd/system`  
-进入worker节点的opt目录下(即刚才从master节点复制到worker节点的目录)  
-`cd etcd/cfg/`进入etcd/cfg目录,使用`vi etcd.conf`编辑配置文件,将IP改为当前worker节点的IP.
-![worker](resources/K8S/21.png)  
-在master和worker节点中运行以下命令:  
-`systemctl daemon-reload` 先重新加载  
-`systemctl start etcd` 启动  
-`systemctl enable etcd` 设置开机自启  
-
-4.部署etcd存储的集群
-
-5.部署master组件
-![master](resources/K8S/15.png)
-
-
-6.部署node组件
-![node](resources/K8S/16.png)
-
-7.部署集群网络插件  
-
-## 2.kubernetes集群命令行工具kubectl
-**概述:**
-kubectl是kubernetes集群的命令行工具,通过kubectl能够对集群本身进行管理,并能够在集群上进行容器化应用的安装部署.
-
-**语法格式**:  
-`kubectl [command] [TYPE] [NAME] [flags]`  
-command:指定要对资源执行的操作,例如create、get、describe和delete  
-type:指定资源类型,资源类型是大小写敏感的,开发者能有以单数、复数和缩图的形式.例如:
-```console
-kubectl get pod pod1
-kubectl get pods pod1
-kubectl get po pod1
+3.4 通过文件件创建  
+```shell
+# 这种方式的意思就是将文件件里面的文件批量进行构建
+kubectl create configmap my-config --from-file=config-files/
 ```
-name:指定资源名称,名称大小写也是敏感的.如省略名称,则会显示所有的资源,例如:注意比较两个的区别  
-`kubectl get nodes`  
-`kubectl get nodes k8smaster`  
-![flags](resources/K8S/22.png)
-\*flags:指定可选参数,例如-s或者-server参数指定Kubernetes API server地址和端口
 
-**帮助命令:**  
-`kubectl --help` 查看kubectkl命令的帮助信息  
-`kubectl [command] --help` 查看某个具体命令的帮助信息  
-**command命令分类:**  
-(1)基础命令:  
-create 通过文件名或标准输入创建资源  
-expose 将一个资源公开为一个新的service  
-get 显示一个或多个资源  
+3.5 通过环境变量创建  
+```shell
+# env环境变量文件的定义方式
+echo "NAME=app" >> ~/env
+echo "VERISON=1.0" >> ~/env
+# 这种方式也是读取一个env文件,只不过该文件是一个环境变量的文件
+kubectl create configmap my-config --from-env-file=<(env)
+```
 
-举例子:  
-`kubectl create deployment nginx --image=nginx` 创建nginx资源  
-`kubectl expose deployment nginx --port=80 --type=NodePort` 对外暴露端口  
-`kubectl get pod,svc`  获取pod的状态、当前端口暴露的情况  
-`kubectl get nodes`  获取当前所有的节点  
+4.使用ConfigMap  
+4.1 通过环境变量的方式使用ConfigMap  
+查看当前使用的ConfigMap环境  
+![configMap](resources/K8S/37.png) 
+```shell
+apiVersion: v1
+kind: Pod
+metadata:
+  name: my-pod
+spec:
+  containers:
+  - name: my-container
+    image: busybox
+    command: ["/bin/sh", "-c", "echo $BUSY_NAME ; sleep 3600;"]
+    env:
+    # name: 创建一个环境变量,容器中使用的时候就使用环境变量的名称就是该名称
+    - name: BUSY_NAME
+    # valueForm: value 来源与什么
+      valueFrom:
+      # 指定当前引用的configMap为my-config-map
+        configMapKeyRef:
+          # 与configmap中configmapName的值一致
+          name: my-config-map  
+          # 要取my-config-map中的哪个Key
+          key: app     
+```
+运行Pod,查看日志结果如下  
+![成功打印日志](resources/K8S/38.png)  
 
-(2)部署和集群管理命令:
+除了使用env的方式指定之外还可以使用<font color="#00FF00">envFrom</font>的方式批量指定  
+```yml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: my-pod
+spec:
+  containers:
+  - name: my-container
+    image: busybox
+    # 此时不难想象,使用这种方式相当于把整个configMap中的key都作为环境变量名
+    command: ["/bin/sh", "-c", "echo $APP ; sleep 3600;"]
+    # 一次性注入这个 configmap
+    envFrom:
+    - configMapRef:
+        name: my-config-map
 
-`kubectl api-resources` 获得所有API资源的类型
+```
 
-**yaml文件:**  
-提示:现在以kubeadm方式部署为例.  
-描述:资源清单文件、资源编排  
-进入k8s目录下方,存在一个**kube-flannel.yml**文件,可以查看该文件的内容.  
-yaml文件由两部分组成,分别是:控制器定义、被控制对象  
-查看该文件:
-![yaml](resources/K8S/23.png)
-|   字段名   |    描述    |
-|:----------:|:----------:|
-| apiVersion |  API版本   |
-|    kind    |  资源类型  |
-|  metadata  | 资源元数据 |
-|    spec    |  资源规格  |
-|  replicas  |  副本数量  |
-|  selector  | 标签选择器 |
-|  template  |  Pod模板   |
-|  metadata  | Pod元数据  |
-|    spec    |  Pod规格   |
-| containers |  容器配置  |
+4.2 使用配置文件的方式注入(volume)  
+```yml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: application-pod
+spec:
+  containers:
+    - name: myapp-container
+      image: busybox
+      # 比如这里指定了一个application.yml
+      command: ["java","-jar","app.jar","--spring.config.location=","/data/application.yml"]
+      volumeMounts:
+        # 挂载名称
+        - name: data-volume
+          # 将容器内的data目录挂载到data-volume上
+          mountPath: /data
+  volumes:
+    #与挂载名称对应
+    - name: data-volume
+      # 挂载的目标类型是configMap;不是之前诸如emptyDir之类的类型了  
+      configMap:
+        name: my-config-map
+```
+*提示:使用这种方式时必须使用3.2 使用配置文件的方式创建ConfigMap这节创建配置文件的方式创建,其实这种创建方式相当于<font color="#00FF00">key的名称是文件的名称(application.yml),value的值就是该yml配置文件的内容</font>;然后K8S会把该configMap转为一个文件保存到容器中,从而让容器可以读取到该文件*  
 
-**如何快速编写yaml文件:**  
-1.使用kubectl create命令生成yaml文件(适用于还没有部署的场景)  
-`kubectl create deployment web --image=nginx -o yaml --dry-run`  
-可以看到该命令和之前创建nginx的命令很相似,但这里多加了-o yaml --dry-run 命令代表现在会尝试创建nginx并不会真正创建,它会把尝试创建的结果yaml输出出来.  
-2.使用kubectl get命令导出yaml文件(适用于项目已经部署的情况)  
-现在master已经部署了一个nginx,所以现在要通过kubectl命令将该nginx的内容导出.
-`kubectl get deploy nginx -o=yaml > my.yaml`  
-其中nginx是部署的pod的名称(资源名称name),后面-o 是附加参数.
 
-## 3.Pod
-**基本你概念:**  
-1.pod是K8S中最小的部署单元,k8s是之间管理pod而不是管理容器的.  
-2.pod是由一个或多个container组成的;pod包含多个容器(一组容器的集合)  
-3.一个pod中容器共享网络命名空间
-4.生命周期是短暂的(服务器重启pod就不存在了)  
-**pod存在的意义:**  
-1.创建容器使用docker,一个docker对应是一个容器,一个容器有进程,一个容器运行一个应用程序.  
-2.pod是多进程设计,运行多个应用程序.一个pod有多个容器,一个容器里面运行一个应用程序.所以pod是多进程的.  
-3.pod存在也是为了亲密性应用  
-3.1两个应用之间进行交互  
-3.2网络之间调用  
-3.3两个应用之间需要频繁调用  
-例如之前如果有两个应用之间需要进行调用,那就必须使用IP进行调用;而现在如果两个应用在同一个pod中,那这两个应用之间就可以通过127.0.0.1和socket方式进行交互.简而言之就是pod的存在方便了两个应用之间进行交互的场景.
-![pod结构示例图](resources/K8S/24.png)
-**pod实现机制:**  
-它是由**共享网络**和**共享存储**这两个机制来实现的  
-1.共享网络:  
-容器通过docker创建,容器之间本身是相互隔离的,它的隔离是通过linux系统的namespace和group进行隔离的.
-现在要让在同一个pod中的容器共享网络,需要一个前提条件:所有容器在同一个namespace中.  
-pod首先会在创建一个**pause容器**,该容器不是我们的应用容器是默认创建的,称之为**根容器**.接着会创建我们的应用(业务)容器(例如nginx),创建的这些业务容器会加入到pause容器中.而pause容器它有独立的IP地址、MAC地址、port,此时就可以把所有的业务容器放到同一个namespace中.  
-![网络共享实现机制](resources/K8S/25.png)
-2.共享存储:  
-pod中需要持久化的数据有日志数据、业务数据等  
-为什么需要持久化?  
-答:假如现在有三个节点node1、node2、node3.假设node1中有一个pod,该pod会做相关的业务操作,假设node1在执行的过程中突然宕机了,那么现在就需要node2来接替node1继续提供服务.而node1里面运行的内容实际上是镜像,现在node2接替之后也需要拉取该镜像,但是新镜像默认是没有数据的.所以我们就需要将节点中运行的数据进行持久化操作.也就是将所有节点的数据存储到一个统一的地方.
-在
+### 4.4 Secret  
+1.基本介绍  
+在Kubernetes中,Secret是一种用于存储和管理敏感信息的对象类型,如密码、API密钥、证书等等.它们与ConfigMap相似,但在处理敏感信息时,<font color="#00FF00">Secret会提供更高的安全性和保密性</font>.  
+<font color="#00FF00">Secret可以用于将这些敏感信息注入到容器中,并确保这些信息在运行时不会被意外泄漏或暴露给其他人</font>  
+需要注意的是,Secret并不提供强大的安全保证,只是简单地将数据存储在<font color="#00FF00">base64编码</font>的形式下,并不提供加密或其他安全措施,因此不要将高度敏感的信息存储在Secret中.在处理高度敏感的信息时,需要使用更高级别的保护机制,如使用加密数据的Volume类型,或者使用第三方加密解决方案等  
+<font color="#FF00FF">所以它有什么用?(没什么用)</font>  
+
+2.定义Secret  
+*提示:和ConfigMap一样,Secret的创建也分为四种方式;这里只演示使用命令的创建方式*  
+* `kubectl create secret [secretName] --from-literal=[key0]=[value0] --from-literal=[key1...]=[value1...]` 
+  * `secretName`:填写当前secret的名称
+  * `key0`:给定一个键值对Key
+  * `value0`:给定键值对key0对应的value0
+
+3.使用Secret  
+3.1 通过环境变量的方式使用Secret  
+```yml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: my-pod
+spec:
+  containers:
+    - name: myapp-container
+      image: busybox
+      command: ["/bin/sh","-c","sleep 3600"]
+      env:
+        - name: USERNAME
+          valueFrom:
+            secretKeyRef:
+              # 与secret的名称对应
+              name: my-secret  
+              key: username
+        - name: PASSWORD
+          valueFrom:
+            secretKeyRef:
+              # 与secret的名称对应
+              name: my-secret 
+              key: password
+      # 一次性注入这个 secret;与env二选一使用
+      envFrom:
+        - secretRef:
+            # 与secret的名称对应
+        	  name: my-secret 
+  restartPolicy: Never
+```
+和之前的使用方式差不多,以此类推即可  
+
+3.2 使用配置文件的方式注入(volume)  
+```yml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: myapp-pod
+spec:
+  containers:
+    - name: myapp-container
+      image: busybox
+      command: ["/bin/sh","-c","sleep 3600"]
+      volumeMounts:
+        - name: secret-volume
+          mountPath: /data
+  volumes:
+    - name: secret-volume
+      secret:
+        secretName: secret-sr
+```
+
+## 5.Ingress  
+**目录:**  
+5.1 Ingress基本介绍  
+
+### 5.1 Ingress基本介绍  
+1.简介  
+Ingress允许在K8S集群中暴露HTTP或HTTPS服务;Ingress实际上也是一个K8S中的API对象  
+它允许将集群中的WEB服务一HTTP或HTTPS的形式暴露给用户;<font color="#00FF00">Ingress的具体是由Ingress Controller实现</font>它是一个运行在K8S中的<font color="#FF00FF">负载均衡器</font>;Ingress Controller又可以由各种方式实现,例如nginx、traefik等;  
+Ingress Controller在工作的时候会根据Ingress规则配置的路由规则将流量转发到相应的服务  
+在K8S中,一个Ingress资源定义了一组规则,这些规则用于指定外部流量如何达到集群中的服务.<font color="#00FF00">Ingress资源定义包括域名、服务、路径和其他信息,通过这些信息,Ingress Controller就能够将请求路由到正确的服务</font>(就有点类似断言工厂).同时,Ingress还提供了TLS选项,可以使用SSL/TLS来加密传输数据
+运行示例如下:  
+![示例](resources/K8S/39.png)  
+
+
+2.Ingress和Service的区别  
+Ingress和Service都是K8S中用于<font color="#00FF00">将流量路由到应用程序的机制</font>,但它们在路由层面上有所不同:  
+* Service是K8S中抽象的应用程序服务,公开了一个单一的IP地址和端口,可以用于在K8S集群<font color="#FF00FF">内部</font>的Pod之间进行流量转发
+* Ingress是一个Kubernetes资源对象,它提供了对集群<font color="#FF00FF">外部</font>流量路由的规则.Ingress通过一个公共IP地址和端口将流量路由到一个或多个Service
+
+3.Ingress Controller  
+Ingress Controller是Kubernetes中的一种资源,它负责将外部请求转发到集群内部的Service中,并提供负载均衡、SSL终止等功能.Ingress Controller通常会运行在Kubernetes集群中,作为一组Deployment和Service的形式部署  
+常见的Ingress Controller包括:  
+* Nginx Ingress Controller是由Kubernetes社区维护的另一个Ingress Controller,它也是使用Nginx作为反向代理实现的,可以支持HTTP和HTTPS等协议,支持负载均衡、路由、HTTPS证书管理等功能
+* Ingress Nginx Controller是Nginx官方维护的一个Ingress Controller,它是使用Nginx作为反向代理实现的,可以支持 HTTP和HTTPS等协议,支持负载均衡、路由、HTTPS证书管理等功能
+  Nginx Ingress Controller和Ingress Nginx Controller本质上没什么差别,就是一个是官方维护的一个是K8S社区维护的  
+  这里不使用nginx,因为配置稍微麻烦  
+* Traefik Ingress Controller:基于Go语言开发的Ingress Controller,支持多种路由匹配方式和多种后端服务发现方式
+  * Traefik Ingress Controller:标准实现支持官方Ingress路由规则 注意:这种方式使用繁琐!
+  * <font color="#DDDD00">Traefik Route CRD</font>(customer resuource definition)自定义资源 注意:使用这种方式简单,自定义资源方式定义路由规则
+* <font color="#FF00FF">Istio</font> Ingress Controller:基于Istio Service Mesh(<font color="#00FF00">服务网格</font>)实现的Ingress Controller,支持多种路由匹配方式和多种后端服务发现方式
+* <font color="#FF00FF">Kong</font> Ingress Controller:使用Kong作为反向代理实现Ingress功能,支持API管理和Gateway功能
+
+*提示:Traefik社区的活跃度要比Kong稍高;Kong的活跃度和Istio差不多*  
+
+4.使用Traefik Route CRD  
+> 官方网站: https://doc.traefik.io/traefik
+> 具体参考: https://doc.traefik.io/traefik/user-guides/crd-acme/
+
+提示:不推荐将Ingress Controller服务部署到Matser节点和Work节点上;而是单独起一群机器作为专门运行Ingress Controller的节点;  
+后续通过域名访问的时候经过DNS解析后,一定是访问某节点X的;<font color="#00FF00">那么就希望这台机器上运行Ingress Controller</font>;所以把Ingress Controller看作网关就可以  
+并且这里还需要使用亲和性将Ingress Controller运行到指定的X节点上,并利用返亲和性不允许工作节点运行到该指定节点X上  
+
+4.1 创建新节点并将节点添加到K8S集群中  
+加入步骤详情见附录=>A.K8S基本环境搭建=>1.3 K8S集群搭建  
+
+4.2 去到[官网](https://doc.traefik.io/traefik/v2.9/user-guides/crd-acme/)下载四个文件  
+* [kubernetes-crd-definition-v1 资源定义文件](resources/K8S/traefik/kubernetes-crd-definition-v1.yml)
+* [kubernetes-crd-rbac 给controller的赋权文件](resources/K8S/traefik/kubernetes-crd-rbac.yml)
+* [02-services](resources/K8S/traefik/02-services.yml)
+* [03-deployments](resources/K8S/traefik/03-deployments.yml)
+* [04-ingressroutes](resources/K8S/traefik/04-ingressroutes.yml)
+
+4.3 修改03-deployments.yml的配置  
+
+稍微修改一下03-deployments.yml文件,添加spec.template.spec.hostNetwork的值为true  
+<font color="#00FF00">也就是traefik的IP必须是主机的IP</font>,它的IP不能再交由K8S集群管理了  
+添加spec.template.spec.nodeName为节点X(即只部署Ingress Controller的那台节点名称)  
+
+为了不将03-deployments.yml中定义的Pod运行到节点X上,还必须使用返亲和性将该Pod调度到别的节点上;实现方式是执行`kubectl label nodes k8s-n4 ingress=traefix`给节点添加标签  
+继续修改03-deployments.yml添加返亲和性的配置  
+```yml
+spec:
+  template:
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: ingress
+                    operator: NotIn
+                    values:
+                      - traefix
+```
+
+4.4 运行  
+执行`kubectl apply -f kubernetes-crd-definition-v1.yml -f kubernetes-crd-rbac.yml` 先运行资源定义和对应的RBAC  
+执行`kubectl apply -f 02-services.yml`  
+执行`kubectl apply -f 03-deployments.yml`  
+
+5.运行太复杂放弃  
+
+## 6.命名空间  
+**目录:**  
+6.1 基本介绍  
+6.2 使用方式  
+
+
+### 6.1 基本介绍
+1.命名空间  
+K8S中命名空间是用来隔离K8S集群内不同资源对象的一种方式,每个K8S对象都必须分配到一个命名空间中,而且默认情况下,<font color="#00FF00">一个对象只能被同一命名空间内的其它对象访问</font>  
+
+2.跨越命名空间  
+*提示:在K8S中有些资源是可以跨命名空间使用的,有些资源则不可以*  
+* 可以跨命名空间的资源对象:Node、Namespace、StorageClass、ClusterClass、ClusterRole、ClusterRoleBinding、CustomerResourceDefinition
+* 不能跨命名空间的资源对象:Pod、ReplicaSet、Deployment、Service、ConfigMap、Secret、Ingress、PersistentVolume、PersistentVolumeClaim、Role、RoleBinding、ServiceAccount
+
+### 6.2 使用方式  
+*提示:创建命名空间有两种方式,一种是使用Yml的方式,一种是使用命令的方式*  
+
+1.使用yml的方式进行创建  
+```yml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ems
+```
+
+2.使用命令的方式进行创建  
+* `kubectl create namespace [namespaceName]` 创建命名空间
+  * `namespaceName`:命名空间的名称
+
+3.创建Pod/deployment等资源时指定命名空间  
+```yml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  # 指定命名空间
+  namespace: ems
+  labels:
+    app: redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      name: redis
+      labels:
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:5.0.10
+          imagePullPolicy: IfNotPresent
+      restartPolicy: Always
+```
+
+## 7.Helm  
+**目录:**  
+7.1 Helm基本介绍  
+7.2 Helm使用  
+7.3 自定义的Chart  
+
+
+### 7.1 Helm基本介绍  
+1.简介  
+Helm是一个K8S<font color="#00FF00">应用程序包管理工具</font>,它允许你轻松管理和部署Kubernetes应用程序.Helm通过使用称为`Charts`的<font color="#00FF00">预定义模板</font>来简化Kubernetes应用程序的部署和管理.Chart包含了一组Kubernetes对象定义,<font color="#00FF00">可以描述一个应用程序的完整部署和资源需求</font>,包括Deployment、Service、ConfigMap、Secret等.使用Helm,你可以轻松地安装、升级、卸载和回滚Kubernetes应用程序.  
+
+同时,Helm还提供了一些便捷的功能,如依赖管理、全局变量、条件渲染等,可以帮助你更好地管理应用程序的部署.Helm有两个主要的组件:<font color="#00FF00">Helm客户端（helm）和Helm服务器(Tiller)</font>.Helm客户端可以在本地运行,而Tiller则运行在Kubernetes集群中,并负责将Charts转换为Kubernetes对象  
+
+**作用解释:**  
+假如我们要部署一个nginx,根据之前的知识,我们需要编写deployment、service、configmap、pv&pvc、ingress-route等配置文件,十分麻烦;虽然比单纯的使用命令方便了很多  
+<font color="#00FF00">那么通过Helm就可以做到将这些Yml配置统一打包管理</font>;具体实现是通过Chart来完成的  
+
+<font color="#FF00FF">镜像有镜像的仓库,管理镜像的Yml有Yml的仓库</font>  
+
+2.安装Helm  
+2.1 下载Helm  
+[访问github下载地址](https://github.com/helm/helm/releases),选择对应的版本进行下载即可;这里选择v3.12.0-linux-amd64架构的版本下载  
+
+2.2 上传Helm并解压  
+
+2.3 配置环境变量
+进入解压后的文件看到有一个helm脚本,将helm解压的目标文件夹作为环境变量配置进去  
+执行`vim /etc/profile`编辑系统环境变量配置文件,将以下内容添加到最后  
+```shell
+export HELM_HOME=~/helm
+export PATH=$PATH:$HELM_HOME
+```
+执行`source /etc/profile`刷新配置文件  
+
+2.4 执行命令helm  
+执行命令`heml`出现提示表示安装成功  
+
+2.5 添加仓库  
+执行:`helm repo add bitnami https://charts.bitnami.com/bitnami`
+添加仓库相当于日后就可以直接使用别人写好的Yml包,更加方便  
+
+3.三大概念  
+* `Chart`:代表Helm表,它包含K8S集群中运行应用程序、工具、服务所需的所有资源定义;说白就是<font color="#00FF00">Yml的压缩包</font>  
+* `Repository`:仓库是用来存放和共享Chart的地方;就类似Maven Repository的性质
+* `Release`:是运行在K8S集群中的Chart实例;Chart是一个压缩包,<font color="#00FF00">Release相当于把该压缩包解压后运行的一个实例</font>;类似docker镜像和docker容器间的关系
+  每一次安装都会生成一个新的Release,并且它拥有自已的Release和Release name
+
+
+### 7.2 Helm使用
+1.搜索  
+在Helm中存在两种仓库一种是Hub,一种是repository(通过上面`helm repo add`命令来添加一个仓库到本地,相当于把这个仓库下载到本地了);其中Hub是远程的仓库,repository就是本地的仓库  
+* `helm search hub [chartName]` 从远程仓库中搜索Chart
+* `helm search repo [chartName]` 从本地仓库中搜索Chart
+
+2.安装redis示例  
+![安装redis示例](resources/K8S/40.png)  
+* `helm install [realseName] [chartName]` 安装Helm
+  * `realseName`:自定义的release的名称
+  * `chartName`:要下载的chartName的名称,可以看到和图中名称是对应的
+* `helm list` 查看所有部署的release
+* `helm status [realseName]` 查看release的状态
+* `hele uninstall [realseName]` 卸载一个release
+* `helm lint [path]` 验证helm是否存在错误;要进入该目录父目录进行验证
+  * `path`:要验证哪个目录,填写目标目录名称
+* `helm package [path]` 打包自定义的chart
+  * `path`:要打包哪个目录
+
+
+### 7.3 自定义的Chart
+**问题:** 上述使用的chart都是官方提供的一些默认的配置,如果想自已修改这些配置,打包自已的应用就需要自定义chart  
+
+1.Chart的目录结构  
+要想打包出一个chart,必须准寻以下的目录结构  
+```shell
+nginx/
+--Chart.yaml
+--values.yaml
+--charts/
+--templates/
+```
+* templates:包括了模板文件;deployment、pv&pvc、ingress这些文件存放该目录下
+* values.yaml:存放引用值的,模板文件中的有些值需要变化就可以引用该文件里面的值
+* Chart.yaml:是对当前应用的描述
+* charts:存放子chart时使用
+
+2.Chart.yaml文件举例  
+```yml
+apiVerision: v2
+name: my-nginx
+description: A Helm chart for K8S
+type: application 
+version: 0.1.0
+appVersion: "1.16.0"
+```
+
+3.values.yaml文件举例  
+```yml
+namespace: ems
+image: nginx:1.19
+```
+
+4.templates  
+在该目录下创建一个deployment类型的yml,这里以编写一个nginx为例  
+```yml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Chart.Name}}
+  namespace: {{.Values.namespace}}
+  labels:
+    app: {{ .Chart.Name}}
+spec:
+  replicas: 1
+  template:
+    metadata:
+      name: {{ .Chart.Name}}
+      labels:
+        app: {{ .Chart.Name}}
+    spec:
+      containers:
+        - name: {{ .Chart.Name}}
+          image: {{ .Values.image}}
+          imagePullPolicy: IfNotPresent
+      restartPolicy: Always
+  selector:
+    matchLabels:
+      app: {{ .Chart.Name}}
+
+```
+<font color="#FF00FF">使用双大括号来引用values.yml、chart.yml文件中的值即可</font>  
+*提示:这里在IDEA中编写的话是需要安装一个插件的*  
+
+5.使用  
+* `helm lint [path]` 验证helm是否存在错误;要进入该目录父目录进行验证
+  * `path`:要验证哪个目录,填写目标目录名称
+* `helm package [path]` 打包自定义的chart
+  * `path`:要打包哪个目录
+* `helm install [realseName] [chartName]` 安装Helm(和之前一样)
+
+## 8.K8S部署微服务实战  
+
+
+
+
+
 
 ## 附录  
 **目录:**  
@@ -2471,13 +2645,15 @@ kubeadm join 192.168.230.130:6443 --token mvq64p.kkzenbymccwvii9g \
 ### B.K8S命令大全  
 *提示:所有的命令都*
 #### 1. Pod相关  
-* `kubectl get [pods|deployments|service|pv|pvc] [-n [namespace(default=default)]] [-A] [-o [wide|yaml|json]] [-w] [--show-labels] [-l [rule]]` 查询
-  * `pods|deployments`:查询类型
+* `kubectl get [type] [-n [namespace(default=default)]] [-A] [-o [wide|yaml|json]] [-w] [--show-labels] [-l [rule]]` 查询
+  * `type`:查询的目标类型,可取值如下
     * pods:查看所有的pod
     * deployments:查看所有的deployments
     * service:查看所有的service
     * pv:查看所有的pv
     * pvc:查看所有的pvc
+    * configMap:查看所有的configMap  
+    * <font color="#DDDD00">all</font>:查询所有类型的信息
   * `-n [namespace]`:指定查询的命名空间  
   K8S集群启动之后存在两个命名空间(default和kube-system),命名空间的作用是用于归类Pod的;如果不指定该参数,默认会查询default命名空间的所有Pod
   * `-A`:查询所有命名空间的Pod
@@ -2512,7 +2688,7 @@ kubeadm join 192.168.230.130:6443 --token mvq64p.kkzenbymccwvii9g \
   例如:<font color="#00FF00">kubectl run nginx --image=nginx:1.19</font>
 * `kubectl apply -f [podYml]` 使用`podYml`对应的配置文件创建Pod
   详情见:1.2 声明式Pod
-* `kubectl describe [pod [podName]] [deployment [deploymentName]]` 查看某个详细信息
+* `kubectl describe [pod [podName]] [deployment [deploymentName]] [configmap [configmapMap]]` 查看某个详细信息
   * `pod [podName]` 查看某个pod的详细信息,podName的值可以通过`kubectl get pods`得到
   * `deployment [deploymentName]` 查看某个deployment的详细信息
 * `kubectl delete [pod [podName]] [-f [podYml]] [deployment [deployment] [-f [deploymentYml]]` 删除
@@ -2568,8 +2744,12 @@ Controller相关的命令和Pod相关的命令非常类似,灵活调整使用就
 * `kubectl rollout resume deployment [deploymentName]` 恢复运行
 * `kubectl rollout resume deployment [deploymentName]` 恢复运行
 
+#### 4.命名空间  
+* `kubectl create namespace [namespaceName]` 创建命名空间
+  * `namespaceName`:命名空间的名称
 
-#### 6.其它  
+
+#### 5.其它  
 * `kubectl [command] --help` 查看kubectl某条命令的帮助
 * `kubectl version` 查看K8S的版本
 * `kubectl get apiservices` 查看K8S提供的所有API情况(对外暴露的所有API接口)
@@ -2585,6 +2765,8 @@ apiVersion: v1
 kind: Pod
 # 元数据
 metadata:
+  # 指定命名空间
+  namespace: ems
   # 指定pod的名称
   name: Title
   # 指定pod的标签
