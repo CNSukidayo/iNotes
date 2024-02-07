@@ -442,6 +442,7 @@ Kubernetes Metrics Server(Kubernetes指标服务器),它是一个可扩展的、
 
 3.查看Pod资源占用  
 执行完第二步之后,再次执行`kubectl top pod [podName]`看到如下效果,这里查看的是之前容器生命周期那边的pod,即lifecycle  
+![metrics演示](resources/K8S/18.png)  
 
 4.指定内存请求和限制  
 ```yml
@@ -2436,7 +2437,8 @@ K8S集群必须有多个节点(服务器),每个节点对应两种角色中的�
 ![全局架构图](resources/K8S/3.png)  
 * Master节点:Master节点也称为<font color="#00FF00">控制平面</font>,控制平面用于管理集群中的Work节点
   控制平面的所有组件(cm、api、schedule)一般都会运行在一台机器上,<font color="#00FF00">并且控制平面一般不运行用户的容器</font>
-  * API Server:负责接受用户发出的控制请求,API Server也是基于Restful风格来进行使用的
+  * API Server:负责接受用户发出的控制请求,API Server也是基于Restful风格来进行使用的  
+    并且<font color="#FF00FF">API Server负责全局的调度</font>,<font color="#00FF00">任意组件的交互都要通过API Server</font>;从图中也可以看到API Server连接了所有的组件  
   * etcd:一致且高度可用的键值对存储,用作K8S的<font color="#00FF00">所有集群数据</font>的后台数据库
   * schedule:负责监视新创建的、未指定运行节点(node)的Pods,并<font color="#00FF00">选择节点来让Pod在上面运行</font>;
     选择Pod运行在哪个node上时主要依据单个Pod即Pods集合的资源需求、软硬件及策略约束、亲和性及返亲和性规范、数据位置、工作负载间的干扰及最后期限  
@@ -2450,15 +2452,19 @@ K8S集群必须有多个节点(服务器),每个节点对应两种角色中的�
     * 端点分片控制器(EndpointSlice Controller):填充端点分片(EndpointSlice)对象(以提供Service和Pod之间的链接)
     * 服务账号控制器(ServiceAccount Controller):为新的命名空间创建默认的服务账号(ServiceAccount)
   
-    <font color="#FF00FF">关于控制器的介绍详情见=>2.controller控制器</font>  
+    <font color="#FF00FF">关于控制器的介绍详情见=>2.controller控制器</font>;<font color="#00FF00">controller-manager是比较重要的一个组件</font>  
   * cloud-controller-manager(可选):嵌入了特定于云平台的控制逻辑
 * Work节点:<font color="#00FF00">用于运行Pod即应用程序容器的</font>;Pod相当于对容器包装了一层,一个Pod可以运行多个容器
+  * //todo Work节点的各种组件
+  * kubelet:节点内部的管理者,负责监控Pod,并将情况通过api-server回报给controller-manager,由controller-manager做下一步的决策
 
 2.插件  
 kubernetes官方还提供了很多丰富的插件  
 * DNS:在K8S集群中进行DNS解析,**该插件必须安装**
-* kube-proxy:是集群中每个节点上所运行的网络代理,实现<font color="#00FF00">K8S Service</font>;**该插件必须安装**
+* kube-proxy:是集群中每个节点上所运行的<font color="#FF00FF">网络代理</font>,实现<font color="#00FF00">K8S Service</font>;**该插件必须安装**
   kube-proxy会维护节点上的一些网络规则,这些网络规则会允许从集群内部或外部的网络会话与Pod进行网络通信
+  kube-proxy起到的作用就类似于nacos,服务注册中心;并且不同节点的kube-proxy直之间的数据是相互同步的,这就像nacos集群一样  
+  // todo  
   Service说白了就是用于解决两个Pod之间互相调用的问题,即微服务想要调用数据库,但数据库的IP又是变化的,此时就可以让Pod绑定一个<font color="#00FF00">Service</font>,这个Service服务的主要作用就是作为Pod的代理入口
 * Web界面:DashBoard图形化界面操作K8S
 * 容器资源监控:容器资源监控将关于容器的一些常见的时间序列度量值保存到一个集中的数据库中,并提供浏览这些数据的界面
@@ -2471,6 +2477,7 @@ kubernetes官方还提供了很多丰富的插件
 **目录:**  
 1.3.1 K8S集群搭建方式  
 1.3.2 裸机安装  
+1.3.3 安装Dashboard  
 
 ##### 1.3.1 K8S集群搭建方式  
 * 裸机安装:需要自已安装kubernetes组件,配置会稍微麻烦一点
@@ -2641,6 +2648,62 @@ kubeadm join 192.168.230.130:6443 --token mvq64p.kkzenbymccwvii9g \
 可以看到K8S默认启动了一些pod,<font color="#00FF00">之前说过的K8S提供的那些功能也是通过系统Pod来进行实现的</font>  
 
 <font color="#00FF00">到此为止K8S集群的安全就已经完成了</font>  
+
+
+##### 1.3.3 安装Dashboard
+1.下载dashboard对应的Yml文件  
+DashBoard的本质也是一个Pod,所以从github下载对应的[YML文件](resources/K8S/dashboard.yml)上传到服务器  
+下载地址:[https://raw.githubusercontent.com/kubernetes/dashboard/v2.7.0/aio/deploy/recommended.yaml](https://raw.githubusercontent.com/kubernetes/dashboard/v2.7.0/aio/deploy/recommended.yaml)  
+
+执行`kubectl apply -f xxx.yml`安装dashboard  
+
+2.修改type  
+安装完成之后继续执行`kubectl edit svc kubernetes-dashboard -n kubernetes-dashboard`命令,找到<font color="#00FF00">type: ClusterIP</font>将其改为NodePort;从而可以从外网访问dashboard  
+
+3.安全组放行  
+执行`kubectl get svc -A |grep kubernetes-dashboard`返回如下结果  
+![安全组](resources/K8S/41.png)  
+会发现后面有一个端口<font color="#00FF00">30561</font>;如果这里使用云服务器则需要在安全组配置中配置该端口,该端口也是后续访问dashboard的端口
+
+4.访问K8SDashBoard  
+此时可以通过IP+端口来访问dashboard界面了  
+![dashboard](resources/K8S/42.png)  
+这里登陆需要填写一个令牌  
+
+5.创建账号  
+将以下配置复制到Linux中,然后创建该Pod便能得到一个访问账号  
+可以看到该Yml的类型是`ServiceAccount`类型,并且使用`ClusterRoleBinding`绑定了一个账号  
+```yml
+#创建访问账号,准备一个yaml文件; vi dash.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: admin-user
+  namespace: kubernetes-dashboard
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: admin-user
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+- kind: ServiceAccount
+  name: admin-user
+  namespace: kubernetes-dashboard
+```
+
+6.获取访问令牌  
+执行以下命令获取访问令牌  
+```shell
+kubectl -n kubernetes-dashboard get secret $(kubectl -n kubernetes-dashboard get sa/admin-user -o jsonpath="{.secrets[0].name}") -o go-template="{{.data.token | base64decode}}"
+```
+理论上执行该命令就可以得到token了,得到token后输入dashboard进行访问就可以了;但是这里没成功,因为K8S的版本和dashboard的版本不对应,K8S的版本是1.28.2;目前还没有支持该版本的dashboard;<font color="#FF00FF">所以这里安装K8S和dashboard的版本时要注意</font>  
+这里推荐安装K8S<font color="#00FF00">1.25</font>版本  
+
+
 
 ### B.K8S命令大全  
 *提示:所有的命令都*
