@@ -1,0 +1,281 @@
+# 目录 
+
+
+
+**附录:**  
+A.阿里云三集群搭建  
+B.HubeSphere  
+
+
+
+## 附录  
+**目录:**  
+A.阿里云三集群搭建  
+B.KubeSphere  
+
+
+### B.KubeSphere  
+**目录:**  
+1.1 KubeSphere基本概念介绍  
+1.2 Kubernetes安装教程  
+1.3 KubeSphere安装教程  
+
+#### 1.1 KubeSphere基本概念介绍  
+1.官网  
+[KubeSphere企业版](https://kubesphere.com.cn/)  
+[KubeSphere官网地址](https://www.kubesphere.io/zh/)  
+
+2.简介  
+KubeSphere是基于K8S构建(所以要先安装K8S)的分布式、多集群、多租户、企业级开源容器平台  
+
+
+#### 1.2 Kubernetes安装教程
+1.集群规划  
+*提示:这里为了同步实验环境重新准备了三台虚拟机,IP的配置如下;确保三台虚拟机能够ping通*  
+* k8s-node1:192.168.230.130
+* k8s-node2:192.168.230.131
+* k8s-node3:192.168.230.132
+
+2.设置主机名  
+```shell
+hostnamectl set-hostname k8s-node1
+hostnamectl set-hostname k8s-node2
+hostnamectl set-hostname k8s-node3
+```
+
+**提示:对每一个节点执行以下内容**
+3.修改hosts文件
+```shell
+cat >> /etc/hosts <<EOF
+192.168.230.130  k8s-node1
+192.168.230.131  k8s-node2
+192.168.230.132  k8s-node3
+EOF
+```
+
+4.关闭防火墙  
+```shell
+systemctl stop firewalld && systemctl disable firewalld
+```
+
+5.关闭selinux  
+```shell
+sed -i 's/^SELINUX=.*/SELINUX=disabled/' /etc/selinux/config
+```
+
+6.关闭swap分区  
+```shell
+swapoff -a && sed -ri 's/.*swap.*/#&/' /etc/fstab
+```
+
+7.同步所有节点的时间  
+```shell
+yum install ntpdate -y
+ntpdate time.windows.com
+```
+
+8.安装docker容器  
+一步步执行下述的命令,依旧在所有节点上
+```shell
+# 卸载docker
+sudo yum remove docker*
+# 安装yum工具
+sudo yum install -y yum-utils
+#配置docker的yum地址
+sudo yum-config-manager \
+--add-repo \
+http://mirrors.aliyun.com/docker-ce/linux/centos/docker-ce.repo
+#安装指定版本
+sudo yum install -y docker-ce-20.10.7 docker-ce-cli-20.10.7 containerd.io-1.4.6
+#	启动&开机启动docker
+systemctl enable docker --now
+# docker加速配置
+sudo mkdir -p /etc/docker
+# 添加docker镜像地址
+sudo tee /etc/docker/daemon.json <<-'EOF'
+{
+  "registry-mirrors": ["https://82m9ar63.mirror.aliyuncs.com"],
+  "exec-opts": ["native.cgroupdriver=systemd"],
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "100m"
+  },
+  "storage-driver": "overlay2"
+}
+EOF
+# 重启docker
+sudo systemctl daemon-reload
+sudo systemctl restart docker
+#允许 iptables 检查桥接流量
+cat <<EOF | sudo tee /etc/modules-load.d/k8s.conf
+br_netfilter
+EOF
+# 配置K8S网络设置
+cat <<EOF | sudo tee /etc/sysctl.d/k8s.conf
+net.bridge.bridge-nf-call-ip6tables = 1
+net.bridge.bridge-nf-call-iptables = 1
+EOF
+# 重启
+sudo sysctl --system
+```
+
+10.添加源  
+```shell
+#配置k8s的yum源地址
+cat <<EOF | sudo tee /etc/yum.repos.d/kubernetes.repo
+[kubernetes]
+name=Kubernetes
+baseurl=http://mirrors.aliyun.com/kubernetes/yum/repos/kubernetes-el7-x86_64
+enabled=1
+gpgcheck=0
+repo_gpgcheck=0
+gpgkey=http://mirrors.aliyun.com/kubernetes/yum/doc/yum-key.gpg
+   http://mirrors.aliyun.com/kubernetes/yum/doc/rpm-package-key.gpg
+EOF
+```
+
+11.安装K8S  
+```shell
+#安装 kubelet，kubeadm，kubectl
+sudo yum install -y kubelet-1.20.9 kubeadm-1.20.9 kubectl-1.20.9
+#启动kubelet
+sudo systemctl enable --now kubelet
+```
+
+12.在master上初始化集群  
+注意这里的命令只在Master节点上即控制平面上初始化集群,注意这里需要设置apiserver的IP地址为Matser(node1)的IP;并且control-plane-endpoint的值为当前master节点的hostname  
+```shell
+kubeadm init \
+--apiserver-advertise-address=192.168.230.130 \
+--control-plane-endpoint=k8s-node1 \
+--image-repository registry.cn-hangzhou.aliyuncs.com/lfy_k8s_images \
+--kubernetes-version v1.20.9 \
+--pod-network-cidr=10.244.0.0/16 
+```
+成功之后会打印如下内容,把绿色方框中的内容先复制下来  
+![成功](resources/DevOps/1.png)  
+
+13.执行以下命令(还是在Matser节点)  
+```shell
+mkdir -p $HOME/.kube
+sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+sudo chown $(id -u):$(id -g) $HOME/.kube/config
+```
+
+14.Work节点加入  
+在所有的work节点执行刚才保存的内容,表明当前Work节点要加入的Master节点,复制的这段内容实际上就是token和master节点的地址,第一次加入使用的是token这样可以保证第一次加入的安全性,后续使用证书进行通信  
+在所有的work节点执行上述的命令  
+```shell
+kubeadm join k8s-node1:6443 --token 42wjv6.95pxsh47fci2an2e \
+    --discovery-token-ca-cert-hash sha256:fcefa39f891dda96a501cf4bff2ce64de8e38815eb141078dc3d9d67399b3f85
+```
+默认token有效期为24小时,当过期之后,该token就不可用了.这时就需要重新创建token,操作如下:
+`kubeadm token create --print-join-command`
+
+执行完毕后回到master执行如下命令就可以看到节点已经加入  
+`kubectl get nodes`  
+![节点加入情况](resources/DevOps/2.png)  
+
+15.在master节点上创建配置文件  
+*问题:根据上面的截图可以发现,目前所有的节点都是NoReady这是因为缺少了一个网络插件导致的,所以现在要配置该网络插件.*
+`kubectl apply -f https://docs.projectcalico.org/v3.18/manifests/calico.yaml`  
+如果该文件实在无法下载,则直接将该文件拉取到本地,需要将文件命名为[calico.yml](resources/DevOps/yml/calico.yaml),然后依旧执行  
+运行完毕之后,调用`kubectl get pods -n kube-system`命令以及`kubectl get nodes`查看效果:
+![查看效果](resources/DevOps/3.png)    
+
+<font color="#00FF00">到此为止K8S集群的安全就已经完成了</font>  
+
+#### 1.3 KubeSphere安装教程
+*提示:安装KubeSphere之前还必须先安装NFS文件系统*  
+1.在每个节点运行以下命令  
+`yum install -y nfs-utils` 安装NFS工具类  
+
+2.在master节点运行如下命令  
+*提示:这里相当于把master节点作为NFS服务器的server,正常NFS服务器是要单独部署的*  
+```shell
+# 将nfs/data作为共享目录
+echo "/nfs/data/ *(insecure,rw,sync,no_root_squash)" > /etc/exports
+# 执行以下命令,启动nfs服务;创建共享目录
+mkdir -p /nfs/data
+# 在master执行
+systemctl enable rpcbind
+systemctl enable nfs-server
+systemctl start rpcbind
+systemctl start nfs-server
+# 使配置生效
+exportfs -r
+#检查配置是否生效
+exportfs
+```
+
+3.配置nfs-client  
+*提示:这一步在<font color="#00FF00">两个WorkNode上执行</font>,因为master节点已经作为服务器了,这一步是让两个工作节点能够访问到NFS服务器*  
+```shell
+# IP设置为master节点的IP地址
+showmount -e 192.168.230.130
+mkdir -p /nfs/data
+# IP设置为master节点的IP地址
+mount -t nfs 192.168.230.130:/nfs/data /nfs/data
+```
+
+4.配置默认存储  
+将[sc.yml](resources/DevOps/yml/sc.yml)配置文件复制到虚拟机,记得修改其中的IP地址为master(NFS服务器)节点的地址  
+执行`kubectl apply -f sc.yml`配置文件  
+执行`kubectl get storageclass` 查看配置是否生效  
+若能够看到图中的配置代表已经生效  
+![配置生效](resources/DevOps/4.png)  
+
+5.安装集群监控指标组件  
+5.1 编写metrics-components.yml配置文件  
+[点击跳转至配置文件](resources/DevOps/yml/metrics-components.yml)  
+
+5.2 执行`kubectl apply -f metrics-components.yml` 安装metrics  
+
+5.3 当看到metrics运行成功后就代表安装成功  
+![metrics安装](resources/DevOps/5.png)  
+
+5.4 查看Pod资源占用  
+执行完第二步之后,再次执行`kubectl top pod [podName]`看到如下效果,这里查看的是之前容器生命周期那边的pod,即lifecycle  
+![metrics演示](resources/DevOps/6.png)  
+
+6.下载KubeSphere的YML文件  
+这里有两个文件,分别是kubesphere-installer和cluster-configuration  
+
+[kubesphere-installer.yml](resources/DevOps/yml/kubesphere-installer.yml)下载地址:[https://github.com/kubesphere/ks-installer/releases/download/v3.1.1/kubesphere-installer.yaml](https://github.com/kubesphere/ks-installer/releases/download/v3.1.1/kubesphere-installer.yaml)  
+
+[cluster-configuration.yaml](resources/DevOps/yml/cluster-configuration.yml)下载地址:[https://github.com/kubesphere/ks-installer/releases/download/v3.1.1/cluster-configuration.yaml](https://github.com/kubesphere/ks-installer/releases/download/v3.1.1/cluster-configuration.yaml)  
+
+7.修改cluster-configuration.yml的内容  
+主要是该两个地方,一个是将etcd的IP改为当前master节点的IP;还有一个是将文件中部分为false的值改为true表示启用这些组件的功能(因为KubeSphere采用的是可插拔设计)  
+具体参见这里给出的配置文件中的内容即可  
+
+8.安装KubeSphere  
+执行以下命令安装KubeSphere  
+```shell
+kubectl apply -f kubesphere-installer.yaml
+kubectl apply -f cluster-configuration.yaml
+```
+
+9.检查安装进度  
+执行`kubectl logs -n kubesphere-system $(kubectl get pod -n kubesphere-system -l app=ks-install -o jsonpath='{.items[0].metadata.name}') -f`命令查看安装状态  
+执行到最后会打印如下内容  
+![安装成功](resources/DevOps/8.png)  
+
+10.查看所有Pod是否全部运行成功  
+*提示:必须要所有的Pod全部运行成功才可以,这里有一个Pod没有运行成功,使用kubectl describe命令来查看该Pod的信息*  
+![Pod运行](resources/DevOps/7.png)  
+
+11.解决etcd监控证书找不到问题  
+执行`kubectl -n kubesphere-monitoring-system create secret generic kube-etcd-client-certs  --from-file=etcd-client-ca.crt=/etc/kubernetes/pki/etcd/ca.crt  --from-file=etcd-client.crt=/etc/kubernetes/pki/apiserver-etcd-client.crt  --from-file=etcd-client.key=/etc/kubernetes/pki/apiserver-etcd-client.key`命令解决该问题  
+
+稍等一段时候后再次查看所有Pod的运行情况,可以发现此时所有的Pod全部处于running状态  
+![全部Pod](resources/DevOps/9.png)  
+
+12.浏览器访问KubeSphere  
+浏览器访问第9步给出的内容,输入账号和密码并重置密码为K8s123  
+![KubeSphere](resources/DevOps/10.png)  
+
+<font color="#00FF00">到此为止KubeSphere集群的安全就已经完成了</font>  
+
+
+
