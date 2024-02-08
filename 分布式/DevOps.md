@@ -1,10 +1,126 @@
 # 目录 
+1.KubeSphere实战  
+
+
+## 1.KubeSphere实战  
+**目录:**  
+1.1 多租户系统  
+1.2 中间件部署  
+
+### 1.1 多租户系统  
+1.概述  
+![多租户系统](resources/DevOps/12.png)  
+
+**企业空间介绍:**  
+
+
+2.角色  
+在kubersphere中一共有如下四种角色  
+* workspaces-manager
+* users-manager
+* platform-regular
+* platform-admin
+
+3.创建users-manager用户管理员账号  
+![创建一个账户](resources/DevOps/13.png)  
+这里创建了一个用户管理角色的账号  
+
+4.登陆hr-zhang账号  
+<font color="#00FF00">登陆刚才创建的hr-zhang账号</font>;点击平台管理按钮就可以发现当前账号只有<font color="#00FF00">访问控制</font>这一项菜单  
+访问控制就是管理用户账号的页面  
+
+5.创建workspaces-manager企业空间管理员  
+根据第一步的概述图可以看到企业空间管理员有三个作用:<font color="#00FF00">创建企业空间、邀请成员进入、指定成员角色</font>  
+![企业空间管理员](resources/DevOps/14.png)  
+
+6.登录boss-li账号  
+登陆成功之后可以点击左侧的企业空间=>点击创建  
+接着输入如下内容进行创建;创建一个wuhan的企业名称空间;再创建一个shenzhen的企业名称空间  
+![boss-li](resources/DevOps/15.png)  
+不同的企业可以有不同的业务项目,<font color="#FF00FF">所以企业名称空间就是命名空间的效果</font>  
+
+7.创建platform-regular平台普通账户  
+*提示:所有用户的创建都是通过HR账号(用户管理角色)进行创建*  
+![平台普通用户](resources/DevOps/16.png)  
+依次类推再创建一个shenzhen-boss、pm-wang、dev-zhao、dev-liu、big-li、big-sun的普通用户  
+
+8.用户一览  
+![用户一览](resources/DevOps/17.png)  
+
+9.邀请用户进入企业  
+*提示:此时使用普通用户登录是什么也干不了的*  
+登陆企业空间管理员boss-li的账号,点击企业管理=>wuhan=>企业空间设置=>企业成员  
+此时便可以邀请用户进入企业,但邀请之前还需要给用户设置用户在当前企业中的角色;<font color="#FF00FF">用户在企业中的角色又可以分为以下四种:</font>  
+* admin:企业空间管理员,可以管理企业空间下的所有资源
+* viewer:企业空间观察者,可以查看企业空间下所有的资源信息
+* self-provisioner:企业空间普通成员,可以在企业空间下创建DevOps工程和项目
+* regular:企业空间普通成员,无法在企业空间下创建DevOps工程和项目
+
+这里邀请wuhan-boss用户并赋予其在wuhan企业中wuhan-admin的权限;同理邀请shenzhen-boss用户并赋予其在shenzhen企业中shenzhen-admin权限  
+![权限](resources/DevOps/19.png)    
+
+10.登陆wuhan-boss用户  
+登陆成功后发现当前用户只能看到武汉分校这个企业名称空间(boss-li是可以看到所有企业名称空间的)  
+![武汉分校](resources/DevOps/20.png)  
+
+11.继续邀请用户进入企业空间  
+登陆wuhan-boss的账号,邀请所有当前企业的员工进入当前的企业名称空间;注意这些员工的角色  
+将<font color="#00FF00">big-sun、big-li、dev-liu、dev-zhao</font>邀请成为普通成员(regular)  
+将<font color="#00FF00">pm-wang</font>邀请成为普通成员(self-provisioner)
+
+12.创建项目  
+登陆pm-wang的账号,创建一个新的项目,内容如下:  
+![在线教育](resources/DevOps/21.png)  
+同理创建一个名称为his的在线医疗项目、创建一个名为mall的商城项目  
+
+13.邀请项目成员  
+进入刚才创建的his项目,点击项目设置=>项目成员=>邀请成员  
+即可邀请当前企业名称空间下的用户进入当前项目;  
+项目成员一共有三种角色  
+* viewer:项目观察者,可以查看项目下所有的资源
+* operator:项目维护者,可以管理项目下除用户和角色之外的资源
+* admin:项目管理员,可以管理项目下的所有资源(创建项目的人默认就是项目管理员)
+
+将<font color="#00FF00">big-sun、big-li</font>邀请成为项目管理者(admin)  
+将<font color="#00FF00">dev-liu、dev-zhao</font>邀请成为项目维护者(operator)  
+![邀请成员](resources/DevOps/22.png)  
+
+**小总结:**  
+企业名称空间管理员=>创建企业名称空间  
+企业空间管理员=>邀请成员进入企业名称空间  
+企业普通成员(self-provisioner)=>创建项目=>邀请企业下的成员进入项目  
+
+
+### 1.2 中间件部署  
+*提示:本节对his项目进行操作*  
+1.部署应用概述  
+![工作负载](resources/DevOps/23.png)  
+来到工作负载页面,可以创建工作负载;所谓的工作负载就是之前将K8S中提到的<font color="#00FF00">Controller控制器</font>(Deployment、StatefulSet、DaemonSet)  
+由于本节部署中间件,而大部分中间件都是有状态应用所以需要部署<font color="#00FF00">有状态应用</font>  
+<font color="#DDDD00">应用负载列表详解:</font>  
+* 应用部署完毕之后可以点击左侧的容器组查看应用部署的情况;<font color="#00FF00">容器组实际上就是当前命名空间的pods列表</font>  
+* 应用部署完毕之后要想外网访问还必须部署服务(service,详情见K8S笔记),部署服务主要就是内网访问(ClusterIP)和外网访问(NodePort);可以通过左侧的服务按钮进行部署  
+* 左侧的任务实际上就是Job(controller控制器的一种类型)
+* 左侧的应用路由实际上就是<font color="#00FF00">ingress</font>
+* 左侧的应用是一键部署的方式,相当于Helm
+
+<font color="#DDDD00">存储管理:</font>  
+* 存储卷:就是K8S的PVC
+
+<font color="#DDDD00">配置中心:</font>  
+* 配置:就是K8S的ConfigMap
+* 密钥:就是K8S的Secret
+
+<font color="#FF00FF">部署应用的三要素:应用的部署方式、应用的数据挂载(数据、配置文件)、应用的可访问性</font>  
+![一图总览](resources/DevOps/24.png)  
+
+
 
 
 
 **附录:**  
 A.阿里云三集群搭建  
-B.HubeSphere  
+B.KubeSphere  
 
 
 
@@ -276,6 +392,12 @@ kubectl apply -f cluster-configuration.yaml
 ![KubeSphere](resources/DevOps/10.png)  
 
 <font color="#00FF00">到此为止KubeSphere集群的安全就已经完成了</font>  
+
+13.jetkins服务启动失败解决  
+有可能jetkins在启动的时候报探针异常,这是由于探针给的时间范围太短了导致第一次jetkins启动不起来  
+进入KubeSphere=>应用负载=>工作负载=>jenkins(搜索)=>更多=>编辑配置文件=>将`initialDelaySeconds`的时间修改长一点,例如600秒  
+当然也有可能是因为虚拟机内存不足的原因  
+![jetkins](resources/DevOps/11.png)  
 
 
 
