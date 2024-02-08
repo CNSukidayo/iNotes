@@ -11,9 +11,6 @@
 1.概述  
 ![多租户系统](resources/DevOps/12.png)  
 
-**企业空间介绍:**  
-
-
 2.角色  
 在kubersphere中一共有如下四种角色  
 * workspaces-manager
@@ -92,6 +89,12 @@
 
 
 ### 1.2 中间件部署  
+**目录:**  
+1.2.1 KubeSphere部署概述  
+1.2.2 部署MySQL中间件  
+
+
+#### 1.2.1 KubeSphere部署概述
 *提示:本节对his项目进行操作*  
 1.部署应用概述  
 ![工作负载](resources/DevOps/23.png)  
@@ -113,6 +116,102 @@
 
 <font color="#FF00FF">部署应用的三要素:应用的部署方式、应用的数据挂载(数据、配置文件)、应用的可访问性</font>  
 ![一图总览](resources/DevOps/24.png)  
+
+#### 1.2.2 部署MySQL中间件  
+1.MySQL部署分析  
+![MySQL部署分析](resources/DevOps/25.png)  
+MySQL的数据文件/var/lib/mysql存放在PVC中;mysql的配置文件存放在ConfigMap中  
+
+2.创建MySQL的配置  
+![mysql配置](resources/DevOps/26.png)  
+接着需要设置键值对,按照之前ConfigMap的知识;Key就是MySQL配置文件的名称,value就是配置文件的内容,这样在编写MySQL的yml文件时就可以指定ConfigMap了,如图:  
+![MySQL配置](resources/DevOps/27.png)  
+
+3.创建MySQL的数据卷  
+点击存储管理=>数据卷=>创建  
+基本信息填写:名称=mysql-pvc;描述信息=mysql数据挂载卷  
+在存储卷设置中使用如下配置  
+![存储卷设置](resources/DevOps/28.png)  
+
+4.部署MySQL  
+4.1 设置基本信息  
+点击应用负载=>工作负载=>有状态副本集=>创建  
+基本信息填写:名称=his-mysql;描述信息=mysql应用  
+
+4.2 设置容器镜像  
+点击下一步设置容器镜像;设置容器组副本数量为1;接着点击添加容器镜像进入添加容器镜像的设置页面  
+需要注意的就是这里添加了环境变量;并且还需要点击一下使用默认端口  
+![容器镜像](resources/DevOps/29.png)  
+配置完成之后点击√回到容器镜像设置界面;接着点击下一步进入挂载存储界面  
+
+4.3 设置挂载存储  
+进入到挂载存储界面后点击添加存储卷=>点击已有存储卷=>选择添加存储卷=>这里会选择之前创建的mysql-pvc=>按下图将容器中的数据目录挂载到数据卷中  
+![存储卷](resources/DevOps/30.png)  
+
+接着设置MySQL的配置存储<font color="#00FF00">ConfigMap</font>  
+点击挂载配置文件或密钥=>点击请选择配置文件=>选择之前创建的<font color="#FF00FF">mysql-conf</font>  
+将配置文件挂载到/etc/mysql/conf.d目录下即可;根据之前K8S的知识,此时就会把该配置的key作为文件名,将配置的value作为文件内容挂载到该目录下  
+![挂载存储](resources/DevOps/32.png)  
+点击√回到挂载存储设置界面,此时能够看到存储卷、配置都设置成功了;就接着点击下一步进入高级设置  
+
+4.4 高级设置 
+直接点击创建即可创建MySQL  
+
+5.部署成功  
+稍等片刻就能看到his-mysql部署成功了;点击绿色方框再点击红色方框便能进入到MySQL的docker容器中;查看/etc/mysql/config.d目录下的my.cnf配置文件内容,就是上面指定的配置文件  
+![his-mysql](resources/DevOps/33.png)  
+查看结果如下  
+![mysql](resources/DevOps/34.png)  
+
+6.重新部署  
+**提示:**  
+如果这里要修改MySQL的配置文件,即使docker容器内部可以动态感知ConfigMap的变化;但是MySQL本身并不会动态变化,所以如果需要使配置文件生效需要重新部署MySQL  
+
+7.创建服务  
+*提示:现在的MySQL会默认创建一个service,它的类型是ClusterIP(只允许集群内部访问),现在要能够让集群外部进行访问(NodePort)*  
+*但是这里还是要创建一个集群内部访问的service和一个集群外部访问的service*
+
+7.1 删除默认创建的service  
+
+7.2 创建自定义service  
+点击创建=>指定工作负载
+
+7.3 内部基本信息  
+名称=his-mysql;描述信息=MySQL的集群内服务名  
+点击下一步进入服务设置  
+
+7.4 内部服务设置  
+访问类型=>集群内部通过服务的后端xxx  
+点击指定工作负载=>有状态副本集=>his-mysql(这一步就相当于为该controller指定了一个service)  
+参考下图  
+![服务设置](resources/DevOps/35.png)  
+点击下一步进入高级设置  
+
+7.5 内部高级设置  
+直接创建即可  
+接着创建集群外部访问的service  
+
+7.6 外部基本信息  
+名称=his-mysql-node;描述信息=MySQL的外部访问  
+点击下一步进入服务设置
+
+7.7 外部服务设置  
+访问类型=>通过集群内部IPxxx  
+点击指定工作负载=>有状态副本集=>his-mysql(这一步就相当于为该controller指定了一个service)  
+参考下图  
+![服务设置](resources/DevOps/36.png)  
+点击下一步进入高级设置
+
+7.8 外部高级设置  
+点击外网访问=>访问方式选择NodePort  
+
+7.9 查看服务列表  
+创建成功之后可以看到这里对集群外部暴露的端口是`31046`  
+![服务列表](resources/DevOps/37.png)  
+
+8.Navicat连接MySQL  
+任意节点的IP地址,使用`31046`端口进行连接,密码是123456  
+![测试连接](resources/DevOps/38.png)  
 
 
 
