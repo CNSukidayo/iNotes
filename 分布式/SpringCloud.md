@@ -562,6 +562,24 @@ spring:
 接着使用`@LoadBalancerClients`注解来针对某个服务提供者使用特定的负载均衡策略(类似之前@RibbonClients)  
 只不过loadbalancer没有提供配置文件的方式来自定义负载均衡策略  
 
+5.使用WebClient来实现异步的请求  
+<font color="#FF00FF">非常重要,后续需要完善;通过这种方式就可以实现在gateway网关中负载均衡地远程调用一个微服务</font>  
+
+```java
+private Mono<BaseResponse<Object>> getPermissionList(CheckAuthParam checkAuthParam) {
+    return webClientBuilder.build()
+        .post()
+        .uri("http://service-auth/remote/auth/permission/get_and_check")
+        .contentType(MediaType.APPLICATION_JSON)
+        .bodyValue(checkAuthParam)
+        .retrieve()
+        .bodyToMono(new ParameterizedTypeReference<>() {
+        });
+}
+```
+
+
+
 ## 3.远程调用
 **目录:**  
 3.1 Feign基本环境搭建  
@@ -1538,7 +1556,7 @@ docker run \
 
 4.详情配置  
 sentinel的详情配置见:[https://github.com/alibaba/Sentinel/wiki/%E6%8E%A7%E5%88%B6%E5%8F%B0](https://github.com/alibaba/Sentinel/wiki/%E6%8E%A7%E5%88%B6%E5%8F%B0)  
-docker的配置方式暂时还没有找到  
+docker的配置方式很简单就是通过环境变量的方式来配置,也是通过上面这张表里指定的配置进行配置  
 
 5.修改pom文件  
 还是在sentinel-demo模块下,修改pom文件引入sentinelDashBoard依赖  
@@ -2081,6 +2099,15 @@ public class HotController {
 当单台机器上所有入口流量的QPS达到阈值进行流控  
 
 ### 5.9 sentinel持久化模式
+**目录:**  
+5.9.1 sentinel客户端持久化使用方式  
+5.9.2 改造sentinel实现持久化  
+
+#### 5.9.1 sentinel客户端持久化使用方式
+**注意:**  
+本节是讲述sentinel客户端如何使用持久化后的sentinel数据;当使用<font color="#00FF00">推模式</font>时,每个微服务(客户端)将不再从sentinel中获取限流规则,而是直接从nacos中获取限流规则  
+![推模式](resources/springcloud/84.png)  
+
 1.问题  
 sentinel默认的所有配置都是保存在内存当中的,一旦服务重启之后维护在sentinel中的配置全都丢失了  
 
@@ -2090,14 +2117,14 @@ sentinel默认的所有配置都是保存在内存当中的,一旦服务重启�
 * 推模式:生产环境下推荐使用该模式,这种模式的配置中心一般是nacos、zookpeer;数据推送的操作不由服务进行,而是由sentinel控制台统一进行管理然后推送到服务配置中心,接着配置中心将数据推送到sentinel数据源,sentinel数据源将数据更新到本地服务  
   <font color="#00FF00">sentinel控制台->配置中心->sentinel数据源->sentinel</font>
 
-3.推模式  
+3.推模式之nacos  
 
 3.1 引入pom依赖  
 引入sentinel数据源到本地微服务依赖  
 ```xml
 <dependency>
     <groupId>com.alibaba.csp</groupId>
-    <artifactId>sentinel-datasource-extension</artifactId>
+    <artifactId>sentinel-datasource-nacos</artifactId>
 </dependency>
 ```
 
@@ -2122,23 +2149,32 @@ spring:
       web-context-unify: false
       # dataSource是一个Map集合,可以回顾一下yml中如何编写Map集合
       datasource:
-        # key:可以随意指定
-        flow-rule:
+        # key:可以随意指定,并且可以指定多个;即flow-rule可以写任意内容
+        datasource1:
           # 设置使用nacos配置中心,
           nacos:
             # 设置nacos的远程地址
             server-addr: 192.168.149.130:8848
             username: nacos
             password: nacos
+            # 指定配置的存放的位置
             data-id: order-sentinel-flow-rule
+            group-id: DEFAULT_GROUP
+            data-type: json
           # zk: 设置使用zookpeer配置中心
           # consul: 设置使用consul配置中心
 ```
 
-3.3 大坑  
-现在的这种配置太鸡肋了;还要人手动配置yml文件,并且如果通过sentinel的控制面板修改了一些配置文件它是不支持直接推送到nacos的  
-//todo 这里要补
+#### 5.9.2 改造sentinel实现持久化
 
+
+```shell
+docker run \
+-p 8858:8858 \
+-e JAVA_OPTS=-Dserver.port=8858 -Dcsp.sentinel.dashboard.server=localhost:8858 -Dsentinel.dashboard.nacosAddress=192.168.230.128:8848 -Dsentinel.dashboard.nacosGroupId=DEFAULT_GROUP -Dsentinel.dashboard.nacosNameSpace=2a9414e1-1d69-4dfb-b355-be4af684d26e -Dsentinel.dashboard.nacosPassword=nacos -Dsentinel.dashboard.nacosUserName=nacos \
+--name sentinelDashboard \
+-d cnsukidayo/sentinel:1.8.7
+```
 
 ## 6.分布式事务
 6.1 分布式事务基本概念介绍  
