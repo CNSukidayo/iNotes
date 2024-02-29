@@ -2166,8 +2166,281 @@ spring:
 ```
 
 #### 5.9.2 改造sentinel实现持久化
+1.下载sentinel源码  
+GitHub仓库地址:[https://github.com/alibaba/Sentinel/tree/1.8.7](https://github.com/alibaba/Sentinel/tree/1.8.7)  
+
+下载完成后使用Git终端进入项目,执行`git tag`命令查看所有的标签,接着选择一个合适的标签版本创建分支,例如执行:`git branch branch_1.8.7 1.8.7`即基于1.8.7这个标签创建branch_1.8.7分支  
+后续的代码都会基于该分支进行编写  
+
+2.修改pom依赖  
+因为这里是以nacos为例子进行修改的,所以进入sentinel-datasource-nacos模块下的pom文件,可以找到<font color="#00FF00"><nacos.version></font>这个对应的nacos版本  
+
+得到nacos版本之后进入sentinel-dashboard模块修改pom文件添加nacos客户端依赖
+```xml
+<dependency>
+    <groupId>com.alibaba.nacos</groupId>
+    <artifactId>nacos-client</artifactId>
+    <!-- 版本填写查询到的版本 -->
+    <version>1.4.2</version>
+</dependency>
+```
+
+进入根项目的pom文件(sentinel-parent),修改打包的版本,内容如下:  
+```xml
+<plugin>
+    <groupId>org.apache.maven.plugins</groupId>
+    <artifactId>maven-compiler-plugin</artifactId>
+    <version>${maven.compiler.version}</version>
+    <executions>
+        <execution>
+            <id>default-compile</id>
+            <configuration>
+                <release>8</release>
+            </configuration>
+        </execution>
+        <execution>
+            <id>base-compile</id>
+            <goals>
+                <goal>compile</goal>
+            </goals>
+            <configuration>
+                <excludes>
+                    <exclude>module-info.java</exclude>
+                </excludes>
+            </configuration>
+        </execution>
+    </executions>
+    <configuration>
+        <release>8</release>
+        <source>1.8</source>
+        <target>1.8</target>
+    </configuration>
+</plugin>
+```
+
+3.注销test目录下的文件  
+进入com.alibaba.csp.sentinel.dashboard.rule.nacos(test文件下)注释掉FlowRuleNacosProvider、FlowRuleNacosPublisher、NacosConfig这三个类  
+
+4.为DashboardConfig类添加配置  
+因为现在要将配置同步到nacos中,所以需要一些环境变量来动态接受用户指定的nacos配置,方便后续使用docker/k8s部署时  
+```java
+public class DashboardConfig {
+    // xxxxxx
+    /**
+     * 指定nacos地址
+     */
+    public static final String NACOS_ADDRESS = "sentinel.dashboard.nacosAddress";
+
+    /**
+     * 指定nacos的groupId
+     */
+    public static final String NACOS_GROUP_ID = "sentinel.dashboard.nacosGroupId";
+    /**
+     * 指定nacos的用户名
+     */
+    public static final String NACOS_USERNAME = "sentinel.dashboard.nacosUserName";
+    /**
+     * 指定nacos的用户名密码
+     */
+    public static final String NACOS_PASSWORD = "sentinel.dashboard.nacosPassword";
+    /**
+     * 指定nacos的命名空间
+     */
+    public static final String NACOS_NAMESPACE = "sentinel.dashboard.nacosNameSpace";
+
+    // xxxx
+    public static String getNacosAddress() {
+        return getConfigStr(NACOS_ADDRESS);
+    }
+
+    public static String getNacosGroupId() {
+        return getConfigStr(NACOS_GROUP_ID);
+    }
+
+    public static String getNacosUsername() {
+        return getConfigStr(NACOS_USERNAME);
+    }
+
+    public static String getNacosPassword() {
+        return getConfigStr(NACOS_PASSWORD);
+    }
+
+    public static String getNacosNamespace() {
+        return getConfigStr(NACOS_NAMESPACE);
+    }
+
+}
+```
+
+5.编写NacosConfig  
+在com.alibaba.csp.sentinel.dashboard.rule.nacos包下创建NacosConfig类;第一次创建时该包不存在  
+```java
+@Configuration
+public class NacosConfig {
+
+    public static final String SENTINEL_DATA_ID_POSTFIX = "-sentinel";
+
+    @Bean
+    public Converter<List<FlowRuleEntity>, String> flowRuleEntityEncoder() {
+        return JSON::toJSONString;
+    }
+
+    @Bean
+    public Converter<String, List<FlowRuleEntity>> flowRuleEntityDecoder() {
+        return s -> JSON.parseArray(s, FlowRuleEntity.class);
+    }
+
+    @Bean
+    public ConfigService nacosConfigService() throws Exception {
+        Properties properties = new Properties();
+        properties.put("username", DashboardConfig.getNacosUsername());
+        properties.put("password", DashboardConfig.getNacosPassword());
+        properties.put(PropertyKeyConst.SERVER_ADDR, DashboardConfig.getNacosAddress());
+        properties.put("namespace", DashboardConfig.getNacosNamespace());
+        return ConfigFactory.createConfigService(properties);
+    }
+}
+```
+
+6.在com.alibaba.csp.sentinel.dashboard.rule.nacos包下创建FlowRuleNacosPublisher  
+```java
+@Component("flowRuleNacosPublisher")
+public class FlowRuleNacosPublisher implements DynamicRulePublisher<List<FlowRuleEntity>> {
+
+    @Autowired
+    private ConfigService configService;
+    @Autowired
+    private Converter<List<FlowRuleEntity>, String> converter;
+
+    /**
+     * 发送配置到nacos中
+     *
+     * @param app   app name 即服务名称
+     * @param rules list of rules to push 规则列表,序列化的时候要通过自定义的序列化器进行序列化
+     * @throws Exception
+     */
+    @Override
+    public void publish(String app, List<FlowRuleEntity> rules) throws Exception {
+        AssertUtil.notEmpty(app, "app name cannot be empty");
+        if (rules == null) {
+            return;
+        }
+        configService.publishConfig(app + NacosConfig.SENTINEL_DATA_ID_POSTFIX,
+                DashboardConfig.getNacosGroupId(), converter.convert(rules));
+    }
+}
+```
+
+7.在com.alibaba.csp.sentinel.dashboard.rule.nacos包下创建FlowRuleNacosProvider类  
+```java
+@Component("flowRuleNacosProvider")
+public class FlowRuleNacosProvider implements DynamicRuleProvider<List<FlowRuleEntity>> {
+
+    @Autowired
+    private ConfigService configService;
+    @Autowired
+    private Converter<String, List<FlowRuleEntity>> converter;
+
+    @Override
+    public List<FlowRuleEntity> getRules(String appName) throws Exception {
+        String rules = configService.getConfig(appName + NacosConfig.SENTINEL_DATA_ID_POSTFIX,
+                DashboardConfig.getNacosGroupId(), 3000);
+        if (StringUtil.isEmpty(rules)) {
+            return new ArrayList<>();
+        }
+        return converter.convert(rules);
+    }
+}
+```
+
+8.修改FlowControllerV1类  
+<font color="#FF00FF">注意该controller是针对流控模式的更改,实际上在sentinel中还有很多别的规则;比如系统规则、热点规则等等是需要对不同的controller进行编写的</font>
+
+```java
+@RestController
+@RequestMapping(value = "/v1/flow")
+public class FlowControllerV1 {
+  // xxx
+    @Autowired
+    private FlowRuleNacosProvider flowRuleNacosProvider;
+
+    @Autowired
+    private FlowRuleNacosPublisher flowRuleNacosPublisher;
 
 
+    @GetMapping("/rules")
+    @AuthAction(PrivilegeType.READ_RULE)
+    public Result<List<FlowRuleEntity>> apiQueryMachineRules(@RequestParam String app,@RequestParam String ip,@RequestParam Integer port) {
+      // xxxx
+      //List<FlowRuleEntity> rules = sentinelApiClient.fetchFlowRuleOfMachine(app, ip, port);
+      // 添加这个
+      List<FlowRuleEntity> rules = flowRuleNacosProvider.getRules(app);      
+  }
+
+    @PostMapping("/rule")
+    @AuthAction(PrivilegeType.WRITE_RULE)
+    public Result<FlowRuleEntity> apiAddFlowRule(@RequestBody FlowRuleEntity entity) {
+      // xxx
+      //publishRules(entity.getApp(), entity.getIp(), entity.getPort()).get(5000, TimeUnit.MILLISECONDS);
+      publishRules(entity.getApp());
+    }
+
+    @PutMapping("/save.json")
+    @AuthAction(PrivilegeType.WRITE_RULE)
+    public Result<FlowRuleEntity> apiUpdateFlowRule() {
+      // publishRules(entity.getApp(), entity.getIp(), entity.getPort()).get(5000, TimeUnit.MILLISECONDS);
+      publishRules(entity.getApp());
+    }
+
+    @DeleteMapping("/delete.json")
+    @AuthAction(PrivilegeType.WRITE_RULE)
+    public Result<Long> apiDeleteFlowRule(Long id) {
+      //publishRules(oldEntity.getApp(), oldEntity.getIp(), oldEntity.getPort()).get(5000, TimeUnit.MILLISECONDS);
+      publishRules(oldEntity.getApp());
+      return Result.ofSuccess(id);
+    }
+
+    /**
+     * 这是一个新增的方法
+     */
+    private void publishRules(String app) throws Exception {
+        // 得到当前服务对应的所有规则,准备发送给nacos
+        List<FlowRuleEntity> rules = repository.findAllByApp(app);
+        flowRuleNacosPublisher.publish(app, rules);
+    }
+
+}
+```
+
+9.打包sentinel-dashboard  
+![打包](resources/springcloud/85.png)  
+
+将打包出的jar拷贝到Linux虚拟机;文件名为~/software/sentinel/sentinel-dashboard.jar  
+
+10.将Dockerfile复制到Linux中  
+将sentinel-dashboard模块中的Dockerfile文件复制到Linux中,之后稍微修改Dockerfile文件的内容  
+```dockerfile
+FROM amd64/buildpack-deps:buster-curl as installer
+
+ADD sentinel-dashboard.jar /home/sentinel-dashboard.jar
+
+FROM openjdk:8-jre-slim
+
+COPY --from=installer ["/home/sentinel-dashboard.jar", "/home/sentinel-dashboard.jar"]
+
+ENV JAVA_OPTS '-Dserver.port=8080 -Dcsp.sentinel.dashboard.server=localhost:8080'
+
+RUN chmod -R +x /home/sentinel-dashboard.jar
+
+EXPOSE 8080
+
+CMD java ${JAVA_OPTS} -jar /home/sentinel-dashboard.jar
+```
+
+11.制作镜像  
+`docker build -t cnsukidayo/sentinel:1.8.7 .`制作镜像  
+
+12.运行容器  
 ```shell
 docker run \
 -p 8858:8858 \

@@ -52,6 +52,7 @@
   * -vv:查看本地分支的当前版本、当前commit、和远程分支关联的情况
   * -avv:查看本地分支+远程分支的当前版本、当前commit、和远程分支关联的情况
 * `git branch [branchName]` 创建分支
+* `git branch [newBranchName] [originBranchName/tagName]` 基于分支/标签创建分支,该方法可以基于一个分支或者标签去创建一个分支;所以仅从创建分支角度而言<font color="#00FF00">标签可以视作分支</font>
 * `git branch [-d] [branchName]`  
   删除分支,不能删除当前分支,删除的时候系统建议先将当前要删除的分支合并到master后再删除.
 * `git branch [-D] [branchName]`  强制删除该分支(不建议使用)
