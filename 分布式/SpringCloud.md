@@ -3774,7 +3774,7 @@ skywalking是一个国产的开源框架,是分布式系统应用程序的<font 
 ```shell
 docker run \
 --name skywalking-oap \
--d apache/skywalking-oap-server:8.5.0-es7
+-d apache/skywalking-oap-server:9.7.0
 ```
 
 4.2 创建目录  
@@ -3795,9 +3795,9 @@ docker run \
 -p 1234:1234 \
 -p 11800:11800 \
 -p 12800:12800 \
---name skywalking-oap \
+--name skywalking-oap-server \
 -v ~/software/skywalking/config:/skywalking/config \
--d apache/skywalking-oap-server:8.5.0-es7
+-d apache/skywalking-oap-server:9.7.0
 ```
 **解释:**
 * `-p 11800:11800` 用于接收agent微服务数据的
@@ -3807,10 +3807,10 @@ docker run \
 5.部署
 5.1 启动容器  
 ```shell
-docker run --name oap-ui \
--p 8090:8080 \
+docker run --name skywalking-ui \
+-p 13800:8080 \
 -e SW_OAP_ADDRESS=http://192.168.149.131:12800 \
--d apache/skywalking-ui:8.5.0
+-d apache/skywalking-ui:9.7.0
 ```
 
 **解释:**  
@@ -3831,23 +3831,50 @@ docker run --name oap-ui \
 找到agent路径下的agent包即可  
 ![agent](resources/springcloud/69.png)  
 
-2.添加启动参数  
+2.添加系统属性  
 之前说过skywalking是以探针的方式无侵入来进行管控的,所以在启动的时候需要指定agent参数来让它引用skywalking-agent.jar  
 这里以order-openfeign模块为例进行演示,编辑gateway启动配置添加如下内容  
 ```shell
 # 填入agent地址
 -javaagent:/path/to/skywalking-agent.jar
 # 在skywalking上显示的名称
--DSW_AGENT_NAME=api-service
+-Dskywalking.agent.service_name=api-service
 # 填入agent服务oap地址
--DSW_AGENT_COLLECTOR_BACKEND_SERVICES=192.168.149.131:11800
+-Dskywalking.collector.backend_service=192.168.149.131:11800
 ```
+这里有大坑,skywalking无法直接监控gateway服务,需要安装插件;但是又没有找到如何在docker环境下安装插件的方法  
+<font color="#00FF00">新版本可以不装插件监控gateway了</font>  
 
-这里有大坑,无法直接监控gateway服务,需要安装插件;但是又没有找到如何在docker环境下安装插件的方法  
+
+2.1 系统属性
+使用skywalking. + 配置文件中的配置名作为系统属性的配置名来覆盖配置文件中的值.  
+例如:`-Dskywalking.agent.service_name=abc`
+详细的配置列表见skywalking-agent.jar目录下有个config文件夹(可以见第一步中的图片),config文件夹下面的agent.config就是所有的配置  
+中文配置参考:[https://skyapm.github.io/document-cn-translation-of-skywalking/zh/8.0.0/setup/service-agent/java-agent/#agent的可配置属性列表](https://skyapm.github.io/document-cn-translation-of-skywalking/zh/8.0.0/setup/service-agent/java-agent/#agent%E7%9A%84%E5%8F%AF%E9%85%8D%E7%BD%AE%E5%B1%9E%E6%80%A7%E5%88%97%E8%A1%A8)  
+
+2.2 探针参数  
+探针参数,在JVM参数的探针路径后面增加配置,例如:`-javaagent:/.../skywalking-agent.jar=agent.service_name=abc,logging.level=debug`,多个参数用逗号,分割,如果值中本身包含逗号,或者等于号=则用""将其括起来  
+
+2.3 系统环境变量
+例如在agent.config中有配置,agent.service_name,则使用值配置的名称SW_AGENT_NAME用来做环境变量,对应关系如下   
+
+```properties
+agent.service_name=${SW_AGENT_NAME:Your_ApplicationName}
+logging.level=${SW_LOGGING_LEVEL:INFO}
+SW_AGENT_NAME=demo-application
+SW_LOGGING_LEVEL=debug
+```
 
 3.启动运行  
 成功显示监控画面  
 ![监控画面](resources/springcloud/70.png)  
+
+4.高版本下载agent方法  
+![高版本下载agent](resources/springcloud/86.png)  
+来到官网点击downloads页面,然后选择要下载的语言agent,下载之后解压缩看到<font color="#00FF00">skywalking-agent.jar</font>就是对应的agent了  
+![agent](resources/springcloud/87.png)  
+注意在高版本用探针引用这个jar是没问题的,但是不能只把该jar拷贝到过去,<font color="#00FF00">必须把当前解压得到的整个文件夹拷贝过去</font>也就是说skywalking-agent.jar再使用的时候是依赖于当前文件夹里面的文件的!<font color="#FF00FF">agent不再作为一个单独为文件使用</font>!!!  
+
 
 
 #### 8.2.2 skywalking接入多个微服务
