@@ -5873,6 +5873,7 @@ Redisson里面就实现了这个方案,使用"看门狗"定期检查(每1/3的�
 8.5.1 代码参考来源  
 8.5.2 多重锁  
 8.5.3 案例实战  
+8.5.4 另一种配置方式  
 
 
 
@@ -6160,6 +6161,25 @@ public class RedLockController {
 7.结论  
 ![结论](resources/redis/152.png)  
 
+#### 8.5.4 另一种配置方式
+1.修改RedissonClient的配置内容  
+```java
+@Bean
+public RedissonClient getRedissonClient() {
+// 这里填写节点列表,每一个节点要加上前缀redis://ip:port
+String[] nodes = {"redis://192.168.111.185:6379", "redis://192.168.111.185:6389"};
+
+Config config = new Config();
+// 主要在这里使用的是useClusterServers方法
+config.useClusterServers()
+	.setScanInterval(2000)
+	.addNodeAddress(nodes);
+
+return Redisson.create(config);
+}
+```
+
+2.此时使用的就是多机的红锁
 
 ## 9.Redis缓存过期策略  
 **目录:**  
