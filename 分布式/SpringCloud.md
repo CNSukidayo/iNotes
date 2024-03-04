@@ -877,6 +877,8 @@ feign:
   例如当前在淘宝-dev这个命名空间下,在某个产品线下可以有多个微服务项目,有一个配置分组是live,代表这是直播项目的配置,其中Group指定为db(表示这是直播微服务database数据库的配置)
 * Group:可以按照项目中配置的特征进行进一步划分,例如可以划分为db、redis、common
 
+*例如:*  
+![配置](resources/springcloud/88.png) 
 
 3.历史版本  
 ![历史版本](resources/springcloud/21.png)  
