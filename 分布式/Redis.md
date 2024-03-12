@@ -2834,7 +2834,8 @@ public User findUserById(Integer id) {
     return user;
 }
 ```
-多个线程同时去查询数据库的这条记录时,我们可以在第一个查询数据的请求上使用一个互斥锁来锁住它.其它的线程走到这一步等待拿锁,等第一个线程查询到了数据,然后做缓存.<font color="#00FF00">后面的线程进入临界区时发现已经有缓存了直接拿走缓存即可</font>.
+多个线程同时去查询数据库的这条记录时,我们可以在第一个查询数据的请求上使用一个互斥锁来锁住它.其它的线程走到这一步等待拿锁,等第一个线程查询到了数据,然后做缓存.<font color="#00FF00">后面的线程进入临界区时发现已经有缓存了直接拿走缓存即可</font>.  
+在这之后的线程就不需要加锁了,因为第一次查询redis就可以直接查询到数据返回  
 
 ### 3.4 数据库和缓存一致性的几种更新策略
 1.这一章解决剩下的所有面试题  
@@ -5868,6 +5869,7 @@ Redisson里面就实现了这个方案,使用"看门狗"定期检查(每1/3的�
 8.5.1 代码参考来源  
 8.5.2 多重锁  
 8.5.3 案例实战  
+8.5.4 另一种配置方式  
 
 
 
@@ -6155,6 +6157,25 @@ public class RedLockController {
 7.结论  
 ![结论](resources/redis/152.png)  
 
+#### 8.5.4 另一种配置方式
+1.修改RedissonClient的配置内容  
+```java
+@Bean
+public RedissonClient getRedissonClient() {
+// 这里填写节点列表,每一个节点要加上前缀redis://ip:port
+String[] nodes = {"redis://192.168.111.185:6379", "redis://192.168.111.185:6389"};
+
+Config config = new Config();
+// 主要在这里使用的是useClusterServers方法
+config.useClusterServers()
+	.setScanInterval(2000)
+	.addNodeAddress(nodes);
+
+return Redisson.create(config);
+}
+```
+
+2.此时使用的就是多机的红锁
 
 ## 9.Redis缓存过期策略  
 **目录:**  
