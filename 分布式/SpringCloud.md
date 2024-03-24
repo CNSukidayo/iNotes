@@ -121,6 +121,9 @@ spring:
 *注意:*  
 其中命令空间用于隔离不同的环境,例如开发环境、生产环境;<font color="#00FF00">不同的命名空间的服务之间是无法相互感知的</font>  
 
+*扩展:*  
+新版本nacos指定注册中心的地址方式和配置中心合并了,详情见:4.服务配置中心=>4.7 2.x版本使用nacos配置中心方法  
+
 4.编写主启动类  
 正常编写即可,两个模块分别创建io.github.cnsukidayo.cloud  
 然后再该路径下创建OrderApplication和StockApplication这两个主启动类  
@@ -827,6 +830,7 @@ feign:
 4.4 读取配置中心文件  
 4.5 其它扩展配置  
 4.6 配置文件的优先级  
+4.7 2.x版本使用nacos配置中心方法    
 
 ### 4.1 服务配置中心概念介绍
 1.服务注册中心特征  
@@ -930,7 +934,7 @@ spring:
 ```
 
 *提示:新版已经不需要使用bootstrap.yml配置文件了,而且2.0的版本和1.0又对应不上,所以暂且跳过*  
-详情可以参考:[https://github.com/alibaba/spring-cloud-alibaba/blob/2.2.x/spring-cloud-alibaba-examples/nacos-example/readme-zh.md]([https://](https://github.com/alibaba/spring-cloud-alibaba/blob/2.2.x/spring-cloud-alibaba-examples/nacos-example/readme-zh.md))
+详情可以参考:[https://github.com/alibaba/spring-cloud-alibaba/blob/2.2.x/spring-cloud-alibaba-examples/nacos-example/readme-zh.md](https://github.com/alibaba/spring-cloud-alibaba/blob/2.2.x/spring-cloud-alibaba-examples/nacos-example/readme-zh.md)
 
 4.获取变量  
 实际上通过`application.getEnvironment().getProperty("key")`方法就可以获取到配置信息了;是不是TM的似曾相识?  
@@ -960,6 +964,7 @@ spring:
 ```
 
 3.<font color="#00FF00">自定义Data ID</font>  
+*提示:此种方式支持SpringCloudAlibaba 2.x*  
 在4.4 读取配置中心文件=>3.编写bootstrap.yml配置文件时提到过`spring.application.name`的配置必须设置为dataId的值,假设服务名不能设置为dataId的值;或者一个服务需要读取多个配置文件时可以使用<font color="#00FF00">shared-configs</font>或者<font color="#00FF00">extension-configs</font>  
 ```yml
 spring:
@@ -1064,10 +1069,85 @@ public class TestController{
 ### 4.6 配置文件的优先级
 todo
 
+### 4.7 2.x版本使用nacos配置中心方法
+1.现在不需要使用bootstrap.yml配置文件了  
 
+2.假设现在有两个配置文件application.yml和application-dev.yml  
+spring先加载application.yml然后再通过application中配置的`spring.profiles.active`指定的环境去读取对应的配置文件(即application-dev.yml);再在application-dev.yml中配置nacos地址是不冲突的  
 
+3.application.yml示例  
+```yml
+spring:
+  application:
+    name: service-core
+  profiles:
+    active: dev
+```
 
+4.application-dev.yml示例  
+```yml
+spring:
+  cloud:
+    # 指定nacos地址,无需再分别指定配置中心和注册中心
+    nacos:
+      server-addr: 192.168.230.128:8848
+      username: nacos
+      password: nacos
+      # 命名空间的指定方式不变
+      # 注意这里必须指定file-extension和nacos中的类型对应上否则不会生效
+      config:
+        namespace: 2a9414e1-1d69-4dfb-b355-be4af684d26e
+        file-extension: yaml
+  config:
+    import:
+      # 新版springcloud导入方式
+      - nacos:core-common?refresh=true&group=DEFAULT_GROUP
+```
 
+**解释:**  
+在springcloud2020版本之后,<font color="#00FF00">原生配置中心</font>的使用方式就变成了上述的这种方式;而nacos的导入方式就变成的这种<font color="#FF00FF">类URL</font>的方式  
+* `nacos`:表明当前使用的配置中心是nacos
+* `core-common`:相当于之前的data-id
+* `refresh`:是否自动刷新
+* `group`:分组信息
+
+并且如果使用nacos作为配置中心和注册中心,现在只需要指定一次即可,即nacos地址的配置现在共享了  
+
+5.读取nacos中的值(标准方式)  
+如果需要使用`@NacosValue`来读取值则需要使用<font color="#00FF00">以下方式命名data-id</font>  
+**查看官方文档内容如下:**    
+![查看标准文档](resources/springcloud/83.png)  
+配置文件内容如下:  
+```yml
+spring:
+  application:
+    name: gulimall-cart1
+  profiles:
+    active: dev
+  cloud:
+    nacos:
+      discovery:
+        server-addr: 39.99.234.10:8848
+      config:
+        server-addr: 39.99.234.10:8848
+        file-extension: yaml
+        prefix: gulimall-cart #推荐使用这个，因为name和他具有相同效果但语义不如prefix明确
+```
+<font color="#FF00FF">所以总结来说就是nacos中配置文件的data-id要按照要求来进行创建</font>  
+但是这种方式有点麻烦了  
+
+6.使用@Value注解  
+实际上nacos官方也推荐直接使用`@Value`+`@RefreshScope`注解的方式读取nacos中的配置  
+此时就不需要关心命名规范等内容了  
+使用如下controller层的代码可以读取到nacos中的值  
+```java
+@RestController
+@RefreshScope
+public class WordStructureController {
+    @Value(value = "${test.name}")
+    public String name;
+}
+```
 
 
 

@@ -1619,30 +1619,22 @@ docker run \
 2.启动容器  
 ```shell
 docker run --name rabbitmq \
+-p 4369:4369 \
 -p 5671:5671 \
 -p 5672:5672 \
--p 4369:4369 \
 -p 25672:25672 \
 -p 15671:15671 \
 -p 15672:15672 \
--d rabbitmq:management
+-d rabbitmq:3.12.4-management
 ```
 **解释:**  
 * 4369:Erlang发现端口(必须指定)  
 * 15672:Web前端管理端口(可以不指定,推荐指定)  
-* 25672:集群端口(暂不指定)  
-* 5672;5671:AMQP端口(暂不指定)
-* 61613;61614:STOMP协议端口(暂不指定)  
-* 1883;8883:MQTT协议端口(暂不指定)  
-
-**可以这么指定:**
-```shell
-docker run --name rabbitmq \
---restart=always \
--p 7903:4396 \
--p 7904:15672 \
--d rabbitmq:3.12.4-management
-```
+* 25672:集群端口  
+* 5672;5671:AMQP端口
+  springboot连接时使用该端口
+* 61613;61614:STOMP协议端口  
+* 1883;8883:MQTT协议端口  
 
 3.进入容器修改密码  
 `docker exec -it [containerId] /bin/bash`
