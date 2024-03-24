@@ -1851,7 +1851,7 @@ sudo mkdir -p /etc/docker
 ```shell
 sudo tee /etc/docker/daemon.json <<-'EOF'
 {
-"registry-mirrors": ["https://82m9ar63.mirror.aliyuncs.com"]
+"registry-mirrors": ["https://82m9ar63.mirror.aliyuncs.com","http://hub-mirror.c.163.com"]
 }
 EOF
 ```

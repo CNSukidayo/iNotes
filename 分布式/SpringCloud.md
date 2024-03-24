@@ -562,6 +562,24 @@ spring:
 接着使用`@LoadBalancerClients`注解来针对某个服务提供者使用特定的负载均衡策略(类似之前@RibbonClients)  
 只不过loadbalancer没有提供配置文件的方式来自定义负载均衡策略  
 
+5.使用WebClient来实现异步的请求  
+<font color="#FF00FF">非常重要,后续需要完善;通过这种方式就可以实现在gateway网关中负载均衡地远程调用一个微服务</font>  
+
+```java
+private Mono<BaseResponse<Object>> getPermissionList(CheckAuthParam checkAuthParam) {
+    return webClientBuilder.build()
+        .post()
+        .uri("http://service-auth/remote/auth/permission/get_and_check")
+        .contentType(MediaType.APPLICATION_JSON)
+        .bodyValue(checkAuthParam)
+        .retrieve()
+        .bodyToMono(new ParameterizedTypeReference<>() {
+        });
+}
+```
+
+
+
 ## 3.远程调用
 **目录:**  
 3.1 Feign基本环境搭建  
@@ -855,11 +873,12 @@ feign:
 *提示:配置组是基于命名空间的,即<font color="#00FF00">一个服务只能读取到它所在的命名空间下的配置</font>;远程调用的时候也只能调用该命名空间下面的服务列表*  
 
 ![配置组](resources/springcloud/20.png)  
-* Data ID:可以按照项目来进行分组
-  例如当前在淘宝-dev这个命名空间下,有一个配置分组是live-common,代表这是直播项目的配置,其中Group指定为gift(表示这是礼物微服务的配置)
-  但实际上一般不会这么细致,一般Group都是使用默认
-  可以通过live-common、live-database的这种方式来区分配置;前者是直播项目的通用配置,后者是直播项目数据库的配置
-* Group:可以按照项目的服务来进行分组
+* Data ID:可以按照项目(微服务)来进行分组
+  例如当前在淘宝-dev这个命名空间下,在某个产品线下可以有多个微服务项目,有一个配置分组是live,代表这是直播项目的配置,其中Group指定为db(表示这是直播微服务database数据库的配置)
+* Group:可以按照项目中配置的特征进行进一步划分,例如可以划分为db、redis、common
+
+*例如:*  
+![配置](resources/springcloud/88.png) 
 
 3.历史版本  
 ![历史版本](resources/springcloud/21.png)  
@@ -1538,7 +1557,7 @@ docker run \
 
 4.详情配置  
 sentinel的详情配置见:[https://github.com/alibaba/Sentinel/wiki/%E6%8E%A7%E5%88%B6%E5%8F%B0](https://github.com/alibaba/Sentinel/wiki/%E6%8E%A7%E5%88%B6%E5%8F%B0)  
-docker的配置方式暂时还没有找到  
+docker的配置方式很简单就是通过环境变量的方式来配置,也是通过上面这张表里指定的配置进行配置  
 
 5.修改pom文件  
 还是在sentinel-demo模块下,修改pom文件引入sentinelDashBoard依赖  
@@ -2081,6 +2100,15 @@ public class HotController {
 当单台机器上所有入口流量的QPS达到阈值进行流控  
 
 ### 5.9 sentinel持久化模式
+**目录:**  
+5.9.1 sentinel客户端持久化使用方式  
+5.9.2 改造sentinel实现持久化  
+
+#### 5.9.1 sentinel客户端持久化使用方式
+**注意:**  
+本节是讲述sentinel客户端如何使用持久化后的sentinel数据;当使用<font color="#00FF00">推模式</font>时,每个微服务(客户端)将不再从sentinel中获取限流规则,而是直接从nacos中获取限流规则  
+![推模式](resources/springcloud/84.png)  
+
 1.问题  
 sentinel默认的所有配置都是保存在内存当中的,一旦服务重启之后维护在sentinel中的配置全都丢失了  
 
@@ -2090,14 +2118,14 @@ sentinel默认的所有配置都是保存在内存当中的,一旦服务重启�
 * 推模式:生产环境下推荐使用该模式,这种模式的配置中心一般是nacos、zookpeer;数据推送的操作不由服务进行,而是由sentinel控制台统一进行管理然后推送到服务配置中心,接着配置中心将数据推送到sentinel数据源,sentinel数据源将数据更新到本地服务  
   <font color="#00FF00">sentinel控制台->配置中心->sentinel数据源->sentinel</font>
 
-3.推模式  
+3.推模式之nacos  
 
 3.1 引入pom依赖  
 引入sentinel数据源到本地微服务依赖  
 ```xml
 <dependency>
     <groupId>com.alibaba.csp</groupId>
-    <artifactId>sentinel-datasource-extension</artifactId>
+    <artifactId>sentinel-datasource-nacos</artifactId>
 </dependency>
 ```
 
@@ -2122,23 +2150,305 @@ spring:
       web-context-unify: false
       # dataSource是一个Map集合,可以回顾一下yml中如何编写Map集合
       datasource:
-        # key:可以随意指定
-        flow-rule:
+        # key:可以随意指定,并且可以指定多个;即flow-rule可以写任意内容
+        datasource1:
           # 设置使用nacos配置中心,
           nacos:
             # 设置nacos的远程地址
             server-addr: 192.168.149.130:8848
             username: nacos
             password: nacos
+            # 指定配置的存放的位置
             data-id: order-sentinel-flow-rule
+            group-id: DEFAULT_GROUP
+            data-type: json
           # zk: 设置使用zookpeer配置中心
           # consul: 设置使用consul配置中心
 ```
 
-3.3 大坑  
-现在的这种配置太鸡肋了;还要人手动配置yml文件,并且如果通过sentinel的控制面板修改了一些配置文件它是不支持直接推送到nacos的  
-//todo 这里要补
+#### 5.9.2 改造sentinel实现持久化
+1.下载sentinel源码  
+GitHub仓库地址:[https://github.com/alibaba/Sentinel/tree/1.8.7](https://github.com/alibaba/Sentinel/tree/1.8.7)  
 
+下载完成后使用Git终端进入项目,执行`git tag`命令查看所有的标签,接着选择一个合适的标签版本创建分支,例如执行:`git branch branch_1.8.7 1.8.7`即基于1.8.7这个标签创建branch_1.8.7分支  
+后续的代码都会基于该分支进行编写  
+
+2.修改pom依赖  
+因为这里是以nacos为例子进行修改的,所以进入sentinel-datasource-nacos模块下的pom文件,可以找到<font color="#00FF00"><nacos.version></font>这个对应的nacos版本  
+
+得到nacos版本之后进入sentinel-dashboard模块修改pom文件添加nacos客户端依赖
+```xml
+<dependency>
+    <groupId>com.alibaba.nacos</groupId>
+    <artifactId>nacos-client</artifactId>
+    <!-- 版本填写查询到的版本 -->
+    <version>1.4.2</version>
+</dependency>
+```
+
+进入根项目的pom文件(sentinel-parent),修改打包的版本,内容如下:  
+```xml
+<plugin>
+    <groupId>org.apache.maven.plugins</groupId>
+    <artifactId>maven-compiler-plugin</artifactId>
+    <version>${maven.compiler.version}</version>
+    <executions>
+        <execution>
+            <id>default-compile</id>
+            <configuration>
+                <release>8</release>
+            </configuration>
+        </execution>
+        <execution>
+            <id>base-compile</id>
+            <goals>
+                <goal>compile</goal>
+            </goals>
+            <configuration>
+                <excludes>
+                    <exclude>module-info.java</exclude>
+                </excludes>
+            </configuration>
+        </execution>
+    </executions>
+    <configuration>
+        <release>8</release>
+        <source>1.8</source>
+        <target>1.8</target>
+    </configuration>
+</plugin>
+```
+
+3.注销test目录下的文件  
+进入com.alibaba.csp.sentinel.dashboard.rule.nacos(test文件下)注释掉FlowRuleNacosProvider、FlowRuleNacosPublisher、NacosConfig这三个类  
+
+4.为DashboardConfig类添加配置  
+因为现在要将配置同步到nacos中,所以需要一些环境变量来动态接受用户指定的nacos配置,方便后续使用docker/k8s部署时  
+```java
+public class DashboardConfig {
+    // xxxxxx
+    /**
+     * 指定nacos地址
+     */
+    public static final String NACOS_ADDRESS = "sentinel.dashboard.nacosAddress";
+
+    /**
+     * 指定nacos的groupId
+     */
+    public static final String NACOS_GROUP_ID = "sentinel.dashboard.nacosGroupId";
+    /**
+     * 指定nacos的用户名
+     */
+    public static final String NACOS_USERNAME = "sentinel.dashboard.nacosUserName";
+    /**
+     * 指定nacos的用户名密码
+     */
+    public static final String NACOS_PASSWORD = "sentinel.dashboard.nacosPassword";
+    /**
+     * 指定nacos的命名空间
+     */
+    public static final String NACOS_NAMESPACE = "sentinel.dashboard.nacosNameSpace";
+
+    // xxxx
+    public static String getNacosAddress() {
+        return getConfigStr(NACOS_ADDRESS);
+    }
+
+    public static String getNacosGroupId() {
+        return getConfigStr(NACOS_GROUP_ID);
+    }
+
+    public static String getNacosUsername() {
+        return getConfigStr(NACOS_USERNAME);
+    }
+
+    public static String getNacosPassword() {
+        return getConfigStr(NACOS_PASSWORD);
+    }
+
+    public static String getNacosNamespace() {
+        return getConfigStr(NACOS_NAMESPACE);
+    }
+
+}
+```
+
+5.编写NacosConfig  
+在com.alibaba.csp.sentinel.dashboard.rule.nacos包下创建NacosConfig类;第一次创建时该包不存在  
+```java
+@Configuration
+public class NacosConfig {
+
+    public static final String SENTINEL_DATA_ID_POSTFIX = "-sentinel";
+
+    @Bean
+    public Converter<List<FlowRuleEntity>, String> flowRuleEntityEncoder() {
+        return JSON::toJSONString;
+    }
+
+    @Bean
+    public Converter<String, List<FlowRuleEntity>> flowRuleEntityDecoder() {
+        return s -> JSON.parseArray(s, FlowRuleEntity.class);
+    }
+
+    @Bean
+    public ConfigService nacosConfigService() throws Exception {
+        Properties properties = new Properties();
+        properties.put("username", DashboardConfig.getNacosUsername());
+        properties.put("password", DashboardConfig.getNacosPassword());
+        properties.put(PropertyKeyConst.SERVER_ADDR, DashboardConfig.getNacosAddress());
+        properties.put("namespace", DashboardConfig.getNacosNamespace());
+        return ConfigFactory.createConfigService(properties);
+    }
+}
+```
+
+6.在com.alibaba.csp.sentinel.dashboard.rule.nacos包下创建FlowRuleNacosPublisher  
+```java
+@Component("flowRuleNacosPublisher")
+public class FlowRuleNacosPublisher implements DynamicRulePublisher<List<FlowRuleEntity>> {
+
+    @Autowired
+    private ConfigService configService;
+    @Autowired
+    private Converter<List<FlowRuleEntity>, String> converter;
+
+    /**
+     * 发送配置到nacos中
+     *
+     * @param app   app name 即服务名称
+     * @param rules list of rules to push 规则列表,序列化的时候要通过自定义的序列化器进行序列化
+     * @throws Exception
+     */
+    @Override
+    public void publish(String app, List<FlowRuleEntity> rules) throws Exception {
+        AssertUtil.notEmpty(app, "app name cannot be empty");
+        if (rules == null) {
+            return;
+        }
+        configService.publishConfig(app + NacosConfig.SENTINEL_DATA_ID_POSTFIX,
+                DashboardConfig.getNacosGroupId(), converter.convert(rules));
+    }
+}
+```
+
+7.在com.alibaba.csp.sentinel.dashboard.rule.nacos包下创建FlowRuleNacosProvider类  
+```java
+@Component("flowRuleNacosProvider")
+public class FlowRuleNacosProvider implements DynamicRuleProvider<List<FlowRuleEntity>> {
+
+    @Autowired
+    private ConfigService configService;
+    @Autowired
+    private Converter<String, List<FlowRuleEntity>> converter;
+
+    @Override
+    public List<FlowRuleEntity> getRules(String appName) throws Exception {
+        String rules = configService.getConfig(appName + NacosConfig.SENTINEL_DATA_ID_POSTFIX,
+                DashboardConfig.getNacosGroupId(), 3000);
+        if (StringUtil.isEmpty(rules)) {
+            return new ArrayList<>();
+        }
+        return converter.convert(rules);
+    }
+}
+```
+
+8.修改FlowControllerV1类  
+<font color="#FF00FF">注意该controller是针对流控模式的更改,实际上在sentinel中还有很多别的规则;比如系统规则、热点规则等等是需要对不同的controller进行编写的</font>
+
+```java
+@RestController
+@RequestMapping(value = "/v1/flow")
+public class FlowControllerV1 {
+  // xxx
+    @Autowired
+    private FlowRuleNacosProvider flowRuleNacosProvider;
+
+    @Autowired
+    private FlowRuleNacosPublisher flowRuleNacosPublisher;
+
+
+    @GetMapping("/rules")
+    @AuthAction(PrivilegeType.READ_RULE)
+    public Result<List<FlowRuleEntity>> apiQueryMachineRules(@RequestParam String app,@RequestParam String ip,@RequestParam Integer port) {
+      // xxxx
+      //List<FlowRuleEntity> rules = sentinelApiClient.fetchFlowRuleOfMachine(app, ip, port);
+      // 添加这个
+      List<FlowRuleEntity> rules = flowRuleNacosProvider.getRules(app);      
+  }
+
+    @PostMapping("/rule")
+    @AuthAction(PrivilegeType.WRITE_RULE)
+    public Result<FlowRuleEntity> apiAddFlowRule(@RequestBody FlowRuleEntity entity) {
+      // xxx
+      //publishRules(entity.getApp(), entity.getIp(), entity.getPort()).get(5000, TimeUnit.MILLISECONDS);
+      publishRules(entity.getApp());
+    }
+
+    @PutMapping("/save.json")
+    @AuthAction(PrivilegeType.WRITE_RULE)
+    public Result<FlowRuleEntity> apiUpdateFlowRule() {
+      // publishRules(entity.getApp(), entity.getIp(), entity.getPort()).get(5000, TimeUnit.MILLISECONDS);
+      publishRules(entity.getApp());
+    }
+
+    @DeleteMapping("/delete.json")
+    @AuthAction(PrivilegeType.WRITE_RULE)
+    public Result<Long> apiDeleteFlowRule(Long id) {
+      //publishRules(oldEntity.getApp(), oldEntity.getIp(), oldEntity.getPort()).get(5000, TimeUnit.MILLISECONDS);
+      publishRules(oldEntity.getApp());
+      return Result.ofSuccess(id);
+    }
+
+    /**
+     * 这是一个新增的方法
+     */
+    private void publishRules(String app) throws Exception {
+        // 得到当前服务对应的所有规则,准备发送给nacos
+        List<FlowRuleEntity> rules = repository.findAllByApp(app);
+        flowRuleNacosPublisher.publish(app, rules);
+    }
+
+}
+```
+
+9.打包sentinel-dashboard  
+![打包](resources/springcloud/85.png)  
+
+将打包出的jar拷贝到Linux虚拟机;文件名为~/software/sentinel/sentinel-dashboard.jar  
+
+10.将Dockerfile复制到Linux中  
+将sentinel-dashboard模块中的Dockerfile文件复制到Linux中,之后稍微修改Dockerfile文件的内容  
+```dockerfile
+FROM amd64/buildpack-deps:buster-curl as installer
+
+ADD sentinel-dashboard.jar /home/sentinel-dashboard.jar
+
+FROM openjdk:8-jre-slim
+
+COPY --from=installer ["/home/sentinel-dashboard.jar", "/home/sentinel-dashboard.jar"]
+
+ENV JAVA_OPTS '-Dserver.port=8080 -Dcsp.sentinel.dashboard.server=localhost:8080'
+
+RUN chmod -R +x /home/sentinel-dashboard.jar
+
+EXPOSE 8080
+
+CMD java ${JAVA_OPTS} -jar /home/sentinel-dashboard.jar
+```
+
+11.制作镜像  
+`docker build -t cnsukidayo/sentinel:1.8.7 .`制作镜像  
+
+12.运行容器  
+```shell
+docker run \
+-p 8858:8858 \
+-e JAVA_OPTS=-Dserver.port=8858 -Dcsp.sentinel.dashboard.server=localhost:8858 -Dsentinel.dashboard.nacosAddress=192.168.230.128:8848 -Dsentinel.dashboard.nacosGroupId=DEFAULT_GROUP -Dsentinel.dashboard.nacosNameSpace=2a9414e1-1d69-4dfb-b355-be4af684d26e -Dsentinel.dashboard.nacosPassword=nacos -Dsentinel.dashboard.nacosUserName=nacos \
+--name sentinelDashboard \
+-d cnsukidayo/sentinel:1.8.7
+```
 
 ## 6.分布式事务
 6.1 分布式事务基本概念介绍  
@@ -3465,7 +3775,7 @@ skywalking是一个国产的开源框架,是分布式系统应用程序的<font 
 ```shell
 docker run \
 --name skywalking-oap \
--d apache/skywalking-oap-server:8.5.0-es7
+-d apache/skywalking-oap-server:9.7.0
 ```
 
 4.2 创建目录  
@@ -3486,9 +3796,9 @@ docker run \
 -p 1234:1234 \
 -p 11800:11800 \
 -p 12800:12800 \
---name skywalking-oap \
+--name skywalking-oap-server \
 -v ~/software/skywalking/config:/skywalking/config \
--d apache/skywalking-oap-server:8.5.0-es7
+-d apache/skywalking-oap-server:9.7.0
 ```
 **解释:**
 * `-p 11800:11800` 用于接收agent微服务数据的
@@ -3498,10 +3808,10 @@ docker run \
 5.部署
 5.1 启动容器  
 ```shell
-docker run --name oap-ui \
--p 8090:8080 \
+docker run --name skywalking-ui \
+-p 13800:8080 \
 -e SW_OAP_ADDRESS=http://192.168.149.131:12800 \
--d apache/skywalking-ui:8.5.0
+-d apache/skywalking-ui:9.7.0
 ```
 
 **解释:**  
@@ -3522,23 +3832,50 @@ docker run --name oap-ui \
 找到agent路径下的agent包即可  
 ![agent](resources/springcloud/69.png)  
 
-2.添加启动参数  
+2.添加系统属性  
 之前说过skywalking是以探针的方式无侵入来进行管控的,所以在启动的时候需要指定agent参数来让它引用skywalking-agent.jar  
 这里以order-openfeign模块为例进行演示,编辑gateway启动配置添加如下内容  
 ```shell
 # 填入agent地址
 -javaagent:/path/to/skywalking-agent.jar
 # 在skywalking上显示的名称
--DSW_AGENT_NAME=api-service
+-Dskywalking.agent.service_name=api-service
 # 填入agent服务oap地址
--DSW_AGENT_COLLECTOR_BACKEND_SERVICES=192.168.149.131:11800
+-Dskywalking.collector.backend_service=192.168.149.131:11800
 ```
+这里有大坑,skywalking无法直接监控gateway服务,需要安装插件;但是又没有找到如何在docker环境下安装插件的方法  
+<font color="#00FF00">新版本可以不装插件监控gateway了</font>  
 
-这里有大坑,无法直接监控gateway服务,需要安装插件;但是又没有找到如何在docker环境下安装插件的方法  
+
+2.1 系统属性
+使用skywalking. + 配置文件中的配置名作为系统属性的配置名来覆盖配置文件中的值.  
+例如:`-Dskywalking.agent.service_name=abc`
+详细的配置列表见skywalking-agent.jar目录下有个config文件夹(可以见第一步中的图片),config文件夹下面的agent.config就是所有的配置  
+中文配置参考:[https://skyapm.github.io/document-cn-translation-of-skywalking/zh/8.0.0/setup/service-agent/java-agent/#agent的可配置属性列表](https://skyapm.github.io/document-cn-translation-of-skywalking/zh/8.0.0/setup/service-agent/java-agent/#agent%E7%9A%84%E5%8F%AF%E9%85%8D%E7%BD%AE%E5%B1%9E%E6%80%A7%E5%88%97%E8%A1%A8)  
+
+2.2 探针参数  
+探针参数,在JVM参数的探针路径后面增加配置,例如:`-javaagent:/.../skywalking-agent.jar=agent.service_name=abc,logging.level=debug`,多个参数用逗号,分割,如果值中本身包含逗号,或者等于号=则用""将其括起来  
+
+2.3 系统环境变量
+例如在agent.config中有配置,agent.service_name,则使用值配置的名称SW_AGENT_NAME用来做环境变量,对应关系如下   
+
+```properties
+agent.service_name=${SW_AGENT_NAME:Your_ApplicationName}
+logging.level=${SW_LOGGING_LEVEL:INFO}
+SW_AGENT_NAME=demo-application
+SW_LOGGING_LEVEL=debug
+```
 
 3.启动运行  
 成功显示监控画面  
 ![监控画面](resources/springcloud/70.png)  
+
+4.高版本下载agent方法  
+![高版本下载agent](resources/springcloud/86.png)  
+来到官网点击downloads页面,然后选择要下载的语言agent,下载之后解压缩看到<font color="#00FF00">skywalking-agent.jar</font>就是对应的agent了  
+![agent](resources/springcloud/87.png)  
+注意在高版本用探针引用这个jar是没问题的,但是不能只把该jar拷贝到过去,<font color="#00FF00">必须把当前解压得到的整个文件夹拷贝过去</font>也就是说skywalking-agent.jar再使用的时候是依赖于当前文件夹里面的文件的!<font color="#FF00FF">agent不再作为一个单独为文件使用</font>!!!  
+
 
 
 #### 8.2.2 skywalking接入多个微服务
