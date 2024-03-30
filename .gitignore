@@ -53,6 +53,8 @@
 !config
 !config/**
 !java工具
+!java工具/resources
+!java工具/resources/**
 !java工具/Git.md
 !大前端
 !大前端/**
