@@ -7,7 +7,7 @@
 6.分布式事务  
 7.网关  
 8.链路追踪  
-9.服务网格  
+
 
 
 **附录:**  
@@ -4338,16 +4338,6 @@ collector:
 # 在这个地方指定skywalking集群的所有地址,用逗号分隔每个集群
 -DSW_AGENT_COLLECTOR_BACKEND_SERVICES=192.168.230.128:11800
 ```
-
-
-## 9.服务网格  
-https://www.zhihu.com/question/398181565/answer/2850564275
-
-
-
-
-
-
 
 
 
