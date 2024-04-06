@@ -601,15 +601,15 @@ dubbo还支持一个应用内配置<font color="#00FF00">多注册中心</font>�
 ### 2.3 负载均衡
 1.负载均衡策略  
 dubbo提供了如下的负载均衡策略  
-|             算法              |          特性           |                         备注                         |
-|:-----------------------------:|:-----------------------:|:----------------------------------------------------:|
-|  Weighted Random LoadBalance  |        加权随机         |                默认算法,默认权重相同                |
-|    RoundRobin LoadBalance     |        加权轮询         |   借鉴于Nginx的平滑加权轮询算法,默认权重相同,    |
-|    LeastActive LoadBalance    | 最少活跃优先 + 加权随机 |                 背后是能者多劳的思想                 |
-| Shortest-Response LoadBalance | 最短响应优先 + 加权随机 |                   更加关注响应速度                   |
-|  ConsistentHash LoadBalance   |       一致性哈希        |      确定的入参,确定的提供者,适用于有状态请求      |
+|             算法              |          特性           |                       备注                        |
+|:-----------------------------:|:-----------------------:|:-------------------------------------------------:|
+|  Weighted Random LoadBalance  |        加权随机         |               默认算法,默认权重相同               |
+|    RoundRobin LoadBalance     |        加权轮询         |    借鉴于Nginx的平滑加权轮询算法,默认权重相同,    |
+|    LeastActive LoadBalance    | 最少活跃优先 + 加权随机 |               背后是能者多劳的思想                |
+| Shortest-Response LoadBalance | 最短响应优先 + 加权随机 |                 更加关注响应速度                  |
+|  ConsistentHash LoadBalance   |       一致性哈希        |     确定的入参,确定的提供者,适用于有状态请求      |
 |        P2C LoadBalance        |   Power of Two Choice   | 随机选择两个节点后,继续选择"连接数"较小的那个节点 |
-|     Adaptive LoadBalance      |     自适应负载均衡      |  在P2C算法基础上,选择二者中load最小的那个节点   |
+|     Adaptive LoadBalance      |     自适应负载均衡      |   在P2C算法基础上,选择二者中load最小的那个节点    |
 
 *提示:每种算法的详细介绍这里就不贴了,详情可参照官网*  
 
@@ -617,13 +617,220 @@ dubbo提供了如下的负载均衡策略
 ### 2.5 流量管理
 **目录:**  
 2.5.1 流量管理介绍  
-2.5.2 条件路由  
-2.5.3 标签路由  
+2.5.2 标签路由  
+2.5.3 条件路由  
 2.5.4 脚本路由  
 2.5.5 动态配置  
 2.5.6 限流与熔断  
 
 #### 2.5.1 流量管理介绍
+Dubbo的流量管控规则可以基于<font color="#00FF00">应用、服务、方法、参数</font>等粒度精准的控制流量走向,<font color="#00FF00">根据请求的目标服务、方法以及请求体中的其他附加参数进行匹配</font>,符合匹配条件的流量会进一步的按照特定规则转发到一个地址子集.流量管控规则(路由器)有以下几种:  
+* 条件路由规则
+* 标签路由规则
+* 脚本路由规则
+* 动态配置规则
+
+1.工作原理  
+Dubbo消费者在调用目标服务时会把目标服务的实例地址集合传给一个<font color="#00FF00">路由器</font>,路由器根据请求上下文(Request Context)和(Router Rule)实际的路由规则定义对输入地址进行匹配,所有匹配成功的实例组成一个<font color="#00FF00">地址子集</font>,最终地址子集作为输出结果继续交给下一个路由器或者负载均衡组件处理.  
+在Dubbo中,多个路由器组成一条路由链共同协作,<font color="#FF00FF">前一个路由器的输出作为另一个路由器的输入</font>,经过层层路由规则筛选后,最终生成有效的地址集合.也就是责任链模式   
+
+#### 2.5.2 标签路由
+1.标签路由规则  
+<font color="#00FF00">标签路由说白了就是对服务实例进行分组,给某些服务实例打标签,这样在请求的时候指定当前请求只能发送到对应标签的服务实例上,从而做到隔离.</font>标签路由可以作为蓝绿发布、灰度发布等场景能力的基础.  
+标签主要是对服务提供者一端的实例进行分组,目前有两种方式可以完成实例分组,分别是`动态规则打标`和`静态规则打标`  
+`动态规则打标`可以在运行时动态的圈住一组机器实例,而`静态规则打标`则需要实例重启后才能生效;动态规则相较于静态规则优先级更高,当两种规则出现冲突时以动态规则为准  
+*注意:标签路由是一套严格隔离的流量体系,一旦打了标签则这部分地址子集就被隔离出来,只有带有对应标签的请求流量可以访问这个地址子集,这部分地址<font color="#FF00FF">不再接收没有标签或者具有不同标签的流量,可以理解为无标签服务也作为一种分类,并不是说无标签服务是通用流量</font>*  
+<font color="#00FF00">并且在标签路由下,所有服务的标签规则都是一致的,也就是说它的作用域只有application,这点要和动态配置规则区分下来</font>  
+
+2.静态打标  
+Provider:
+静态打标需要再服务提供者实例启动前确定,并且必须通过特定的参数`tag`指定;可以通过如下三种方式打标(服务提供者)  
+```xml
+<dubbo:provider tag="gray"/>
+<dubbo:service tag="gray"/>
+java -jar xxx-provider.jar -Ddubbo.provider.tag=gray
+```
+
+Consumer:  
+```java
+RpcContext.getContext().setAttachment(Constants.TAG_KEY, "gray");
+```
+
+3.动态打标  
+Provider:  
+相比于静态打标只能通过`tag`属性设置,且在启动阶段就已经固定下来,动态标签可以匹配任意多个属性,根据指定的匹配条件将Provider实例动态的划分到不同的流量分组中  
+以下条件路由示例在`shop-detail`应用中圈出了一个环境隔离`gray`,`gray`环境包含所有带有`env=gray`标识的机器实例,其余不匹配`env=gray`继续留在默认分组(无tag)  
+这段配置是dubbo的yml配置,不是spring的配置,后续会学习到  
+```yml
+configVersion: v3.0
+force: true
+enabled: true
+key: shop-detail
+tags:
+  - name: gray
+    match:
+      - key: env
+        value:
+          exact: gray
+```
+<font color="#00FF00">key表明当前规则要应用到哪个名称的服务实例上,例如这里的路由规则就是针对shop-detail这个微服务</font>  
+
+Consumer:  
+服务消费者方的设置方式与静态打标规则一致  
+```java
+RpcContext.getContext().setAttachment(Constants.TAG_KEY, "Hangzhou");
+```
+
+> 请求标签的作用域仅为一次点对点的RPC请求,例如A->B->C调用链路上,如果A->B调用通过setAttachment设置了`tag`参数,则该参数不会在B->C的调用中生效,同样的如果A->B->C这次调用结束后,如果A还需要相同的tag参数则在发起调用之前还需要再设置一次`setAttachment`  
+
+4.标签路由规则主体  
+以上述第3点中动态打标为示例进行解释  
+|     属性      |  类型   |                                                 描述                                                  | 是否必须 |
+|:-------------:|:-------:|:-----------------------------------------------------------------------------------------------------:|:--------:|
+| configVersion | String  |                                    标签路由的版本,当前的版本为v3.0                                    |   必须   |
+|      key      | String  |                                   此规则要应用到哪个目标微服务上面                                    |   必须   |
+|   enabaled    | boolean |                                           是否启用当前规则                                            |   必须   |
+|     tags      |  Tag[]  |                                            规则的标签定义                                             |   必须   |
+|     force     | boolean | tags路由规则实例子集为空时的行为<br>true表示不返回提供程序异常，而false表示回退到没有任何标记的子集。 |   可选   |
+|    runtime    | boolean |                       是为每个rpc调用运行路由规则，还是使用路由缓存（如果可用）                       |   可选   |
+
+**标签定义Tag的格式:**  
+| 属性  |      类型      |                     描述                      | 是否必须 |
+|:-----:|:--------------:|:---------------------------------------------:|:--------:|
+| name  |     String     | 用于匹配请求上下文中的dubbo.tag值的标记的名称 |    是    |
+| match | MatchCondition | 要将实例分类为此标记的成员所需满足的一组标准  |    否    |
+  
+
+5.K8S打标  
+除了通过在应用内使用xml文件的方式给服务打标之外,dubbo会自动读取机器的环境变量信息给应用打标,那么结合K8S,Dubbo就能自动读取以下环境变量配置:  
+```yml
+spec:
+  containers:
+  - name: detail
+    image: apache/demo-detail:latest
+    env:
+    - name: DUBBO_LABELS
+      value: "region=hangzhou; env=gray"
+```
+
+
+#### 2.5.3 条件路由
+相较于标签路由规则,条件路由规则更加灵活,在标签路由规则中如果给提供者打上了标签,则消费者在调用时必须提供相应的标签本次请求才会到目标服务上,否则本次请求会进入无标签集合中  
+而在<font color="#00FF00">条件路由中所有的实例都是一样的</font>,不存在分组隔离的问题,条件路由规则主体`conditions`是形如<font color="#FF00FF">[match] => [filter]</font>的规则  
+* =>之前的内容即`match`是匹配条件,也就是说本次消费者要不要走当前这个<font color="#FF00FF">条件路由器</font>,是根据match来决定的,是在消费者端做的一次匹配
+* =>之后的内容即`filter`是过滤条件,它的效果就类似标签路由规则;通过filter的表达式来从服务提供者列表中过滤出符合条件的<font color="#00FF00">地址子集</font>
+  * 如果匹配条件为空,则表明对所有请求生效,如:`=> status!=staging`
+  * 如果过滤条件为空,则表明禁止来自相应请求的访问,如:`application = product =>`
+    这个的意思就是说如果消费者的请求参数匹配`application = product`则经过该路由器之后它将无法匹配到任何一个<font color="#00FF00">地址子集</font>
+
+**条件路由规则示例:**  
+基于以下示例规则,所有org.apache.dubbo.demo.CommentService服务调用都将被转发到与当前消费端机器具有相同region标记的地址子集(也就是服务提供者在相同region这个分类下).$region是特殊引用符号,执行过程中将读取消费端机器的实际的region值替代  
+```yml
+configVersion: v3.0
+scope: service
+enabled: true
+force: true
+runtime: true
+key: org.apache.dubbo.samples.CommentService
+conditions:
+  - '=> region = $region'
+```
+
+1.条件路由规则主体  
+*提示:这里以上述的条件路由规则示例为例进行说明*
+|     属性      |   类型   |                                                                                                                描述                                                                                                                 | 是否必须 |
+|:-------------:|:--------:|:-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------:|:--------:|
+| configVersion |  String  |                                                                                                    条件路由的版本,当前版本为v3.0                                                                                                    |    是    |
+|     scope     |  String  |                                                                                       支持service和application两种规则<br>这里使用的是service                                                                                       |    是    |
+|      key      |  String  | 应用到的目标服务或者应用程序的标识符  <br> 当`scope:service`时,key应该是该规则生效的服务名比如org.apache.dubbo.samples.CommentService       <br> 当`scope:application`时,则key应该是该规则应该生效的应用名称,比如说my-dubbo-service |    是    |
+|    enabled    | boolean  |                                                                                                          是否启用当前规则                                                                                                           |    是    |
+|  conditions   | Stirng[] |                                                                                                        配置中定义的条件规则                                                                                                         |    是    |
+|     force     | boolean  |                                                                      conditions后路由规则为空时的行为,true则抛出一个异常,false则会忽略规则直接去请求其它的实例                                                                      |    否    |
+|    runtime    | boolean  |                                                                                            是否为每个 rpc 调用运行路由规则或使用路由缓存                                                                                            |    否    |
+
+2.conditions条件  
+*提示:conditions条件在上述已经进行过说明*  
+
+3.<font color="#00FF00">匹配过滤</font>条件  
+*提示:匹配和过滤都是使用下面的规则的*  
+3.1 参数支持 
+* 服务调用上下文,如interface、method、group、version等
+* 请求上下,如:attachments[key] = value
+* 方法参数,如:arguments[0] = tom
+* URL本身的字段,如:protocol,host,port等
+* URL上任务扩展参数,如:application,organization等
+* 支持开发者自定义扩展
+
+3.2 条件支持
+* 等号 = 表示"匹配",如:method = getComment
+* 不等号 != 表示"不匹配",如:method != getComment
+
+3.3 值支持
+* 以逗号,分隔多个值,如:host != 10.20.153.10,10.20.153.11
+* 以星号\*结尾表示通配符,如:host != 10.20.\*
+* 以美元符\$开头,表示引用消费者参数,如:region = \$region
+* 整数值范围,如:userId = 1~100、userId = 101~
+* 支持开发者自定义扩展
+
+#### 2.5.4 脚本路由  
+如果配置了脚本路由,则<font color="#00FF00">后续所有请求都会先执行一遍这个脚本</font>脚本过滤出来的地址即为请求允许发送到的、有效的<font color="#00FF00">地址子集</font>  
+```yml
+configVersion: v3.0
+key: demo-provider
+type: javascript
+enabled: true
+script: |
+  (function route(invokers,invocation,context) {
+      var result = new java.util.ArrayList(invokers.size());
+      for (i = 0; i < invokers.size(); i ++) {
+          if ("10.20.3.3".equals(invokers.get(i).getUrl().getHost())) {
+              result.add(invokers.get(i));
+          }
+      }
+      return result;
+  } (invokers, invocation, context)); // 表示立即执行方法  
+```
+
+#### 2.5.5 动态配置
+通过dubbo提供的动态配置规则,可以动态修改dubbo进程的运行时行为(可以动态调整RPC调用行为),整个过程不需要重启,例如超时时间、临时开启Access Log、修改Tracing 采样率、调整限流降级参数、负载均衡、线程池配置、日志等级、给机器实例<font color="#00FF00">动态打标签</font>等.  
+以下示例将org.apache.dubbo.samples.UserService服务的超时参数调整为2000ms  
+```yml
+configVersion: v3.0
+# 注意这里的作用域为service,作用域可以选择service和application
+scope: service
+key: org.apache.dubbo.samples.UserService
+enabled: true
+configs:
+  - side: provider
+    parameters:
+      timeout: 2000
+```
+scope支持service、application两个可选值,意思是当前动态配置规则对哪种粒度的服务生效,是针对当前这个服务还是针对当前这个应用(即所有服务) 
+
+以下示例将所有`shop-detail`微服务的accesslog功能开启  
+```yml
+configVersion: v3.0
+scope: application
+key: shop-detail
+configs:
+  - side: provider
+    parameters:
+      accesslog: 'true'
+```
+
+以下是一个服务级别的配置示例,`key:org.apache.dubbo.samples.UserService`和`side:consumer`说明这条配置对所有consumer的UserService接口生效,在调用失败后将有4次重试,`match`条件进一步限制了消费端的范围,限定为只对微服务名为`shop-detail`的实例生效  
+
+
+#### 2.5.6 限流与熔断
+1.回顾  
+<font color="#FF00FF">限流是站在服务提供方来说的,降级是站在服务消费方来说的</font>  
+
+2.流量控制  
+<font color="#00FF00">流量控制更多的是站在Dubbo服务提供者视角来保证服务稳定性</font>,通过明确的为dubbo服务设置请求上限阈值,确保服务所处理的请求数量始终在一个合理范围之内,从而确保系统整体的稳定性  
+在1.dubbo入门=>1.6 dubbo核心优势=>1.6.2 超高性能中介绍过dubbo的自适应限流  
+dubbo提供两种限流的能力:  
+* 静态:由用户预先设置一个固定的限流值,dubbo通过集成sentinel来实现静态限流
+* 动态:dubbo框架自动根据系统或集群负载情况执行限流,关于这种模式后续会介绍
 
 
 
