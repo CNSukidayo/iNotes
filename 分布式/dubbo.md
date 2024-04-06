@@ -1,23 +1,8 @@
-**目录:**  
-1.实战  
+# 目录 
+1.dubbo入门  
+2.dubbo功能  
 
-
-**附录:**  
-1.dubbo基本环境搭建
-
-## 1.实战
-**目录:**  
-1.1 开发服务  
-
-
-
-
-
-## 附录
-**目录:**  
-1.dobbo入门
-
-### 1.dobbo入门  
+## 1.dubbo入门  
 **目录:**  
 1.1 dubbo基本介绍  
 1.2 体会dubbo的第一个示例  
@@ -26,12 +11,13 @@
 1.5 dubbo与gRPC、Spring Cloud、Istio的关系  
 1.6 核心优势  
 
-#### 1.1 dubbo基本介绍
+### 1.1 dubbo基本介绍
 1.背景  
 dubbo是一个微服务框架,用于向用户提供`跨进程`的RPC`远程调用`;如下图所示,服务消费者可以通过注册中心(`zookeeper`)感知服务提供者,从而将请求发送给正确的服务提供者.  
 ![背景](resources/dubbo/1.png)  
+一句话总结,什么是dubbo:<font color="#FF00FF">dubbo是一款支持云原生的高性能的RPC调用框架,同时dubbo在云原生+服务网格、服务开发框架层面、通信协议、服务治理、可视化等方面更加优秀</font>,解决了SpringCloud体系的各种问题.
 
-#### 1.2 体会dubbo的第一个示例
+### 1.2 体会dubbo的第一个示例
 1.获取dubbo演示代码  
 *提示:这里通过完成一个dubbo的远程调用来演示dubbo的效果*  
 执行如下命令从获取项目代码:  
@@ -171,7 +157,7 @@ GreetingsService service = reference.get();
 String message = service.sayHi("dubbo");
 ```
 
-#### 1.3 使用dubbo开发微服务项目
+### 1.3 使用dubbo开发微服务项目
 1.启动服务注册中心zookpeer  
 参考1.2=>第3步=>启动zookpeer  
 本次环境使用Linux的docker方式启动,Linux的IP为:192.168.149.130;zookpeer的端口为`2181`  
@@ -399,7 +385,7 @@ public class Task implements CommandLineRunner {
 因为dubbo新版本默认对telnet命令添加了支持,并且telnet的默认端口是22222,所以如果在一台服务器里面同时启动consumer和provider可能就会报端口冲突的异常.  
 解决的办法可以修改端口也可以取消telnet功能  
 
-#### 1.4 dubbo架构介绍
+### 1.4 dubbo架构介绍
 1.dubbo的工作原理  
 ![工作原理](resources/dubbo/7.png)  
 以上是Dubbo的工作原理图,从抽象架构上分为两层:<font color="#00FF00">服务治理抽象控制面</font>和<font color="#00FF00">Dubbo数据面</font>  
@@ -457,11 +443,11 @@ dubbo服务治理功能:
 * 负载均衡:  
   Dubbo 默认提供加权随机、加权轮询、最少活跃请求数优先、最短响应时间优先、一致性哈希和自适应负载等策略
 * 流量路由:  
-  Dubbo支持通过一系列流量规则控制服务调用的流量分布与行为,基于这些规则可以实现基于权重的比例流量分发、灰度验证、金丝雀发布、按请求参数的路由、同区域优先、超时配置、重试、限流降级等能力.
+  Dubbo支持通过一系列流量规则控制服务调用的流量分布与行为,基于这些规则可以实现基于<font color="#00FF00">权重的比例流量分发、灰度验证、金丝雀发布、按请求参数的路由、同区域优先、超时配置、重试、限流降级</font>等能力.
 * 链路追踪:  
   Dubbo官方通过适配OpenTelemetry提供了对Tracing全链路追踪支持,用户可以接入支持OpenTelemetry标准的产品如Skywalking、Zipkin等.另外,很多社区如Skywalking、Zipkin等在官方也提供了对Dubbo的适配
 * 可观测性:  
-  Dubbo实例通过Prometheus等上报QPS、RT、请求次数、成功率、异常次数等多维度的可观测指标帮助了解服务运行状态,通过接入Grafana、Admin控制台帮助实现数据指标可视化展示
+  Dubbo实例通过<font color="#00FF00">Prometheus</font>等上报QPS、RT、请求次数、成功率、异常次数等多维度的可观测指标帮助了解服务运行状态,通过接入Grafana、Admin控制台帮助实现数据指标可视化展示
 
 6.dubbo admin  
 Admin dashboard提供了dubbo的集群可视化,通过admin可以来管理dubbo  
@@ -471,7 +457,11 @@ Admin dashboard提供了dubbo的集群可视化,通过admin可以来管理dubbo
 将Dubbo接入Istio等服务网格治理体系  
 ![服务网格](resources/dubbo/13.png)  
 
-#### 1.5 dubbo与gRPC、Spring Cloud、Istio的关系
+8.总结  
+<font color="#FF00FF">dubbo是一款支持云原生的高性能的RPC调用框架,同时dubbo在云原生+服务网格、服务开发框架层面、通信协议、服务治理、可视化等方面更加优秀</font>,解决了SpringCloud体系的各种问题  
+
+
+### 1.5 dubbo与gRPC、Spring Cloud、Istio的关系
 1.dubbo与springcloud  
 ![dubbo与springcloud](resources/dubbo/14.png)  
 
@@ -519,13 +509,124 @@ Service Mesh是近年来在云原生背景下诞生的一种微服务架构,<fon
 Dubbo已经实现了对Istio体系的全面接入,可以用Istio控制面治理Dubbo服务,而在数据面部署架构上,针对Sidecar引入的复杂性与性能问题,Dubbo还支持无代理的Proxyless模式.除此之外,Dubbo Mesh体系还解决了Istio架构落地过程中的很多问题,包括提供更灵活的数据面部署架构、更低的迁移成本等  
 ![istio](resources/dubbo/16.png)  
 
-#### 1.6 核心优势  
+### 1.6 核心优势  
 **目录:**  
 1.6.1 快速易用  
+1.6.2 超高性能  
 
-##### 1.6.1 快速易用
-支持多种编程语言、使用任意通信协议  
+#### 1.6.1 快速易用
+1.支持多种编程语言、使用任意通信协议  
+
+2.支持多种语言SDK  
+dubbo提供了几乎所有主流语言的SDK实现,定义了<font color="#00FF00">统一的微服务开发范式</font>  
+
+3.任意通信协议  
+Dubbo从设计上不绑定任何一款特定通信协议,dubbo**支持HTTP/2、REST、gRPC、JsonRPC、Thrift、Hessian2等几乎所有主流的通信协议**.  
+*提示:采用这种多协议的好处是,可以根据场景自由选择不同的协议,提高了灵活性*  
+![通信协议](resources/dubbo/10.png)  
+特点:  
+* dubbo支持协议扩展,dubbo支持将内部私有协议适配到dubbo框架上.  
+* dubbo支持多协议暴露,<font color="#00FF00">可以在单个端口上暴露多个协议</font>;dubbo能够自动识别并确保请求被正确处理;<font color="#00FF00">也可以将同一个RPC服务发布在不同的端口</font>  
+
+#### 1.6.2 超高性能  
+1.高性能数据传输
+Dubbo内置支持<font color="#FF00FF">Dubbo2、Triple</font>两款高性能通信协议:  
+* Dubbo2是基于TCP传输协议之上构建的二进制私有RPC通信协议,是一款非常简单、紧凑、高效的通信协议
+* Triple是基于HTTP/2的新一代RPC通信协议,在网关穿透性、通用性以及Streaming通信上具备优势,<font color="#00FF00">Triple完全兼容gRPC协议</font>
+
+2.性能对比  
+* 较小报文场景createUser(创建用户)、existUser(判断用户是否存在,返回仅仅是Boolean)、getUser(得到用户信息),dubbo3.2版本的<font color="#FF00FF">Triple</font>协议性能与gRPC同场景性能基本持平
+* <font color="#DDDD00">较大报文场景listUser(展示所有用户)相较于gRPC性能低11%</font>
+  *性能还是比不过gRPC*
+
+3.构建可伸缩的微服务集群  
+* 注册中心的存储容量瓶颈
+* 节点动态变化带来的地址推送与解析效率下降
+* 消费端存储大量网络地址的资源开销
+* 复杂的网络链接管理
+* 高峰期的流量无损上下线
+* 异常节点的自动节点管理
+
+以上内容直接关系到微服务集群的稳定性,dubbo的优势就在于几乎无限水平扩容的集群规模,dubbo就是着重解决上述问题的  
+
+4.智能化流量调度  
+Dubbo3内置了具备自适应感知集群负载状态、智能调节流量分布的限流与调度算法实现,从消费者、提供者两个不同视角智能调整流量分布,<font color="#00FF00">最大限度确保将流量调度到具有最佳处理能力的实例上,从而提升整个集群的吞吐量与稳定性</font>.
+
+5.自适应负载均衡  
+更加高级的负载均衡算法,这里是针对于Ribbon的负载均衡算法来说的  
+
+6.自适应限流  
+<font color="#00FF00">传统的sentinel是提前对服务器进行压测从而找到节点平衡值,设置的是一个<font color="#FF00FF">静态</font>的最大并发值</font>自适应限流算法可以<font color="#FF00FF">动态调整</font>服务端机器的最大并发值,使其可以在保证机器不过载的前提下,尽可能多的处理接收到的请求.
+
+
+## 2.dubbo功能
+*提示:这里说的功能主要说的就是dubbo具备哪些服务治理的能力,概念比较多;本章基本上是对附录=>1.dubbo入门=>1.4dubbo架构介绍,这一节中提到的dubbo诸多功能更加详细介绍*  
+**目录:**  
+2.1 微服务开发  
+2.2 服务发现  
+2.3 负载均衡  
+2.4 负载均衡  
+2.5 流量管理  
+2.x 服务发现(补充)  
+
+
+### 2.1 微服务开发
+详情见:附录=>1.dubbo入门=>1.3使用dubbo开发微服务项目  
+
+### 2.2 服务发现
+dubbo提供的是一种`Client-Based`的服务发现机制,依赖第三方注册中心组件来协调服务发现过程,支持常见的注册中心,如Nacos、Consul、zookpeer  
+
+1.面向百万示例集群的服务发现机制  
+![服务发现架构](resources/dubbo/17.png)  
+dubbo相较于传统的服务发现框架有如下优势:  
+* 首先,Dubbo注册中心以<font color="#FF00FF">应用粒度</font>聚合实例数据,消费者按消费需求<font color="#00FF00">精准订阅</font>,避免了大多数开源框架如Istio、Spring Cloud等全量订阅带来的性能瓶颈
+  <font color="#FF00FF">Dubbo是精确订阅不是全量订阅,并且是以应用粒度聚合示例,应用粒度对应的是服务粒度,应用粒度更粗从而能避免更多的数据开销</font>
+* 其次,Dubbo SDK在实现上对<font color="#00FF00">消费端地址列表处理过程做了大量优化,地址通知增加了异步、缓存、bitmap等多种解析优化</font>,避免了地址更新常出现的消费端进程资源波动
+* 最后,在功能丰富度和易用性上,服务发现除了同步ip、port等端点基本信息到消费者外,Dubbo还将服务端的RPC/HTTP服务及其配置的<font color="#FF00FF">元数据</font>信息同步到消费端,这让消费者、提供者两端的更细粒度的协作成为可能,Dubbo基于此机制提供了很多差异化的治理能力
+  <font color="#FF00FF">dubbo还同步了元数据信息</font>
+
+2.高效地址推送实现  
+dubbo3是以<font color="#FF00FF">应用粒度</font>聚合实例数据,从而减少传输的数据量,提升了性能,并且dubbo3实现了<font color="#FF00FF">按需精准订阅地址信息</font>,比如一个消费者依赖app1、app2则只会订阅app1、app2的地址列表更新,大幅减轻了冗余数据推送.  
+![按需精准定位](resources/dubbo/18.png)  
+
+3.元数据配置  
+除了与注册中心的交互,dubbo3还有一条额外的元数据通路;即元数据服务(MetadataService),实例地址与元数据共同组成了消费者端有效的地址列表  
+![元数据](resources/dubbo/19.png)  
+完整工作流程如上图所示,首先消费者中注册中心收到地址(ip:port)信息,<font color="#00FF00">然后与提供者建立连接并通过元数据服务读取到对端元数据配置信息</font>(也就是说元数据不是从注册中心中获取的),两部分信息共同组装成dubbo消费端有效的面向服务的地址列表.  
+
+4.配置方式  
+dubbo服务发现支持多种注册中心组件,例如nacos、zookpeer、consul、Redis  
+dubbo还支持一个应用内配置<font color="#00FF00">多注册中心</font>的场景,例如双注册、双订阅.由此可以实现<font color="#FF00FF">不同集群地址数据互通、集群迁移</font>等场景  
+
+### 2.3 负载均衡
+1.负载均衡策略  
+dubbo提供了如下的负载均衡策略  
+|             算法              |          特性           |                         备注                         |
+|:-----------------------------:|:-----------------------:|:----------------------------------------------------:|
+|  Weighted Random LoadBalance  |        加权随机         |                默认算法,默认权重相同                |
+|    RoundRobin LoadBalance     |        加权轮询         |   借鉴于Nginx的平滑加权轮询算法,默认权重相同,    |
+|    LeastActive LoadBalance    | 最少活跃优先 + 加权随机 |                 背后是能者多劳的思想                 |
+| Shortest-Response LoadBalance | 最短响应优先 + 加权随机 |                   更加关注响应速度                   |
+|  ConsistentHash LoadBalance   |       一致性哈希        |      确定的入参,确定的提供者,适用于有状态请求      |
+|        P2C LoadBalance        |   Power of Two Choice   | 随机选择两个节点后,继续选择"连接数"较小的那个节点 |
+|     Adaptive LoadBalance      |     自适应负载均衡      |  在P2C算法基础上,选择二者中load最小的那个节点   |
+
+*提示:每种算法的详细介绍这里就不贴了,详情可参照官网*  
+
+
+### 2.5 流量管理
+**目录:**  
+2.5.1 流量管理介绍  
+2.5.2 条件路由  
+2.5.3 标签路由  
+2.5.4 脚本路由  
+2.5.5 动态配置  
+2.5.6 限流与熔断  
+
+#### 2.5.1 流量管理介绍
 
 
 
 
+### 2.x 服务发现(补充)
+https://cn.dubbo.apache.org/zh-cn/blog/2023/01/30/dubbo3-%E5%BA%94%E7%94%A8%E7%BA%A7%E6%9C%8D%E5%8A%A1%E5%8F%91%E7%8E%B0%E8%AE%BE%E8%AE%A1/
