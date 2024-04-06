@@ -16,7 +16,7 @@
 1.背景  
 dubbo是一个微服务框架,用于向用户提供`跨进程`的RPC`远程调用`;如下图所示,服务消费者可以通过注册中心(`zookeeper`)感知服务提供者,从而将请求发送给正确的服务提供者.  
 ![背景](resources/dubboBasis/1.png)  
-一句话总结,什么是dubbo:<font color="#FF00FF">dubbo是一款支持云原生的高性能的RPC调用框架,同时dubbo在云原生+服务网格、服务开发框架层面、通信协议、服务治理、可视化等方面更加优秀</font>,解决了SpringCloud体系的各种问题.
+一句话总结,什么是dubbo:<font color="#FF00FF">dubbo是一款支持云原生的高性能的RPC调用框架,同时dubbo在云原生+服务网格、服务开发、通信协议、服务治理、可视化等方面更加优秀</font>,解决了SpringCloud体系的各种问题.
 
 ### 1.2 体会dubbo的第一个示例
 1.获取dubbo演示代码  
