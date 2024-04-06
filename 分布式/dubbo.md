@@ -487,7 +487,8 @@ Spring Cloud的问题:
 springcloud的劣势就是dubbo的优势:  
 * 完全支持Spring&Spring Boot开发模式,同时在服务发现、动态配置等基础模式上提供与Spring Cloud对等的能力
 * 是企业级微服务实践方案的整体输出,Dubbo考虑到了企业微服务实践中会遇到的各种问题如优雅上下线、多注册中心、流量管理等,因此其在生产环境的长期维护成本更低
-* 在通信协议和编码上选择更灵活,包括rpc通信层协议如HTTP、HTTP/2(Triple、gRPC)、TCP二进制协议、rest等,序列化编码协议Protobuf、JSON、Hessian2等,支持单端口多协议
+* 在通信协议和编码上选择更灵活,包括rpc通信层协议如HTTP、HTTP/2(Triple、gRPC)、TCP二进制协议、rest等,序列化编码协议<font color="#00FF00">Fastjson、Protobuf、Hessian2、Kryo、FST</font>等,支持单端口多协议
+  在springcloud体系中只能使用HTTP解析+JSON序列化协议  
 * Dubbo从设计上突出服务服务治理能力,如权重动态调整、标签路由、条件路由等,支持Proxyless等多种模式接入Service Mesh体系
 * 高性能的RPC协议编码与实现
 * Dubbo是在超大规模微服务集群实践场景下开发的框架,可以做到百万实例规模的集群水平扩容,应对集群增长带来的各种问题
@@ -497,6 +498,7 @@ springcloud的劣势就是dubbo的优势:
 Dubbo与gRPC最大的差异在于两者的定位上:
 * <font color="#00FF00">gRPC定位为一款RPC框架</font>,Google推出它的核心目标是定义云原生时代的rpc通信规范与标准实现;
 * Dubbo定位是一款<font color="#00FF00">微服务开发框架</font>,它侧重解决微服务实践从服务定义、开发、通信到治理的问题,因此Dubbo同时提供了RPC通信、与应用开发框架的适配、服务治理等能力
+  <font color="#00FF00">所以从开放能力上来说dubbo比gRPC更加强大,使用场景更加宽泛</font>  
 
 Dubbo服务间可通过多种RPC协议通信并支持灵活切换.因此,可以在Dubbo开发的微服务中选用gRPC通信,Dubbo完全兼容gRPC,并将gRPC设计为内置原生支持的协议之一  
 ![gRPC](resources/dubbo/15.png)  
@@ -532,7 +534,8 @@ Dubbo从设计上不绑定任何一款特定通信协议,dubbo**支持HTTP/2、R
 1.高性能数据传输
 Dubbo内置支持<font color="#FF00FF">Dubbo2、Triple</font>两款高性能通信协议:  
 * Dubbo2是基于TCP传输协议之上构建的二进制私有RPC通信协议,是一款非常简单、紧凑、高效的通信协议
-* Triple是基于HTTP/2的新一代RPC通信协议,在网关穿透性、通用性以及Streaming通信上具备优势,<font color="#00FF00">Triple完全兼容gRPC协议</font>
+* Triple是基于HTTP/2的新一代RPC通信协议,在网关穿透性、通用性以及Streaming通信上具备优势,<font color="#00FF00">Triple完全兼容gRPC协议</font>  
+  <font color="#FF00FF">在云原生时代我们更推荐使用Triple协议</font>
 
 2.性能对比  
 * 较小报文场景createUser(创建用户)、existUser(判断用户是否存在,返回仅仅是Boolean)、getUser(得到用户信息),dubbo3.2版本的<font color="#FF00FF">Triple</font>协议性能与gRPC同场景性能基本持平
@@ -567,6 +570,10 @@ Dubbo3内置了具备自适应感知集群负载状态、智能调节流量分�
 2.3 负载均衡  
 2.4 负载均衡  
 2.5 流量管理  
+2.6 通信协议  
+2.7 观测服务  
+2.8 认证鉴权  
+2.9 服务网格  
 2.x 服务发现(补充)  
 
 
@@ -591,6 +598,7 @@ dubbo3是以<font color="#FF00FF">应用粒度</font>聚合实例数据,从而�
 
 3.元数据配置  
 除了与注册中心的交互,dubbo3还有一条额外的元数据通路;即元数据服务(MetadataService),实例地址与元数据共同组成了消费者端有效的地址列表  
+从用户视角来看元数据中心是只读的,元数据中心的唯一写入方式是dubbo进程实例,dubbo实例会在启动之后将一些内部状态(如服务列表、服务配置、服务定义格式等)上报到元数据中心.
 ![元数据](resources/dubbo/19.png)  
 完整工作流程如上图所示,首先消费者中注册中心收到地址(ip:port)信息,<font color="#00FF00">然后与提供者建立连接并通过元数据服务读取到对端元数据配置信息</font>(也就是说元数据不是从注册中心中获取的),两部分信息共同组装成dubbo消费端有效的面向服务的地址列表.  
 
@@ -832,7 +840,90 @@ dubbo提供两种限流的能力:
 * 静态:由用户预先设置一个固定的限流值,dubbo通过集成sentinel来实现静态限流
 * 动态:dubbo框架自动根据系统或集群负载情况执行限流,关于这种模式后续会介绍
 
+3.熔断降级  
+<font color="#00FF00">熔断降级则是更多的从Dubbo服务消费者视角来保障系统稳定性的重要手段</font>,
 
+### 2.6 通信协议  
+详情见1.dubbo入门=>1.4 dubbo架构介绍=>4.通信协议介绍的已经很好了  
+
+### 2.7 观测服务
+1.可观测指标  
+dubbo内部维护了多个维度的可观测指标,总体来说分为三个维度:  
+* Admin:控制台可视化展示了集群中的应用、服务、实例及依赖关系,<font color="#00FF00">支持流量治理规则下发</font>,同时还提供如服务测试、mock、文档管理等提升研发测试效率的工具
+* Metrics:Dubbo统计了一系列的流量指标如QPS、RT(Response Time)、成功请求数、失败请求数等,还包括一系列的内部组件状态如线程池数、服务健康状态等
+* Tracing:dubbo支持主流的链路追踪工具,包括skywalking、Zipkin
+* Logging:dubbo支持多种日志框架适配,同时dubbo还支持Access Log记录请求轨迹
+
+2.Admin  
+![admin](resources/dubbo/20.png)  
+
+3.Metrics  
+可以通过Grafana可视化的查看Metrics指标  
+![Metrics](resources/dubbo/21.png)  
+
+4.Tracing  
+![Tracing](resources/dubbo/22.png)  
+
+
+### 2.8 认证鉴权
+为了保证服务与服务之间的通信是安全的,Dubbo提供了构建安全微服务通信体系(零信任体系)的完善机制:  
+* 避免通信过程中的中间人攻击,Dubbo提供了身份认证(Authentication)和基于TLS的通信链路加密能力
+* 控制服务间的访问鉴权(Authorization),Dubbo提供了mTLS和权限检查机制
+
+1.架构  
+一套完整的零信任体系包含多个组成部分:  
+* 一个根证书机构(CA)来负责管理key和certificate
+* 一个安全策略的管理和分发中心,来负责将安全策略实时下发给数据面组件:
+  * 认证策略
+  * 鉴权策略
+  * 安全命名信息(Secure Naming Information)
+* 数据面组件(Dubbo)负责识别和执行身份认证、加密、策略解析等动作
+* 一系列的工具和生态,配合完成安全审计、数据链路监控等工作
+
+2.Dubbo mTLS流程  
+在Istio部署架构下,可以通过控制面认证策略开启或关闭Channel Authentication的双向认证,双向认证的工作流程如下:
+* 通过Istio下发认证策略,开启双向认证
+* Dubbo客户端同服务端开启双向TLS握手,在此期间Dubbo客户端会做secure naming check以检查服务端的身份(它被证实是有运行这个服务的合法身份)
+* 客户端和服务端之间建立一条双向的mTLS链接,随后发起正常的加密通信
+* Dubbo服务端收到请求后,识别客户端身份并检查其是否有权限访问响应的资源
+
+3.Authorization鉴权  
+Dubbo抽象了一套鉴权的扩展机制,但当前在具体实现上只支持Istio体系,因此其鉴权能力与Istio官方描述对等  
+
+### 2.9 服务网格  
+1.Dubbo Mesh架构图  
+![服务网格](resources/dubbo/13.png)
+* 控制面:Istio作为统一控制面,为集群提供Kubernetes适配、服务发现、证书管理、可观测性、流量治理等能力
+* 数据面:Dubbo应用实例作为<font color="#00FF00">数据面组件</font>,支持两种部署模式
+  * Proxy模式:Dubbo进程与Envoy部署在同一pod,进出Dubbo的流量都经Envoy代理拦截,由Envoy执行流量管控,但是通信协议还是用的Dubbo的  
+    这种模式就是纯服务网格Istio架构  
+  * Proxyless模式:Dubbo进程独立部署,进程间直接通信,通过xDS协议与控制面直接交互
+
+2.Proxy Mesh模式  
+在proxy模式下,Dubbo与Envoy等边车(Proxy or Sidecar)部署在一起  
+![proxy](resources/dubbo/23.png)  
+* Dubbo与Envoy部署在同一个Pod中,Istio实现对流量和治理的统一管控
+* Dubbo只提供面向业务应用的<font color="#00FF00">编程API、RPC通信能力</font>,其余流量管控能力如地址发现、负载均衡、路由寻址等都下沉到Envoy,Envoy拦截所有进出流量并完成路由寻址等服务治理工作
+  <font color="#FF00FF">此时dubbo不具备服务治理能力,虽然流量是从Envoy走,但是依旧采用dubbo的RPC通信</font>
+* 控制面与Envoy之间通过图中虚线所示的xDS协议进行配置分发
+
+在Proxy模式下,Dubbo3通信层选用Triple、gRPC、REST等基于HTTP的通信协议可以获得更好的网关穿透性与性能体验
+
+3.Proxyless Mesh  
+在Proxyless模式下,没有Envoy等代理组件,Dubbo进程保持独立部署并直接通信,Istio控制面通过xDS与Dubbo进程进行治理能力交互  
+![Proxyless](resources/dubbo/25.png)  
+
+3.1 为什么需要Proxyless Mesh  
+Proxy模式很好的实现了治理能力与有很多优势,如平滑升级、多语言、业务侵入小等,但也带来了一些额外的问题,比如:  
+* Sidecar通信带来了额外的性能损耗,这在复杂拓扑的网络调用中将变得尤其明显
+* Sidecar的存在让应用的生命周期管理变得更加复杂
+* 部署环境受限,并不是所有的环境都能满足Sidecar部署与请求拦截要求
+
+在Proxyless模式下,Dubbo进程之间继续保持直连通信模式:  
+* 没有额外的Proxy中转损耗,因此更适用于性能敏感应用
+* 更有利于遗留系统的平滑迁移
+* 架构简单,容易运维部署
+* 适用于几乎所有的部署环境
 
 
 ### 2.x 服务发现(补充)
