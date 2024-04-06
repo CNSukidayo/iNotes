@@ -3,7 +3,7 @@
 
 
 **附录:**  
-A.dubbo基本环境搭建
+1.dubbo基本环境搭建
 
 ## 1.实战
 **目录:**  
@@ -13,21 +13,25 @@ A.dubbo基本环境搭建
 
 
 
-
-## A. dobbo基本环境搭建
+## 附录
 **目录:**  
-1.dubbo基本介绍  
-2.部署dubbo  
-3.使用dubbo开发微服务项目  
-4.dubbo架构介绍  
-5.dubbo与gRPC、Spring Cloud、Istio的关系  
+1.dobbo入门
 
-### 1.dubbo基本介绍
+### 1.dobbo入门  
+**目录:**  
+1.1 dubbo基本介绍  
+1.2 体会dubbo的第一个示例  
+1.3 使用dubbo开发微服务项目  
+1.4 dubbo架构介绍  
+1.5 dubbo与gRPC、Spring Cloud、Istio的关系  
+1.6 核心优势  
+
+#### 1.1 dubbo基本介绍
 1.背景  
 dubbo是一个微服务框架,用于向用户提供`跨进程`的RPC`远程调用`;如下图所示,服务消费者可以通过注册中心(`zookeeper`)感知服务提供者,从而将请求发送给正确的服务提供者.  
 ![背景](resources/dubbo/1.png)  
 
-### 2.部署dubbo
+#### 1.2 体会dubbo的第一个示例
 1.获取dubbo演示代码  
 *提示:这里通过完成一个dubbo的远程调用来演示dubbo的效果*  
 执行如下命令从获取项目代码:  
@@ -167,7 +171,7 @@ GreetingsService service = reference.get();
 String message = service.sayHi("dubbo");
 ```
 
-### 3.使用dubbo开发微服务项目
+#### 1.3 使用dubbo开发微服务项目
 1.启动服务注册中心zookpeer  
 参考1.2=>第3步=>启动zookpeer  
 本次环境使用Linux的docker方式启动,Linux的IP为:192.168.149.130;zookpeer的端口为`2181`  
@@ -391,11 +395,15 @@ public class Task implements CommandLineRunner {
 消费者模块的打印信息如下:  
 ![运行效果](resources/dubbo/6.png)  
 
-### 4.dubbo架构介绍
+12.QOS问题  
+因为dubbo新版本默认对telnet命令添加了支持,并且telnet的默认端口是22222,所以如果在一台服务器里面同时启动consumer和provider可能就会报端口冲突的异常.  
+解决的办法可以修改端口也可以取消telnet功能  
+
+#### 1.4 dubbo架构介绍
 1.dubbo的工作原理  
 ![工作原理](resources/dubbo/7.png)  
 以上是Dubbo的工作原理图,从抽象架构上分为两层:<font color="#00FF00">服务治理抽象控制面</font>和<font color="#00FF00">Dubbo数据面</font>  
-*提示:在kong中也有类似的数据面和控制面的概念*  
+*提示:在kong中也有类似的数据面和控制面的概念,服务网格中对控制平面和数据平面有更全面的解释*  
 * 服务治理控制面:  
   服务治理控制面不是特指如注册中心类的单个具体组件,而是对Dubbo治理体系的抽象表达.控制面包含<font color="#00FF00">协调服务发现的注册中心、流量管控策略、Dubbo Admin控制台等,如果采用了Service Mesh架构则还包含Istio等服务网格控制面</font>  
 * Dubbo数据面:  
@@ -428,7 +436,7 @@ Dubbo从设计上不绑定任何一款特定通信协议,dubbo**支持HTTP/2、R
 * dubbo支持多协议暴露,<font color="#00FF00">可以在单个端口上暴露多个协议</font>;dubbo能够自动识别并确保请求被正确处理;<font color="#00FF00">也可以将同一个RPC服务发布在不同的端口</font>  
 
 特点总结:  
-* 不绑定通信协议
+* 不绑定通信协议(<font color="#00FF00">支持多任意通信协议</font>)
 * 提供高性能通信协议实现
 * 支持流式通信模型
 * 不绑定序列化协议
@@ -463,13 +471,14 @@ Admin dashboard提供了dubbo的集群可视化,通过admin可以来管理dubbo
 将Dubbo接入Istio等服务网格治理体系  
 ![服务网格](resources/dubbo/13.png)  
 
-### 5.dubbo与gRPC、Spring Cloud、Istio的关系
+#### 1.5 dubbo与gRPC、Spring Cloud、Istio的关系
 1.dubbo与springcloud  
 ![dubbo与springcloud](resources/dubbo/14.png)  
 
 共同点:  
 * Dubbo和Spring Cloud<font color="#00FF00">都侧重在对分布式系统中常见问题模式的抽象</font>(如服务发现、负载均衡、动态配置等),同时对每一个问题都提供了配套组件实现,形成了一套微服务整体解决方案,让使用Dubbo及Spring Cloud的用户在开发微服务应用时可以专注在业务逻辑开发上
-* Dubbo和Spring Cloud都完全兼容Spring体系的应用开发模式  
+* <font color="#00FF00">Dubbo和Spring Cloud都完全兼容Spring体系的应用开发模式</font>
+  为什么说dubbo和springcloud都完全兼容spring体系的开发,这句话很有韵味;因为springcloud是基于spring的一个微服务解决方案  
 
 Spring Cloud的优势:  
 * 同样都支持Spring开发体系的情况下,Spring Cloud得到更多的原生支持
@@ -483,6 +492,7 @@ Spring Cloud的问题:
 * <font color="#00FF00">编程模型与通信协议绑定HTTP</font>,在性能、与其他RPC体系互通上存在障碍
 * 总体架构与实现只适用于小规模微服务集群实践,当集群规模增长后就会遇到地址推送效率、内存占用等各种瓶颈的问题,但此时迁移到其他体系却很难实现
 * 很多微服务实践场景的问题需要用户独自解决,比如优雅停机、启动预热、服务测试,再比如双注册、双订阅、延迟注册、服务按分组隔离、集群容错等
+* 代码侵入性太强,业务代码与服务治理代码打包在一起
 
 springcloud的劣势就是dubbo的优势:  
 * 完全支持Spring&Spring Boot开发模式,同时在服务发现、动态配置等基础模式上提供与Spring Cloud对等的能力
@@ -502,12 +512,19 @@ Dubbo服务间可通过多种RPC协议通信并支持灵活切换.因此,可以�
 ![gRPC](resources/dubbo/15.png)  
 
 3.dubbo与Istio  
-Service Mesh是近年来在云原生背景下诞生的一种微服务架构,在Kubernetes体系下,让微服务开发中的更多能力如流量拦截、服务治理等下沉并成为基础设施,让微服务开发、升级更轻量.Istio是Service Mesh的开源代表实现,它从部署架构上分为数据面与控制面,从这一点上与Dubbo总体架构是基本一致的,Istio带来的主要变化在于:  
-* 数据面,Istio通过引入Sidecar实现了对服务流量的透明拦截,Sidecar通常是与Dubbo 等开发的传统微服务组件部署在一起
+Service Mesh是近年来在云原生背景下诞生的一种微服务架构,<font color="#FF00FF">在Kubernetes体系下</font>,让微服务开发中的更多能力如流量拦截、服务治理等<font color="#FF00FF">下沉并成为基础设施</font>,让微服务开发、升级更轻量.Istio是Service Mesh的开源代表实现,它从部署架构上分为<font color="#00FF00">数据面与控制面</font>,从这一点上与Dubbo总体架构是基本一致的,Istio带来的主要变化在于:  
+* 数据面,Istio通过引入<font color="#FF00FF">Sidecar</font>实现了对服务流量的透明拦截,<font color="#FF00FF">Sidecar通常是与Dubbo等开发的传统微服务组件部署在一起</font>
 * 控制面,将之前抽象的服务治理中心聚合为一个具有统一实现的具体组件,并实现了与底层基础设施如Kubernetes无缝适配
 
 Dubbo已经实现了对Istio体系的全面接入,可以用Istio控制面治理Dubbo服务,而在数据面部署架构上,针对Sidecar引入的复杂性与性能问题,Dubbo还支持无代理的Proxyless模式.除此之外,Dubbo Mesh体系还解决了Istio架构落地过程中的很多问题,包括提供更灵活的数据面部署架构、更低的迁移成本等  
 ![istio](resources/dubbo/16.png)  
+
+#### 1.6 核心优势  
+**目录:**  
+1.6.1 快速易用  
+
+##### 1.6.1 快速易用
+支持多种编程语言、使用任意通信协议  
 
 
 
