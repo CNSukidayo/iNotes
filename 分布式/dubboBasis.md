@@ -683,6 +683,7 @@ tags:
           exact: gray
 ```
 <font color="#00FF00">key表明当前规则要应用到哪个名称的服务实例上,例如这里的路由规则就是针对shop-detail这个微服务</font>  
+这个key非常重要,更详细的信息见2.5.3 条件路由=>1.条件路由规则主体  
 
 Consumer:  
 服务消费者方的设置方式与静态打标规则一致  
@@ -694,12 +695,12 @@ RpcContext.getContext().setAttachment(Constants.TAG_KEY, "Hangzhou");
 
 4.标签路由规则主体  
 以上述第3点中动态打标为示例进行解释  
-|     属性      |  类型   |                                                 描述                                                  | 是否必须 |
-|:-------------:|:-------:|:-----------------------------------------------------------------------------------------------------:|:--------:|
-| configVersion | String  |                                    标签路由的版本,当前的版本为v3.0                                    |   必须   |
-|      key      | String  |                                   此规则要应用到哪个目标微服务上面                                    |   必须   |
-|   enabaled    | boolean |                                           是否启用当前规则                                            |   必须   |
-|     tags      |  Tag[]  |                                            规则的标签定义                                             |   必须   |
+|     属性      |  类型   |                                                 描述                                                 | 是否必须 |
+|:-------------:|:-------:|:----------------------------------------------------------------------------------------------------:|:--------:|
+| configVersion | String  |                                   标签路由的版本,当前的版本为v3.0                                    |   必须   |
+|      key      | String  |                                   此规则要应用到哪个目标微服务上面                                   |   必须   |
+|   enabaled    | boolean |                                           是否启用当前规则                                           |   必须   |
+|     tags      |  Tag[]  |                                            规则的标签定义                                            |   必须   |
 |     force     | boolean | tags路由规则实例子集为空时的行为<br>true表示不返回提供程序异常,而false表示回退到没有任何标记的子集。 |   可选   |
 |    runtime    | boolean |                       是为每个rpc调用运行路由规则,还是使用路由缓存（如果可用）                       |   可选   |
 
@@ -747,15 +748,15 @@ conditions:
 
 1.条件路由规则主体  
 *提示:这里以上述的条件路由规则示例为例进行说明*
-|     属性      |   类型   |                                                                                                                描述                                                                                                                 | 是否必须 |
-|:-------------:|:--------:|:-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------:|:--------:|
-| configVersion |  String  |                                                                                                    条件路由的版本,当前版本为v3.0                                                                                                    |    是    |
-|     scope     |  String  |                                                                                       支持service和application两种规则<br>这里使用的是service                                                                                       |    是    |
-|      key      |  String  | 应用到的目标服务或者应用程序的标识符  <br> 当`scope:service`时,key应该是该规则生效的服务名比如org.apache.dubbo.samples.CommentService       <br> 当`scope:application`时,则key应该是该规则应该生效的应用名称,比如说my-dubbo-service |    是    |
-|    enabled    | boolean  |                                                                                                          是否启用当前规则                                                                                                           |    是    |
-|  conditions   | Stirng[] |                                                                                                        配置中定义的条件规则                                                                                                         |    是    |
-|     force     | boolean  |                                                                      conditions后路由规则为空时的行为,true则抛出一个异常,false则会忽略规则直接去请求其它的实例                                                                      |    否    |
-|    runtime    | boolean  |                                                                                            是否为每个 rpc 调用运行路由规则或使用路由缓存                                                                                            |    否    |
+|     属性      |   类型   |                                                                                                                                             描述                                                                                                                                              | 是否必须 |
+|:-------------:|:--------:|:---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------:|:--------:|
+| configVersion |  String  |                                                                                                                                 条件路由的版本,当前版本为v3.0                                                                                                                                 |    是    |
+|     scope     |  String  |                                                                                                                    支持service和application两种规则<br>这里使用的是service                                                                                                                    |    是    |
+|      key      |  String  | 应用到的目标服务或者应用程序的标识符  <br> 当`scope:service`时,<font color="#FF00FF">key应该是该规则生效的服务名比如org.apache.dubbo.samples.CommentService</font>       <br> 当`scope:application`时,<font color="#FF00FF">则key应该是该规则应该生效的应用名称,比如说my-dubbo-service</font> |    是    |
+|    enabled    | boolean  |                                                                                                                                       是否启用当前规则                                                                                                                                        |    是    |
+|  conditions   | Stirng[] |                                                                                                                                     配置中定义的条件规则                                                                                                                                      |    是    |
+|     force     | boolean  |                                                                                                   conditions后路由规则为空时的行为,true则抛出一个异常,false则会忽略规则直接去请求其它的实例                                                                                                   |    否    |
+|    runtime    | boolean  |                                                                                                                         是否为每个 rpc 调用运行路由规则或使用路由缓存                                                                                                                         |    否    |
 
 2.conditions条件  
 *提示:conditions条件在上述已经进行过说明*  
@@ -814,7 +815,7 @@ configs:
     parameters:
       timeout: 2000
 ```
-scope支持service、application两个可选值,意思是当前动态配置规则对哪种粒度的服务生效,是针对当前这个服务还是针对当前这个应用(即所有服务) 
+scope支持service、application两个可选值,意思是当前动态配置规则对哪种粒度的服务生效,是针对某个Service接口还是针对当前这个应用的所有Service接口  
 
 以下示例将所有`shop-detail`微服务的accesslog功能开启  
 ```yml
@@ -827,8 +828,20 @@ configs:
       accesslog: 'true'
 ```
 
-以下是一个服务级别的配置示例,`key:org.apache.dubbo.samples.UserService`和`side:consumer`说明这条配置对所有consumer的UserService接口生效,在调用失败后将有4次重试,`match`条件进一步限制了消费端的范围,限定为只对微服务名为`shop-detail`的实例生效  
-
+以下是一个服务级别的配置示例,`key:org.apache.dubbo.samples.UserService`和`side:consumer`说明这条配置对所有consumer的UserService接口生效,在调用失败后将有4次重试,`match`条件进一步限制了消费端的范围,限定为只对微服务名为`shop-detail`的实例生效(这个demo非常重要)  
+```yml
+configVersion: v3.0
+scope: service
+key: org.apache.dubbo.samples.UserService
+configs:
+  - match:
+      application:
+        oneof:
+          - exact: shop-frontend
+    side: consumer
+    parameters:
+      retries: '4'
+```
 
 #### 2.5.6 限流与熔断
 1.回顾  

@@ -592,6 +592,8 @@ public void callService() throws Exception {
 **目录:**  
 1.3.1 流量管理基本介绍  
 1.3.2 调整超时时间  
+1.3.3 服务重试  
+1.3.4 访问日志  
 
 
 
@@ -652,4 +654,38 @@ configs:
 从`UserService`<font color="#00FF00">服务提供者视角</font>,将超时时间总体调整为2S,超时是针对服务提供者的  
 `side: provider`配置会将规则发送到服务提供方实例,所有UserService服务实例会基于新的timeout值进行重新发布,并通过注册中心通知给所有消费方  
 如果要基于服务粒度,<font color="#00FF00">则需要使用之前提到的scope: service作用域</font>  
+
+#### 1.3.3 服务重试  
+1.实验背景  
+现在Frontend这个微服务需要访问User这个微服务,获取用户的个人信息;但User这个微服务本身可能存在网络不稳定等问题导致Frontend微服务获取用户信息的时候超时  
+此时就可以通过设置Frontend微服务的超时次数从而使得数据最终能够展示出来  
+
+2.1 打开Dubbo Admin控制台  
+2.2 点击左侧导航栏选择**服务治理 -> 动态配置**  
+2.3 点击创建,输入服务`org.apache.dubbo.samples.UserService`和失败重试次数即可  
+
+3.规则详解  
+规则key:`org.apache.dubbo.samples.UserService`  
+规则体:  
+```yml
+configVersion: v3.0
+enabled: true
+configs:
+    # 规则针对服务消费者
+  - side: consumer
+    parameters:
+      # 设置重试次数为5次
+      retries: 5
+```
+
+关于这里的key再说一下,dubbo中key就表明当前规则要对哪个对象生效,同时它需要配合scope使用  
+<font color="#00FF00">当scope:service时,</font><font color="#FF00FF">key应该是该规则生效的服务名比如org.apache.dubbo.samples.CommentService</font>  
+<font color="#00FF00">当scope:application时,</font><font color="#FF00FF">则key应该是该规则应该生效的应用名称,比如说my-dubbo-service</font>  
+
+#### 1.3.4 访问日志  
+1.实验背景  
+商城的所有用户服务都由`User`应用的`UserService`提供,通过这个任务,我们为`User`应用的某一台或几台机器<font color="#00FF00">开启访问日志</font>,以便观察用户服务的整体访问情况  
+
+2.
+
 
