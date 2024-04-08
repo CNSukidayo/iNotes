@@ -679,13 +679,53 @@ configs:
 ```
 
 关于这里的key再说一下,dubbo中key就表明当前规则要对哪个对象生效,同时它需要配合scope使用  
-<font color="#00FF00">当scope:service时,</font><font color="#FF00FF">key应该是该规则生效的服务名比如org.apache.dubbo.samples.CommentService</font>  
-<font color="#00FF00">当scope:application时,</font><font color="#FF00FF">则key应该是该规则应该生效的应用名称,比如说my-dubbo-service</font>  
+<font color="#00FF00">当scope:service时,</font><font color="#FF00FF">key应该是该规则生效的服务名(Service)比如org.apache.dubbo.samples.CommentService,表明当前规则只对所有微服务的接口生效</font>  
+<font color="#00FF00">当scope:application时,</font><font color="#FF00FF">则key应该是该规则应该生效的应用名称,比如说my-dubbo-service;则表明该规则对所有my-dubbo-service微服务下的所有接口生效</font>  
 
 #### 1.3.4 访问日志  
 1.实验背景  
 商城的所有用户服务都由`User`应用的`UserService`提供,通过这个任务,我们为`User`应用的某一台或几台机器<font color="#00FF00">开启访问日志</font>,以便观察用户服务的整体访问情况  
 
-2.
+2.动态开启访问日志  
+通过dubbo的`accesslog`标记识别访问日志的开启状态   
 
+3.1 打开Dubbo Admin控制台  
+3.2 点击左侧导航栏选择**服务治理 -> 动态配置**  
+3.3 点击创建,输入应用名`shop-user`并勾选开启访问日志  
 
+4.再次登陆页面,查看任意一台User实例机器(物理机器),可以看到如下格式的访问日志  
+```shell
+[2022-12-30 12:36:31.15900] -> [2022-12-30 12:36:31.16000] 192.168.0.103:60943 -> 192.168.0.103:20884 - org.apache.dubbo.samples.UserService login(java.lang.String,java.lang.String) ["test",""], dubbo version: 3.2.0-beta.4-SNAPSHOT, current host: 192.168.0.103
+[2022-12-30 12:36:33.95900] -> [2022-12-30 12:36:33.95900] 192.168.0.103:60943 -> 192.168.0.103:20884 - org.apache.dubbo.samples.UserService getInfo(java.lang.String) ["test"], dubbo version: 3.2.0-beta.4-SNAPSHOT, current host: 192.168.0.103
+[2022-12-30 12:36:31.93500] -> [2022-12-30 12:36:34.93600] 192.168.0.103:60943 -> 192.168.0.103:20884 - org.apache.dubbo.samples.UserService getInfo(java.lang.String) ["test"], dubbo version: 3.2.0-beta.4-SNAPSHOT, current host: 192.168.0.103
+```  
+
+5.规则详解  
+规则key:`shop-user`(表明为所有shop-user应用开启)  
+规则体:  
+```yml
+configVersion: v3.0
+enabled: true
+configs:
+  - side: provider
+    parameters:
+      accesslog: true
+```
+
+accesslog的有效值如下:
+* `true`或`default`时,访问日志将随业务logger一同输出,此时可以在应用内提前配置 `dubbo.accesslog`appender调整日志的输出位置和格式
+* 具体的文件路径如`/home/admin/demo/dubbo-access.log`这样访问日志将打印到指定的文件内容
+
+在Admin界面,还可以单独指定开启某一台机器的访问日志,以方便精准排查问题,对应的后台规则如下  
+```yml
+configVersion: v3.0
+enabled: true
+configs:
+  - match
+     address:
+       oneof:
+        - wildcard: "{ip}:*"
+    side: provider
+    parameters:
+      accesslog: true
+```
