@@ -594,7 +594,8 @@ public void callService() throws Exception {
 1.3.2 调整超时时间  
 1.3.3 服务重试  
 1.3.4 访问日志  
-
+1.3.5 同区域优先  
+1.3.6 环境隔离  
 
 
 #### 1.3.1 流量管理基本介绍
@@ -620,7 +621,7 @@ public void callService() throws Exception {
 
 `Detail`和`Comment`服务也分别有两个版本v1和v2,我们通过多个版本来演示流量导流后的效果  
 * 版本v1默认为所有请求提供服务
-* 版本v2模拟被部署在特定的区域的服务,因此v2实例会带有特定的标签
+* 版本v2模拟被部署在<font color="#00FF00">特定的区域的服务</font>,因此v2实例会带有特定的标签
   关于标签详情见dubboBasis笔记 2.dubbo功能=>2.5 流量管理=>2.5.2 标签路由
 
 4.支撑环境  
@@ -729,3 +730,69 @@ configs:
     parameters:
       accesslog: true
 ```
+
+#### 1.3.5 同区域优先  
+1.实验背景  
+当应用部署在多个不同机房/区域的时候,<font color="#00FF00">应用之间相互调用就会出现跨区域的情况</font>,而跨区域调用会增加响应时间,影响用户体验.同机房/区域优先是指应用调用服务时,<font color="#00FF00">优先调用同机房/区域的服务提供者</font>,避免了跨区域带来的网络延时,从而减少了调用的响应时间.  
+
+2.任务详情  
+之前说过`Detail`和`Comment`这两个服务的V1和V2版本分别部署在不同的区域,假设Detail和Comment服务的V1版本都部署在Beijing,Detail和Comment服务都部署在Hangzhou,为了保证服务调用的响应速度,<font color="#FF00FF">我们需要增加同区域优先的调用规则</font>  
+只有当同区域内的服务出现故障不可用的时候才允许跨区域调用  
+![同区域调用](resources/dubbo/10.png)  
+
+3.1 登陆Dubbo Admin控制台  
+3.2 在左侧导航栏选择**服务治理->条件路由**  
+3.3 点击创建按钮,填入要启用同区域优先的服务如`org.apache.dubbo.samples.CommentService`与区域标识如`region`即可  
+
+4.规则详解  
+规则key:`org.apache.dubbo.samples.CommentService`  
+```yml
+configVersion: v3.0
+enabled: true
+force: false
+key: org.apache.dubbo.samples.CommentService
+conditions:
+  - '=> region = $region'
+```
+*提示:这里的表达式是条件路由表达式*  
+
+这里使用的是条件路由;`region`为我们示例中的区域标识,<font color="#00FF00">会自动的识别当前发起调用的一方所在的区域值</font>,假设请求到达hangzhou区域部署的Detail后,从Detail发出的请求自动筛选URL地址中带有region=hangzhou标识的Comment地址(`$region 代表引用当前服务的区域`),<font color="#00FF00">如果发现有可用的地址子集则将请求发出,如果没有匹配条件的地址,则随机发往任意可用区地址</font>
+
+*提示:`force: false`表示当同区域无有效地址时,可以跨区域调用*  
+
+
+#### 1.3.6 环境隔离  
+1.实验背景  
+无论是在日常开发测试环境还是在预发生产环境,我们经常会遇到流量隔离环境的需求.  
+利用dubbo提供的标签路由能力,可以非常灵活的实现流量隔离能力,可以单独为集群中某一个或多个应用划分隔离环境,也可以为整个微服务集群划分隔离环境,可以在部署静态的标记隔离环境,也可以在运行态通过规则动态的隔离出一部分机器环境  
+
+2.任务详情  
+为商城建立一套完整的线上灰度验证环境,灰度环境和线上环境<font color="#00FF00">共享一套物理集群</font>,需要我们通过dubbo标签路由从逻辑上完全隔离出一套环境,做到灰度流量和线上流量互不干扰  
+![任务](resources/dubbo/11.png)  
+
+3.1 登陆Dubbo Admin控制台  
+3.2 在左侧导航栏选择**服务治理->标签路由**  
+3.3 点击创建,输入`shop-detail`和流量隔离条件保存即可;同理为`shop-comment`、`shop-order`创建相同的隔离规则  
+
+4.规则详解  
+我们需要通过Admin为`shop-detail、shop-comment、shop-order、shop-user`四个应用分别设置标签归组规则,以`shop-detail`为例  
+规则key:`shop-detail`  
+规则体:  
+```yml
+configVersion: v3.0
+force: true
+enabled: true
+key: shop-detail
+tags:
+  - name: gray
+    match:
+      - key: env
+        value:
+          exact: gray
+```
+其中,`name`为灰度环境的流量匹配条件,只有请求上下文中带有`dubbo.tag=gray`的流量才会被转发到隔离环境地址子集.请求上下文可通过`RpcContext.getClientAttachment().setAttachment("dubbo.tag", "gray")`传递  
+`match`指定了地址子集筛选条件,示例中我们匹配了所有地址URL中带有env=gray标签的地址列表,也就是说`shop-detail`服务发起的请求匹配的<font color="#FF00FF">地址子集</font><font color="#FF00FF">地址子集</font>也只能是gray(商城示例中v2版本部署的实例都带已经被打上这个标签)
+
+*注意:这一套规则适用于集群中所有对应的微服务,这里的示例已经为集群中某些节点打上了gray标签,至于如何给某个具体的机器打标签,详情见:dubboBasis=>2.5 流量管理=>2.5.2 标签路由*  
+
+`force`指定了是否允许流量跳出灰度隔离环境,这决定了某个服务发现灰度隔离环境没有可用地址时的行为,默认值为false表示会fallback到不属于任何隔离环境(不带标签)的普通地址集.示例中设置`froce: true`表示当灰度环境地址子集为空时,服务调用失败(No provider exception)  
