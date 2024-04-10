@@ -596,6 +596,7 @@ public void callService() throws Exception {
 1.3.4 访问日志  
 1.3.5 同区域优先  
 1.3.6 环境隔离  
+1.3.7 参数路由  
 
 
 #### 1.3.1 流量管理基本介绍
@@ -796,3 +797,37 @@ tags:
 *注意:这一套规则适用于集群中所有对应的微服务,这里的示例已经为集群中某些节点打上了gray标签,至于如何给某个具体的机器打标签,详情见:dubboBasis=>2.5 流量管理=>2.5.2 标签路由*  
 
 `force`指定了是否允许流量跳出灰度隔离环境,这决定了某个服务发现灰度隔离环境没有可用地址时的行为,默认值为false表示会fallback到不属于任何隔离环境(不带标签)的普通地址集.示例中设置`froce: true`表示当灰度环境地址子集为空时,服务调用失败(No provider exception)  
+
+#### 1.3.7 参数路由  
+1.实验背景  
+根据请求参数值转发流量,例如在微服务实践中,根据参数(如用户ID)路由流量,将一部分用户请求转发到最新发布的产品版本  
+
+2.任务详情  
+商城系统新增了VIP用户服务,现在商城有两类用户:普通用户和VIP用户,其中VIP用户可以看到比普通用户更低的商品价格  
+我们以VIP用户dubbo登陆系统,在部署的实例中只有`detail V2`版本才能识别VIP用户并提供特价服务,因此我们要确保`dubbo`用户始终访问`detail V2`从而享受低价的商品  
+![detail](resources/dubbo/12.png)  
+*提示:现在将要为`detail V2`微服务的`DetailService`添加参数路由规则,如果用户参数是`dubbo`就转发到V2版本的服务*  
+
+3.1 打开Dubbo Admin 控制台
+3.2 在左侧导航栏选择**服务治理->参数路由**  
+3.3 点击创建,输入如下内容
+规则key:`org.apache.dubbo.samples.DetailService`  
+规则体:  
+```yml
+configVersion: v3.0
+key: org.apache.dubbo.samples.DetailService
+scope: service
+force: false
+enabled: true
+priority: 1
+conditions:
+  - method=getItem & arguments[1]=dubbo => detailVersion=v2
+```
+
+3.4 解释  
+* `method=getItem & arguments[1]=dubbo`表示流量规则匹配`DetailService`接口的`getItem`方法调用的第二个参数,当参数值为dubbo时做进一步的地址子集筛选
+* `detailVersion=v2`将过滤出所有带有`detailVersion=v2`标识的URL地址子集(<font color="#00FF00">在示例部署中,我们所有detail v2的实例都已经打上了detailVersion=v2标签</font>)
+
+*提示:本质还是条件路由+标签*  
+*提示:`force: false`表示如果没有detailVersion=v2的地址,则随机访问所有可用地址*  
+条件路由支持很多匹配规则,详情见笔记dubboBasis=>2.dubbo笔记=>2.5流量管理=>2.5.3 条件路由 =>3.1 参数支持  
