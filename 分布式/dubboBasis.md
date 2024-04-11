@@ -834,11 +834,11 @@ configVersion: v3.0
 scope: service
 key: org.apache.dubbo.samples.UserService
 configs:
-  - match:
+  - side: consumer
+    match:
       application:
         oneof:
           - exact: shop-frontend
-    side: consumer
     parameters:
       retries: '4'
 ```
@@ -855,7 +855,7 @@ dubbo提供两种限流的能力:
 * 动态:dubbo框架自动根据系统或集群负载情况执行限流,关于这种模式后续会介绍
 
 3.熔断降级  
-<font color="#00FF00">熔断降级则是更多的从Dubbo服务消费者视角来保障系统稳定性的重要手段</font>,
+<font color="#00FF00">熔断降级则是更多的从Dubbo服务消费者视角来保障系统稳定性的重要手段</font>,相比于熔断后直接返回调用失败信息,dubbo支持继续调用预先设置好的服务降级逻辑,以降级逻辑的结果作为最终调用结果(将mock数据返回给调用方),以更优雅的方式返回给服务调用方.  
 
 ### 2.6 通信协议  
 详情见1.dubbo入门=>1.4 dubbo架构介绍=>4.通信协议介绍的已经很好了  
