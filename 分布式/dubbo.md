@@ -8,6 +8,8 @@
 1.1 开发任务  
 1.2 部署服务  
 1.3 流量管理  
+1.4 微服务生态  
+1.5 观测服务  
 
 ### 1.1 开发任务
 **目录:**  
@@ -921,4 +923,47 @@ configs:
 
 3.1 打开Dubbo Admin
 3.2 在左侧导航栏选择**服务治理->条件路由**  
+3.3 点击创建,输入如下内容  
+规则key:`org.apache.dubbo.samples.UserService`  
+规则体:  
+```yml
+configVersion: v3.0
+enabled: true
+force: false
+conditions:
+  - 'method=getInfo => host = {your ip address}'
+```
+
+*提示:替换{your ip address}为User实际部署的地址*  
+
+等待规则推送后,多次访问`Frontend`应用,触发用户详情服务调用,可以看到只有规则中指定的实例在持续刷新如下日志:  
+```shell
+Received getInfo request......
+```  
+
+
+### 1.4 微服务生态  
+**目录:**  
+1.4.1 事务管理  
+1.4.2 HTTP网关  
+
+
+#### 1.4.1 事务管理  
+*提示:本节的示例可以参考dubbo-sample->2-advanced->dubbo-samples-seata*  
+
+1.本章就是讲解seata组件  
+关于seata组件详情可以看springcloud笔记=>6.分布式事务  
+
+
+#### 1.4.2 HTTP网关  
+1.背景  
+Apache Dubbo一般会作为后端系统间RPC调用的实现框架,当需要提供HTTP接口给到前端时,会通过一个<font color="#00FF00">胶水层</font>将Dubbo Service包装成HTTP接口,再交付到前端系统  
+
+得益于Apache Dubbo的应用场景优势,Apache APISIX(Apache APISIX是一个开源网关)基于开源项目tengine/mod_dubbo模块为Apache Dubbo服务配备了HTTP网关能力.通过dubbo-proxy插件,可以轻松地将Dubbo Service发布为HTTP服务  
+![网关](resources/dubbo/16.png)  
+*提示:也就是说如果要将Dubbo Service作为流量的入口可以使用`dubbo-proxy`,但实际上并不会这么做,dubbo只要做好它RPC调用的事情就行了,你会把OpenFeign定义的服务生产接口对接到网关吗?实际上不会,只是内部使用而已*  
+
+### 1.5 观测服务  
+
+
 
