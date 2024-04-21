@@ -165,6 +165,7 @@ docker run \
 docker run \
 --name elk-kafka \
 -p 9092:9092 \
+-e KAFKA_ZOOKEEPER_CONNECT_TIMEOUT_MS=60000 \
 -e KAFKA_BROKER_ID=0 \
 -e KAFKA_ZOOKEEPER_CONNECT=192.168.230.128:2181 \
 -e KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://192.168.230.128:9092 \
@@ -268,8 +269,8 @@ docker run \
 ### 1.7 部署Filebeat
 *提示:Filebeat在K8S中可以使用边车代理模式,因为日志收集工具需要在每一个微服务中进行部署,它是一个守护进程*  
 **介绍:**  
-由于Logstash是跑在JVM上⾯,资源消耗比较大,后来作者用GO写了⼀个功能较少但是资源消耗也⼩的轻量级的Agent叫Logstash-forwarder.  
-之后作者加⼊elastic.co公司,Logstash-forwarder的开发⼯作给公司内部GO团队来搞,最后命名为Filebeat.  
+由于Logstash是跑在JVM上⾯,资源消耗比较大,后来作者用GO写了⼀个功能较少但是资源消耗也小的轻量级的Agent叫Logstash-forwarder.  
+之后作者加入elastic.co公司,Logstash-forwarder的开发工作给公司内部GO团队来搞,最后命名为Filebeat.  
 <font color="#00FF00">所以Filebeat是一个轻量级高性能的日志采集工具</font>  
 
 1.Docker部署Filebeat原理  

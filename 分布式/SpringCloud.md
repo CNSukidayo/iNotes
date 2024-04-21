@@ -2158,10 +2158,12 @@ spring:
             server-addr: 192.168.149.130:8848
             username: nacos
             password: nacos
+            # namespace:xxx 注意有可能需要指定命名空间
             # 指定配置的存放的位置
             data-id: order-sentinel-flow-rule
             group-id: DEFAULT_GROUP
             data-type: json
+            rule-type: flow
           # zk: 设置使用zookpeer配置中心
           # consul: 设置使用consul配置中心
 ```

@@ -911,6 +911,7 @@ configs:
 
 4.其它使用场景  
 由于微服务分布式的特点,不同的服务或应用之间都有相互依赖关系,因此一个服务或应用很难不依赖其他服务而独立部署工作;<font color="#00FF00">但测试环境下并不是所有服务都是随时就绪的状态</font>,这对于微服务强调的服务独立演进是一个很大的障碍,通过服务降级这个功能,我们可以模拟或短路应用对其他服务的依赖,<font color="#FF00FF">从而可以让应用按照自己预期的行为Mock外部服务调用的返回结果</font>  
+关于服务Mock详情见1.5 观测服务=>1.5.1 Admin=>3.服务Mock  
 
 
 #### 1.3.10 固定机器导流  
@@ -964,6 +965,119 @@ Apache Dubbo一般会作为后端系统间RPC调用的实现框架,当需要提�
 *提示:也就是说如果要将Dubbo Service作为流量的入口可以使用`dubbo-proxy`,但实际上并不会这么做,dubbo只要做好它RPC调用的事情就行了,你会把OpenFeign定义的服务生产接口对接到网关吗?实际上不会,只是内部使用而已*  
 
 ### 1.5 观测服务  
+**目录:**  
+1.5.1 Admin  
+1.5.2 链路追踪  
+1.5.3 Grafana  
+1.5.4 Prometheus  
+
+
+#### 1.5.1 Admin  
+1.背景  
+首先需要安装Dubbo Admin控制台,安装教程详情见:  //todo  
+
+
+2.功能介绍  
+Admin控制台提供了从开发、测试到流量治理等不同层面的丰富功能,功能总体上可分为以下几类:  
+* 服务状态与依赖关系查询
+* 服务在线测试与文档管理
+* 集群状态监控
+* 实例诊断
+* 流量管控
+
+3.服务Mock  
+服务Mock通过无代码嵌入的方式将Consumer对Provider的请求进行拦截,动态的对Consumer的请求进行放行或返回用户自定义的Mock数据.从而解决在前期开发过程中,Consumer所依赖的Provider未准备就绪时,造成Consumer开发方的阻塞问题  
+
+3.1 在Consumer引入依赖  
+Consumer应用引入服务Mock依赖,添加JVM启动参数`-Denable.dubbo.admin.mock=true`开启服务Mock功能  
+```xml
+<denpendency>
+  <groupId>org.apache.dubbo.extensions</groupId>
+  <artifactId>dubbo-mock-admin</artifactId>
+  <version>${version}</version>
+</denpendency>
+```
+
+3.2 在Dubbo Admin中配置对应的Mock数据  
+![配置Mock数据](resources/dubbo/17.png)  
+*提示:上述配置的服务名肯定是配置的服务提供者*  
+
+4.服务文档管理  
+相当于swagger对于RESTful风格的Web服务的作用,使用该功能可以有效的管理Dubbo接口文档(这个没什么用)  
+![服务文档管理](resources/dubbo/18.png)  
+
+5.流量管理  
+Admin提供了四种路由规则的可视化管理支持,分别是条件路由规则、标签路由规则、动态配置规则、脚本路由规则  
+这部分的内容详情见1.3流量管理这一章  
+
+
+#### 1.5.2 链路追踪  
+1.说明  
+目前Dubbo内置了Micrometer(Micrometer为最流行的可观察性系统在检测客户端上提供了一个统一的门面,相当于日志领域的SLF4J,SpringBoot3内置的可观测门面组件)  
+
+2.Tracing相关概念  
+* Span:基本工作单元.例如,发送RPC是一个新的span,发送对RPC的响应也是如此.Span还有其他数据,例如description、带时间戳的事件、键值注释(标签)、导致它们的跨度的ID和进程ID(通常是IP地址).跨度可以启动和停止,并且它们会跟踪它们的时间信息.创建跨度后,您必须在将来的某个时间点停止它  
+* Trace:一组形成树状结构的跨度.例如,如果您运行分布式大数据存储,则可能会通过请求形成跟踪PUT
+* Annotation/Event:用于及时记录一个事件的存在
+* Tracing context:为了使分布式跟踪工作,跟踪上下文(跟踪标识符、跨度标识符等)必须通过进程(例如通过线程)和网络传播
+* Log correlation:部分跟踪上下文(例如跟踪标识符、跨度标识符)可以填充到给定应用程序的日志中.然后可以将所有日志收集到一个存储中,并通过跟踪ID对它们进行分组.这样就可以从所有按时间顺序排列的服务中获取单个业务操作(跟踪)的所有日志
+* Latency analysis tools:一种收集导出跨度并可视化整个跟踪的工具.允许轻松进行延迟分析
+* Tracer:处理span生命周期的库(Dubbo目前支持OpenTelemetry和Brave)它可以通过Exporter创建、启动、停止和报告Spans到外部系统(如Zipkin、Jagger等)
+* Exporter:将产生的Trace信息通过http等接口上报到外部系统,比如上报到Zipkin
+
+3.将Dubbo接入skywalking全链路监控体系  
+*提示:本节示例来自dubbo-sample=>4-governance=>dubbo-samples-spring-boot-tracing-skywalking*  
+
+3.1 添加依赖  
+```xml
+<!-- 为了能够将Micrometer及相关Metrics依赖添加到classpath;需要添加icrometer Observation的相关以来 -->
+<dependency>
+    <groupId>org.apache.dubbo</groupId>
+    <artifactId>dubbo-metrics-api</artifactId>
+</dependency>
+<!-- 为了将Dubbo Micrometer tracing数据集成到Skywalking,需要添加如下依赖 -->
+<dependency>
+    <groupId>org.apache.skywalking</groupId>
+    <artifactId>apm-toolkit-micrometer-1.10</artifactId>
+</dependency>
+```
+
+3.2 配置ObservationRegistry  
+```java
+@Configuration
+public class ObservationConfiguration {
+    @Bean
+    ApplicationModel applicationModel(ObservationRegistry observationRegistry) {
+        ApplicationModel applicationModel = ApplicationModel.defaultModel();
+        observationRegistry.observationConfig()
+                .observationHandler(new ObservationHandler.FirstMatchingCompositeObservationHandler(
+                        new SkywalkingSenderTracingHandler(), new SkywalkingReceiverTracingHandler(),
+                        new SkywalkingDefaultTracingHandler()
+                ));
+        applicationModel.getBeanFactory().registerBean(observationRegistry);
+        return applicationModel;
+    }
+}
+```
+
+3.3 启动Skywalking OAP  
+就是启动Skywalking  
+
+3.4 启动demo  
+启动Provider和Consumer并确保skywalking-agent参数被正确设置,skywalking-agent确保数据可以被正确的上报到后台系统.  
+* 考虑到skywalking-agent本身也有内置的Dubbo拦截器,为了确保示例能使用Dubbo自带的Micrometer集成,我么你需要删除skywalking-agent自带的拦截器,直接将plugins目录删除即可  
+  个人感觉官网这里的描述可能不太恰当,因为agent有很多的plugins,可以考虑单独删除dubbo相关的plugin
+* 配置Skywalking OAP服务器地址(这一步是教你怎么配置Skywalking Agent,和dubbo本身没什么关系)
+  配置agent.config文件中的collector.backend_service为Skywalking OAP的服务器地址
+
+启动生产者和消费者  
+```shell
+java -javaagent:/path/to/skywalking-agent/skywalking-agent.jar -jar dubbo-samples-spring-boot-tracing-skwalking-provider-1.0-SNAPSHOT.jar
+java -javaagent:/path/to/skywalking-agent/skywalking-agent.jar -jar dubbo-samples-spring-boot-tracing-skwalking-consumer-1.0-SNAPSHOT.jar
+```
+
+3.5 访问Skywalking-UI  
+此时就应该能看到服务的情况了  
 
 
 
