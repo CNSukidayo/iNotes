@@ -1,5 +1,6 @@
 # 目录  
 1.任务  
+2.SDK手册  
 
 
 
@@ -10,6 +11,9 @@
 1.3 流量管理  
 1.4 微服务生态  
 1.5 观测服务  
+1.6 通信协议  
+1.7 限流降级  
+1.8 自定义扩展  
 
 ### 1.1 开发任务
 **目录:**  
@@ -1079,5 +1083,372 @@ java -javaagent:/path/to/skywalking-agent/skywalking-agent.jar -jar dubbo-sample
 3.5 访问Skywalking-UI  
 此时就应该能看到服务的情况了  
 
+### 1.7 限流降级  
+**目录:**  
+1.7.1 Sentinel限流  
+
+
+#### 1.7.1 Sentinel限流  
+1.示例架构说明  
+*提示:本节示例来自dubbo-sample=>4-governance=>dubbo-samples-sentinel*  
+
+2.使用教程  
+没什么特别的,就是介绍sentinel怎么用于dubbo,还不是dubbo控制台  
+
+### 1.8 自定义扩展  
+**目录:**  
+1.8.1 自定义扩展介绍  
+1.8.2 Filter  
+1.8.3 Protocol  
+1.8.4 Registry  
+1.8.5 Router  
+
+#### 1.8.1 自定义扩展介绍  
+1.dubbo扩展设计理念  
+* 平等对待第三方的实现,在Dubbo中,所有内部实现和第三方实现都是平等的,<font color="#00FF00">用户可以基于自身业务需求,替换Dubbo提供的原生实现</font>
+* 每个扩展点只封装一个变化因子,最大化复用.每个扩展点的实现者,往往都<font color="#00FF00">只是关心一件事</font>.如果用户有需求需要进行扩展,那么只需要对其关注的扩展点进行扩展就好,极大的减少用户的工作量
+
+2.基于Java SPI的扩展能力设计  
+*提示:SPI(service provider interface),详情可以参靠:[Java SPI概念](https://blog.csdn.net/qq_52423918/article/details/130968307)*  
+Dubbo中的扩展能力是从JDK标准的SPI扩展点发现机制加强而来,它改进了JDK标准的SPI以下问题:  
+* JDK标准的SPI会一次性实例化扩展点所有实现(饿汉加载)
+* 如果扩展点加载失败,连扩展点的名称都拿不到了.比如:JDK标准的ScriptEngine,通过 getName()获取脚本类型的名称,但如果RubyScriptEngine因为所依赖的jruby.jar不存在,导致RubyScriptEngine类加载失败,这个失败原因被吃掉了,和ruby对应不起来,当用户执行ruby脚本时,会报不支持ruby,而不是真正失败的原因
+
+用户能够基于Dubbo提供的扩展能力,很方便基于自身需求扩展<font color="#00FF00">其他协议、过滤器、路由</font>等  
+* 按需加载:Dubbo是懒汉式加载扩展类
+* 增加扩展类的IOC能力:Dubbo的扩展能力并不仅仅只是发现扩展服务实现类,而是在此基础上更进一步,如果该扩展类的属性依赖其他对象,则Dubbo会自动的完成该<font color="#00FF00">依赖对象的注入功能</font>
+* 增加扩展类的AOP能力:Dubbo扩展能力会自动的发现扩展类的包装类,完成包装类的构造,增强扩展类的功能
+* 具备动态选择扩展实现的能力:Dubbo扩展会基于参数,在运行时动态选择对应的扩展类,提高了Dubbo的扩展能力
+* 可以对扩展实现进行排序:能够基于用户需求,指定扩展实现的执行顺序
+* 提供扩展点的Adaptive能力:该能力可以使的一些扩展类在consumer端生效,一些扩展类在provider端生效
+
+3.扩展点加载流程  
+![扩展点加载流程](resources/dubbo/19.png)  
+
+#### 1.8.2 Filter  
+通过自定义过滤器,可以对返回的结果进行统一的处理、验证等，减少对开发人员的打扰  
+*提示:本节的示例可以参考dubbo-sample->10-task->dubbo-samples-extensibility->dubbo-samples-extensibility-filter-\*(一共有三个模块)*  
+
+1.配置修改  
+修改`dubbo-samples-extensibility-filter-provider`模块的application.properties的nacos地址为本机的nacos地址  
+同理修改`dubbo-samples-extensibility-filter-consumer`模块的nacos地址为本机  
+
+2.任务详情  
+对所有调用Provider的服务请求在返回的结果后面统一添加`'s customized AppendedFilter`这段话  
+
+3.实现方式  
+在Provider中自定义一个Filter,在Filter中修改返回结果,文件结构如下:  
+```shell
+src
+ |-main
+    |-java
+        |-org
+            |-apache
+                |-dubbo
+                    |-samples
+                        |-extensibility
+                            |-filter
+                                |-provider
+                                    |-AppendedFilter.java (实现Filter接口)
+    |-resources
+        |-META-INF
+            |-application.properties (Dubbo Provider配置文件)
+            |-dubbo
+                |-org.apache.dubbo.rpc.Filter (纯文本文件)
+```
+**注意:** 这里在resource目录下的`org.apache.dubbo.rpc.Filter`文件很关键,之前说过dubbo采用类似SPI的机制加载,所以把动态扩展的类的全限定名放入这个文件夹里面.
+`org.apache.dubbo.rpc.Filter`文件的内容如下:  
+```shell
+appended=org.apache.dubbo.samples.extensibility.filter.provider.AppendedFilter
+```
+
+4.AppendedFilter类  
+```java
+public class AppendedFilter implements Filter {
+
+    @Override
+    public Result invoke(Invoker<?> invoker, Invocation invocation) throws RpcException {
+        Result result= invoker.invoke(invocation);
+        // Obtain the returned value
+        Result appResponse = ((AsyncRpcResult) result).getAppResponse();
+        // Appended value
+        appResponse.setValue(appResponse.getValue()+"'s customized AppendedFilter");
+        return result;
+    }
+}
+```
+
+5.修改application.properties内容  
+添加如下配置,表示启用key=appended对应的扩展类,也就是在`org.apache.dubbo.rpc.Filter`文件中指定的是一个KV键值对,key代表扩展类的名称,value代表扩展类的全限定名,<font color="#00FF00">要启用一个扩展类还必须在这里配置上对应的key</font>  
+```properties
+# Apply AppendedFilter
+dubbo.provider.filter=appended
+```
+
+6.测试运行  
+![filter](resources/dubbo/20.jpg)  
+
+
+#### 1.8.3 Protocol  
+*提示:本节的示例可以参考dubbo-sample->10-task->dubbo-samples-extensibility->dubbo-samples-extensibility-protocol-\*(一共有四个模块)*  
+Dubbo通过协议扩展实现了很多内置的功能,同时也支持很多常用的协议;所有的自定义协议在`org.apache.dubbo.rpc.Protocol`文件中可以看到,以Dubbo3为例具体如下  
+```shell
+# Dubbo通过协议扩展实现的内置功能
+filter=org.apache.dubbo.rpc.cluster.filter.ProtocolFilterWrapper
+qos=org.apache.dubbo.qos.protocol.QosProtocolWrapper
+registry=org.apache.dubbo.registry.integration.InterfaceCompatibleRegistryProtocol
+service-discovery-registry=org.apache.dubbo.registry.integration.RegistryProtocol
+listener=org.apache.dubbo.rpc.protocol.ProtocolListenerWrapper
+mock=org.apache.dubbo.rpc.support.MockProtocol
+serializationwrapper=org.apache.dubbo.rpc.protocol.ProtocolSerializationWrapper
+securitywrapper=org.apache.dubbo.rpc.protocol.ProtocolSecurityWrapper
+
+# Dubbo对外支持的常用协议
+dubbo=org.apache.dubbo.rpc.protocol.dubbo.DubboProtocol
+injvm=org.apache.dubbo.rpc.protocol.injvm.InjvmProtocol
+rest=org.apache.dubbo.rpc.protocol.rest.RestProtocol
+grpc=org.apache.dubbo.rpc.protocol.grpc.GrpcProtocol
+tri=org.apache.dubbo.rpc.protocol.tri.TripleProtocol
+```
+
+*提示:这个文件可以在org.apache.dubbo:dubbo的META-INF/internal目录下找到*
+![dubbo协议](resources/dubbo/21.png)  
+可以看到,在Dubbo中通过协议扩展的能力实现了过滤、监控数据采集、服务发现、监听器、mock、序列化、安全等一系列能力,同时对外提供了dubbo(一个协议)、injvm、rest、grpc和tri协议  
+
+自定义的协议实现有两种方式:
+* 对原有协议进行包装改造,添加特定的业务逻辑;这种方式实现起来比较简单,dubbo中的`ProtocolFilterWrapper`、`QosProtocolWrapper`、`ProtocolListenerWrapper`就是采用这种方式实现的
+* 完全自定义一套协议,这种实现方式比较复杂,一般常见的协议dubbo都实现了,并且通过了大量生产实践
+
+1.配置修改  
+修改`dubbo-samples-extensibility-protocol-provider`模块的application.properties的nacos地址为本机的nacos地址  
+同理修改`dubbo-samples-extensibility-protocol-consumer`模块的nacos地址为本机  
+
+2.任务详情  
+基于现有的`dubbo`协议来实现自定义协议`edubbo`  
+
+3.目录结构  
+3.1 在`dubbo-samples-extensibility-protocol-common`模块下添加`EnhancedProtocol`类  
+
+3.2 在`dubbo-samples-extensibility-protocol-provider`模块下添加如下内容  
+```shell
+src
+ |-main
+    |-java
+        |-org
+            |-apache
+                |-dubbo
+                    |-samples
+                        |-extensibility
+                            |-protocol
+                                |-provider
+                                    |-ExtensibilityProtocolProviderApplication.java
+                                    |-ExtensibilityProtocolServiceImpl.java
+    |-resources
+        |-META-INF
+            |-application.properties (Dubbo Provider配置文件)
+            |-dubbo
+                |-org.apache.dubbo.rpc.Protocol (纯文本文件)
+```
+
+3.3 在`dubbo-samples-extensibility-protocol-consumer`模块下添加如下内容  
+```shell
+src
+ |-main
+    |-java
+        |-org
+            |-apache
+                |-dubbo
+                    |-samples
+                        |-extensibility
+                            |-protocol
+                                |-consumer
+                                    |-ExtensibilityProtocolConsumerApplication.java
+                                    |-ExtensibilityProtocolConsumerTask.java
+    |-resources
+        |-META-INF
+            |-application.properties (Dubbo Consumer配置文件)
+            |-dubbo
+                |-org.apache.dubbo.rpc.Protocol (纯文本文件)
+```
+
+*提示:这里的两个类和3.2步提到的两个类就是生产者和消费者类,本身并没有什么特别的,也就是这里会启动一个定时任务,让consumer去调用provider*  
+
+4.代码详情  
+4.1 EnhancedProtocol类  
+```java
+public class EnhancedProtocol implements Protocol {
+
+    public EnhancedProtocol(FrameworkModel frameworkModel) {
+        this.protocol = new DubboProtocol(frameworkModel);
+    }
+
+    private final Protocol protocol;
+
+    @Override
+    public int getDefaultPort() {
+        return this.protocol.getDefaultPort();
+    }
+
+    @Override
+    public <T> Exporter<T> export(Invoker<T> invoker) throws RpcException {
+        // do something
+        return this.protocol.export(invoker);
+    }
+
+    @Override
+    public <T> Invoker<T> refer(Class<T> type, URL url) throws RpcException {
+        // do something
+        return this.protocol.refer(type, url);
+    }
+
+    @Override
+    public void destroy() {
+        this.protocol.destroy();
+    }
+
+    @Override
+    public List<ProtocolServer> getServers() {
+        return protocol.getServers();
+    }
+}
+```
+
+4.2 `dubbo-samples-extensibility-protocol-provider`模块的SPI配置  
+在`resources/META-INF/dubbo/org.apache.dubbo.rpc.Protocol`文件中添加如下配置  
+```shell
+edubbo=org.apache.dubbo.samples.extensibility.protocol.common.EnhancedProtocol
+```
+
+4.3 `dubbo-samples-extensibility-protocol-consumer`模块的SPI配置  
+在`resources/META-INF/dubbo/org.apache.dubbo.rpc.Protocol`文件中添加如下配置  
+```shell
+edubbo=org.apache.dubbo.samples.extensibility.protocol.common.EnhancedProtocol
+```
+
+5.修改配置文件  
+和之前1.8.2 Filter=>5.修改application.properties内容一节中的效果一致,<font color="#00FF00">现在要启用edubbo对应的EnhancedProtocol这个扩展类</font>,需要在consumer和provider模块的application.properties配置文件中添加如下内容  
+```properties
+dubbo.consumer.protocol=edubbo
+```
+
+6.测试运行  
+启动成功之后应该能在控制台看到edubbo协议的字样  
+
+#### 1.8.4 Registry  
+
+#### 1.8.5 Router  
+通过自定义路由,可以根据业务场景的特点来实现特定的路由方式  
+*提示:本节的示例可以参考dubbo-sample->10-task->dubbo-samples-extensibility->dubbo-samples-extensibility-router-\*(一共有三个模块)*  
+
+1.配置修改  
+修改`dubbo-samples-extensibility-router-provider`模块的application.properties的nacos地址为本机的nacos地址  
+同理修改`dubbo-samples-extensibility-router-consumer`模块的nacos地址为本机  
+
+2.任务详情  
+对所有的请求都使用第一提供服务的Provider,如果该Provider下线,则从新选择一个新的Provider  
+
+3.目录结构  
+在Consumer中自定义一个Router,在Router中将<font color="#00FF00">第一次调用的Provider</font>保存下来,如果后续有请求调用且Provider列表中<font color="#00FF00">包含第一次调用时使用的Provider</font>(因为有一种情况是第一次调用的Provider宕机了),则继续使用第一次调用时使用的Provider,否则重新选去一个Provider  
+3.1 在`dubbo-samples-extensibility-router-consumer`模块下添加如下内容  
+```shell
+src
+ |-main
+    |-java
+        |-org
+            |-apache
+                |-dubbo
+                    |-samples
+                        |-extensibility
+                            |-router
+                                |-consumer
+                                    |-router
+                                        |-StickFirstStateRouter.java (实现StateRouter接口)
+                                        |-StickFirstStateRouterFactory.java (实现StateRouterFactory接口)
+    |-resources
+        |-META-INF
+            |-application.properties (Dubbo Consumer配置文件)
+            |-dubbo
+                |-org.apache.dubbo.rpc.cluster.router.state.StateRouterFactory (纯文本文件)
+```
+
+4.代码实现  
+4.1 StickFirstStateRouter类  
+```java
+public class StickFirstStateRouter<T> extends AbstractStateRouter<T> implements ConfigurationListener {
+    public StickFirstStateRouter(URL url) {
+        super(url);
+    }
+
+    public static final String NAME = "STICK_FIRST_ROUTER";
+    private static final ErrorTypeAwareLogger logger = LoggerFactory.getErrorTypeAwareLogger(StickFirstStateRouter.class);
+    private volatile BitList<Invoker<T>> firstInvokers;
+
+    @Override
+    protected BitList<Invoker<T>> doRoute(BitList<Invoker<T>> invokers, URL url, Invocation invocation, boolean needToPrintMessage, Holder<RouterSnapshotNode<T>> routerSnapshotNodeHolder, Holder<String> messageHolder) throws RpcException {
+        if (CollectionUtils.isEmpty(invokers)) {
+            if (needToPrintMessage) {
+                messageHolder.set("Directly Return. Reason: Invokers from previous router is empty.");
+            }
+            return invokers;
+        }
+        BitList<Invoker<T>> copy = invokers.clone();
+        if (CollectionUtils.isEmpty(copy)) {
+            this.firstInvokers = new BitList<>(BitList.emptyList());
+            this.firstInvokers.add(copy.get(0));
+        } else {
+            this.firstInvokers = copy.and(invokers);
+            if(CollectionUtils.isEmpty(this.firstInvokers)){
+                this.firstInvokers.add(copy.get(0));
+            }
+        }
+        return this.firstInvokers;
+    }
+
+    @Override
+    public void process(ConfigChangedEvent event) {
+        if (logger.isDebugEnabled()) {
+            logger.debug("Notification of tag rule, change type is: " + event.getChangeType() + ", raw rule is:\n " +
+                    event.getContent());
+        }
+        // Reset
+        if (event.getChangeType().equals(ConfigChangeType.DELETED)) {
+            this.firstInvokers = null;
+        }
+    }
+
+    @Override
+    public void stop() {
+        super.stop();
+        this.firstInvokers = null;
+    }
+}
+```
+
+4.2 StickFirstStateRouterFactory类  
+```java
+public class StickFirstStateRouterFactory implements StateRouterFactory {
+    @Override
+    public <T> StateRouter<T> getRouter(Class<T> interfaceClass, URL url) {
+        return new StickFirstStateRouter<>(url);
+    }
+}
+```
+
+4.3 修改`resources/META-INF/dubbo/org.apache.dubbo.rpc.cluster.router.state.StateRouterFactory`中的文件内容  
+```shell
+stickfirst=org.apache.dubbo.samples.extensibility.router.consumer.router.StickFirstStateRouterFactory
+```
+
+5.修改application.yml配置文件的内容  
+添加如下配置  
+```properties
+dubbo.consumer.router=stickfirst
+```
+
+6.测试运行  
+![router](resources/dubbo/22.png)  
+
+
+## 2.SDK手册  
 
 
