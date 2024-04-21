@@ -1,6 +1,7 @@
 # 目录  
 1.任务  
 2.SDK手册  
+3.其他  
 
 
 
@@ -308,6 +309,7 @@ public void run(String... args) throws Exception {
 
 #### 1.1.4 上下文参数传递
 *提示:本节的示例可以参考dubbo-sample->2-advanced->dubbo-samples-async-simple-boot*  
+*提示:本章的知识在2.2 高级特性和用法=>2.2.1 框架与服务=>2.2.1.14 调用链路传递隐式参数中还有详细的介绍*  
 
 在Dubbo3中,RpcContext被拆分为四大模块,它们分别担任不同的职责:  
 * ServiceContext:在Dubbo内部使用,用于传递调用链路上的参数信息,如invoker对象等
@@ -415,6 +417,49 @@ public class GenericTask implements CommandLineRunner {
     }
 }
 ```
+
+4.通过Spring使用泛化调用  
+4.1 消费者在原有的`dubbo:reference`标签加上`generic=true`的属性  
+```xml
+ <dubbo:reference id="helloService" generic = "true" interface="org.apache.dubbo.samples.generic.call.api.HelloService"/>
+```
+
+4.2 获取Bean容器,通过Bean容器拿到`GenericService`实例  
+
+4.3 调用`$invoke`方法获取结果  
+```java
+private static GenericService genericService;
+
+public static void main(String[] args) throws Exception {
+	ClassPathXmlApplicationContext context = new ClassPathXmlApplicationContext("spring/generic-impl-consumer.xml");
+	context.start();
+	//服务对应bean的名字由xml标签的id决定
+	genericService = context.getBean("helloService");
+	//获得结果
+	Object result = genericService.$invoke("sayHello", new String[]{"java.lang.String"}, new Object[]{"world"});
+}
+```
+
+5.Protobuf对象泛化调用  
+一般泛化调用只能用于生成的服务参数为POJO的情况,而GoogleProtobuf的对象是基于Builder生成的非正常POJO,可以通过protobuf-json泛化调用  
+
+5.1 通过Spring对Google Protobuf对象泛化调用  
+```xml
+<dubbo:reference id="barService" interface="com.foo.BarService" generic="protobuf-json" />
+```
+
+5.2 在Java代码获取barService并开始泛化调用  
+```java
+GenericService barService = (GenericService) applicationContext.getBean("barService");
+Object result = barService.$invoke("sayHello",new String[]{"org.apache.dubbo.protobuf.GooglePbBasic$CDubboGooglePBRequestType"}, new Object[]{"{\"double\":0.0,\"float\":0.0,\"bytesType\":\"Base64String\",\"int32\":0}"});
+```
+
+5.3 通过API方式对Google Protobuf对象泛化调用  
+没什么用,不介绍了  
+
+
+
+
 
 #### 1.1.6 IDL开发服务
 Dubbo开发的基本流程是:用户定义RPC服务,通过约定的配置方式将RPC声明为dubbo服务,然后就可以基于服务API进行变成了,<font color="#00FF00">对服务提供者来说是提供RPC服务的具体实现,而对服务消费者来说则是使用特定数据发起服务调用</font>.  
@@ -1083,6 +1128,18 @@ java -javaagent:/path/to/skywalking-agent/skywalking-agent.jar -jar dubbo-sample
 3.5 访问Skywalking-UI  
 此时就应该能看到服务的情况了  
 
+### 1.6 通信协议
+1.6.1 开发Dubbo2服务  
+1.6.2 开发gRPC服务  
+1.6.3 开发Triple服务  
+1.6.4 开发WEB应用  
+1.6.5 调用SpringCloud  
+1.6.6 单端口多协议  
+
+#### 1.6.6 单端口多协议  
+
+
+
 ### 1.7 限流降级  
 **目录:**  
 1.7.1 Sentinel限流  
@@ -1126,7 +1183,7 @@ Dubbo中的扩展能力是从JDK标准的SPI扩展点发现机制加强而来,�
 ![扩展点加载流程](resources/dubbo/19.png)  
 
 #### 1.8.2 Filter  
-通过自定义过滤器,可以对返回的结果进行统一的处理、验证等，减少对开发人员的打扰  
+通过自定义过滤器,可以对返回的结果进行统一的处理、验证等,减少对开发人员的打扰  
 *提示:本节的示例可以参考dubbo-sample->10-task->dubbo-samples-extensibility->dubbo-samples-extensibility-filter-\*(一共有三个模块)*  
 
 1.配置修改  
@@ -1450,5 +1507,973 @@ dubbo.consumer.router=stickfirst
 
 
 ## 2.SDK手册  
+**目录:**  
+2.1 快速入门  
+2.2 高级特性和用法  
+2.3 参考手册  
+2.4 升级和兼容  
+2.5 错误码  
+
+### 2.1 快速入门  
+**目录:**  
+2.1.1 快速部署一个微服务应用  
+2.1.2 基于Dubbo API开发微服务应用  
+2.1.3 基于Spring Boot Starter开发微服务应用  
+2.1.4 基于Spring XML开发微服务应用  
+2.1.5 IDL定义跨语言服务  
 
 
+#### 2.1.1 快速部署一个微服务应用  
+*提示:详情见dubboBasis笔记=>1.dubbo入门=>1.2体会dubbo的第一个示例*  
+
+#### 2.1.2 基于Dubbo API开发微服务应用  
+*提示:详情见dubboBasis笔记=>1.dubbo入门=>1.2体会dubbo的第一个示例*  
+
+#### 2.1.3 基于Spring Boot Starter开发微服务应用  
+*提示:详情见ubboBasis笔记=>1.dubbo入门=>使用dubbo开发微服务项目*  
+
+#### 2.1.4 基于Spring XML开发微服务应用  
+略过,如有兴趣可以参照官网  
+
+#### 2.1.5 IDL定义跨语言服务  
+*提示:如有兴趣可以参见官网,本笔记对在1.1开发任务=>1.1.6 IDL开发服务中有对IDL进行介绍*  
+
+
+### 2.2 高级特性和用法  
+**目录:**  
+2.2.1 框架与服务  
+2.2.2 可观测性  
+2.2.3 诊断与调优  
+2.2.4 提升安全性  
+2.2.5 其它  
+2.2.6 Triple协议  
+
+#### 2.2.1 框架与服务  
+**目录:**  
+2.2.1.1 端口协议复用  
+2.2.1.2 分布式事务  
+2.2.1.3 分组聚合  
+2.2.1.4 服务分版本  
+2.2.1.5 启动时检查  
+2.2.1.6 响应式编程  
+2.2.1.7 参数校验  
+2.2.1.8 服务分组  
+2.2.1.9 集群容错  
+2.2.1.10 服务降级  
+2.2.1.11 异步调用  
+2.2.1.12 流式调用  
+2.2.1.13 线程池隔离  
+2.2.1.14 调用链路传递隐式参数  
+2.2.1.15 动态指定IP调用  
+2.2.1.20 泛化调用(客户端泛化)  
+
+
+##### 2.2.1.1 端口协议复用
+*提示:详情见1.6 通信协议=>1.6.6单端口多协议*  
+
+##### 2.2.1.2 分布式事务  
+*提示:详情见1.4 微服务生态=>1.4.1 事务管理*  
+
+##### 2.2.1.3 分组聚合  
+1.特性说明  
+通过分组对结果进行聚合并返回聚合后的结果,比如菜单服务,用group区分同一接口的多种实现,现在消费方需从每种group中调用一次并返回结果,<font color="#00FF00">对结果进行合并之后返回</font>,这样就可以实现聚合菜单项  
+*提示:本节的示例来自dubbo-sample->2-advanced->dubbo-samples-merge*  
+
+2.使用场景  
+<font color="#FF00FF">将多个服务提供者分组作为一个提供者进行访问</font>,<font color="#00FF00">应用程序能够像访问一个服务一样访问多个服务</font>,并允许更有效地使用资源  
+
+3.使用方式  
+*提示:在dubbo中接口并不能唯一确定一个服务,<font color="#00FF00">只有接口+分组+版本号才能唯一确定一个服务</font>*  
+
+3.1 搜索所有分组  
+```xml
+<dubbo:reference interface="com.xxx.MenuService" group="*" merger="true" />
+```
+*提示:使用这种配置表明,将`MenuService`下所有分组的调用结果进行合并*  
+**注意:** 也就是说在使用分组聚合时,<font color="#00FF00">一个Consumer会调用对应的所有Provider</font>;而不是只调用一个Provider  
+
+3.2 合并指定分组  
+```xml
+<dubbo:reference interface="com.xxx.MenuService" group="aaa,bbb" merger="true" />
+```
+*提示:使用这种配置表明,将`MenuService`下的`aaa`和`bbb`分组的调用结果进行合并*  
+
+3.3 指定方法合并  
+```xml
+<dubbo:reference interface="com.xxx.MenuService" group="*">
+    <dubbo:method name="getMenuItems" merger="true" />
+</dubbo:reference>
+```
+*提示:使用这种配置表明,将`MenuService`下所有分组的`getMenuItems`方法的调用结果进行合并,别的没有指定的方法依旧只调用一个group*  
+
+3.4 某个方法不合并  
+```xml
+<dubbo:reference interface="com.xxx.MenuService" group="*" merger="true">
+    <dubbo:method name="getMenuItems" merger="false" />
+</dubbo:reference>
+```
+*提示:使用这种配置表明,`MenuService`下的`getMenuItems`方法不合并*  
+
+3.5 指定合并策略  
+```xml
+<dubbo:reference interface="com.xxx.MenuService" group="*">
+    <dubbo:method name="getMenuItems" merger="mymerge" />
+</dubbo:reference>
+```
+*提示:指定合并策略,默认根据<font color="#00FF00">返回值类型</font>自动匹配,如果同一个类型有两个合并器,需要指定合并器的名称*  
+关于合并器的内容详情见2.3 参考手册=>:
+说白了,<font color="#FF00FF">现在要调用多个接口并将多个接口的返回值合并为一个结果,那合并这些返回值的策略就需要使用到合并器</font>,合并器的使用是基于返回值的类型来匹配的,如果对于一种返回值有多个合并器则需要具体指定当前使用的合并器名称  
+
+3.6 指定合并方法  
+```xml
+<dubbo:reference interface="com.xxx.MenuService" group="*">
+    <dubbo:method name="getMenuItems" merger=".addAll" />
+</dubbo:reference>
+```
+*提示:指定合并方法,将调用返回结果的指定方法进行合并,合并方法的参数类型必须是返回结果类型本身;实际上这也相当于是一种合并策略,就是说将分组调用的结果传入到`addAll()`方法里面,最终由`addAll()`处理并将结果返回,并且addAll方法的入参类型必须与分组调用返回的类型匹配*  
+
+##### 2.2.1.4 服务分版本  
+*提示:在dubbo中接口并不能唯一确定一个服务,<font color="#00FF00">只有接口+分组+版本号才能唯一确定一个服务</font>*  
+本节可以参考:1.任务=>1.1开发任务=>1.1.3 版本与分组  
+
+##### 2.2.1.5 启动时检查 
+1.特性说明  
+Dubbo默认会在启动时检查依赖的服务是否可用,如果不可用会抛出异常阻止Spring初始化完成,从而尽早的发现错误,默认`check="true"`  
+可以通过`check="false"`关闭检查;比如测试时有些服务不关心或者出现了循环依赖,必须有一方先启动  
+如果你的Spring容器是懒加载的,或者通过API编程延迟引用服务,请关闭check,<font color="#FF00FF">否则服务临时不可用时,会抛出异常</font>,拿到null引用,如果 check="false",总是会返回引用,当服务恢复时,能自动连上  
+
+2.使用场景  
+* 单向依赖:服务间有依赖关系建议使用默认设置,无依赖关系可以使用`check=false`
+* 相互依赖:即循环依赖(不建议设置check=false)
+* 延迟加载处理
+
+3.使用方式  
+3.1 关闭某个服务的启动时检查  
+```xml
+<dubbo:reference interface="com.foo.BarService" check="false" />
+```
+
+3.2 关闭所有服务的启动检查  
+```xml
+<dubbo:consumer check="false" />
+```
+*提示:如果关闭了所有服务的启动检查,但是某个服务又显示地指定了例如3.1步中的格式,即开启了某个服务的检查,则该服务会开启检查*  
+
+3.3 关闭注册中心启动时检查  
+```xml
+<dubbo:registry check="false" />
+```
+*提示:3.1和3.2步都是指当前服务已经订阅了注册中心,但是获取到的目标服务的提供者列表为空时是否报错的配置,当前配置是如果当前服务订阅/注册到注册中心失败时是否继续运行启动,如果设置为这里的false代表允许启动,此时后台将定时重试注册行为*  
+
+3.4 通过dubbo.properties进行设置  
+```properties
+dubbo.reference.com.foo.BarService.check=false
+dubbo.consumer.check=false
+dubbo.registry.check=false
+```
+
+##### 2.2.1.6 响应式编程  
+1.特性说明  
+此特性基于Triple协议和Project Reactor实现,3.1.0版本以上支持,用户仅需编写IDL文件,并指定protobuf插件的相应Generator,即可生成并使用支持响应式编程API的stub代码  
+有四种调用模式,分别是OneToOne、OneToMany、ManyToOne、ManyToMany,分别对应 Unary调用、服务端流、客户端流、双向流.在Reactor的实现中,One对应Mono,Many对应Flux  
+Reactive Stream提供了一套标准的异步流处理API,在能够让应用写出事件驱动的程序的同时,也通过BackPressure的方式保证了节点的稳定.Triple协议在通信协议层面为Dubbo框架增加了流式场景的支持,在此基础上能够实现上层包括大文件传输和推送机制的业务需求  
+Dubbo + Reactive Stream Stub的组合模式可以给用户带来最方便的流式使用方式以及全链路异步性能提升  
+*提示:本节的示例可以参考dubbo-sample->3-extensions->protocol->dubbo-samples-triple-reactor*  
+
+2.使用场景  
+系统需要处理大量并发请求而不会使任何服务器过载.大量用户提供实时数据的系统,希望确保系统能够处理负载而不会崩溃或变慢  
+
+*提示:Triple使用方式可参考;如有兴趣可以参见官网,本笔记对在1.1开发任务=>1.1.6 IDL开发服务中有对IDL进行介绍*  
+// todo 
+
+3.添加依赖  
+```xml
+<!-- 添加Reactor Triple的相关依赖 -->
+<dependency>
+    <groupId>org.reactivestreams</groupId>
+    <artifactId>reactive-streams</artifactId>
+</dependency>
+<dependency>
+    <groupId>io.projectreactor</groupId>
+    <artifactId>reactor-core</artifactId>
+</dependency>
+```
+
+4.设置protobuf Maven插件  
+仅需将mainClass修改为`org.apache.dubbo.gen.tri.reactive.ReactorDubbo3TripleGenerator`,并确保`${compiler.version}`>= 3.1.0  
+```xml
+<build>
+    <plugins>
+        <plugin>
+            <groupId>org.xolstice.maven.plugins</groupId>
+            <artifactId>protobuf-maven-plugin</artifactId>
+            <version>0.6.1</version>
+            <configuration>
+                <protocArtifact>com.google.protobuf:protoc:${protoc.version}:exe:${os.detected.classifier}
+                </protocArtifact>
+                <pluginId>grpc-java</pluginId>
+                <pluginArtifact>io.grpc:protoc-gen-grpc-java:${grpc.version}:exe:${os.detected.classifier}
+                </pluginArtifact>
+                <protocPlugins>
+                    <protocPlugin>
+                        <id>dubbo</id>
+                        <groupId>org.apache.dubbo</groupId>
+                        <artifactId>dubbo-compiler</artifactId>
+                        <version>${compiler.version}</version>
+                        <mainClass>org.apache.dubbo.gen.tri.reactive.ReactorDubbo3TripleGenerator</mainClass>
+                    </protocPlugin>
+                </protocPlugins>
+            </configuration>
+            <executions>
+                <execution>
+                    <goals>
+                        <goal>compile</goal>
+                    </goals>
+                </execution>
+            </executions>
+        </plugin>
+    </plugins>
+</build>
+```
+
+5.编写并编译IDL文件  
+IDL文件编写与原生的Triple协议完全一致,编译后默认会在`target/generated-sources/protobuf/java`目录下看到相应代码  
+```go
+syntax = "proto3";
+
+option java_multiple_files = true;
+
+package org.apache.dubbo.samples.triple.reactor;
+
+// The request message containing the user's name.
+message GreeterRequest {
+  string name = 1;
+}
+
+// The response message containing the greetings
+message GreeterReply {
+  string message = 1;
+}
+
+service GreeterService {
+
+  rpc greetOneToOne(GreeterRequest) returns (GreeterReply);
+
+  rpc greetOneToMany(GreeterRequest) returns (stream GreeterReply);
+
+  rpc greetManyToOne(stream GreeterRequest) returns (GreeterReply);
+
+  rpc greetManyToMany(stream GreeterRequest) returns (stream GreeterReply);
+}
+```
+
+6.使用示例  
+6.1 添加服务端接口实现  
+```java
+public class GreeterServiceImpl extends DubboGreeterServiceTriple.GreeterServiceImplBase {
+    
+    private static final Logger LOGGER = LoggerFactory.getLogger(GreeterServiceImpl.class);
+
+    @Override
+    public Flux<GreeterReply> greetManyToMany(Flux<GreeterRequest> request) {
+        return request.doOnNext(req -> LOGGER.info("greetManyToMany get data: {}", req))
+                .map(req -> GreeterReply.newBuilder().setMessage(req.getName() + " -> server get").build())
+                .doOnNext(res -> LOGGER.info("greetManyToMany response data: {}", res));
+    }
+}
+```
+
+6.2 添加服务端接口启动类  
+```java
+public class ReactorServer {
+
+    private static final int PORT = 50052;
+
+    public static void main(String[] args) {
+        ServiceConfig<GreeterService> reactorService = new ServiceConfig<>();
+        reactorService.setInterface(GreeterService.class);
+        reactorService.setRef(new GreeterServiceImpl());
+
+        DubboBootstrap bootstrap = DubboBootstrap.getInstance();
+        bootstrap.application(new ApplicationConfig("tri-reactor-stub-server"))
+                .registry(new RegistryConfig("zookeeper://127.0.0.1:2181"))
+                .protocol(new ProtocolConfig(CommonConstants.TRIPLE, PORT))
+                .service(reactorService)
+                .start();
+    }
+}
+```
+
+6.3 添加服务端启动类和消费程序  
+```java
+
+public class ReactorConsumer {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(ReactorConsumer.class);
+
+    private final GreeterService greeterService;
+
+    public ReactorConsumer() {
+        ReferenceConfig<GreeterService> referenceConfig = new ReferenceConfig<>();
+        referenceConfig.setInterface(GreeterService.class);
+        referenceConfig.setProtocol(CommonConstants.TRIPLE);
+        referenceConfig.setProxy(CommonConstants.NATIVE_STUB);
+        referenceConfig.setTimeout(10000);
+
+        DubboBootstrap bootstrap = DubboBootstrap.getInstance();
+        bootstrap.application(new ApplicationConfig("tri-reactor-stub-server"))
+                .registry(new RegistryConfig("zookeeper://127.0.0.1:2181"))
+                .reference(referenceConfig)
+                .start();
+        GreeterService greeterService = referenceConfig.get();
+    }
+    
+    public static void main(String[] args) throws IOException {
+        ReactorConsumer reactorConsumer = new ReactorConsumer();
+        reactorConsumer.consumeManyToMany();
+        System.in.read();
+    }
+    
+    private void consumeManyToMany() {
+        greeterService.greetManyToMany(Flux.range(1, 10)
+                    .map(num ->
+                        GreeterRequest.newBuilder().setName(String.valueOf(num)).build())
+                    .doOnNext(req -> LOGGER.info("consumeManyToMany request data: {}", req)))
+                .subscribe(res -> LOGGER.info("consumeManyToMany get response: {}", res));
+    }
+}
+```
+
+7.代码测试  
+分别启动生产者和服务消费者  
+
+##### 2.2.1.7 参数校验  
+1.特征说明  
+参数验证功能是基于JSR303实现的,<font color="#00FF00">用户只需标识JSR303标准的验证annotation</font>,并通过声明filter来实现验证  
+
+2.添加依赖  
+```xml
+<dependency>
+    <groupId>javax.validation</groupId>
+    <artifactId>validation-api</artifactId>
+    <version>1.0.0.GA</version>
+</dependency>
+<dependency>
+    <groupId>org.hibernate</groupId>
+    <artifactId>hibernate-validator</artifactId>
+    <version>4.2.0.Final</version>
+</dependency>
+```
+
+3.使用场景  
+<font color="#FF00FF">服务端</font>(Provider)在向外提供接口服务时,解决各种接口参数校验问题  
+*提示:本节的示例可以参考dubbo-sample->2-advanced->dubbo-samples-validation*  
+
+4.参数标注示例  
+```java
+public class ValidationParameter implements Serializable {
+    private static final long serialVersionUID = 7158911668568000392L;
+ 
+    @NotNull // 不允许为空
+    @Size(min = 1, max = 20) // 长度或大小范围
+    private String name;
+ 
+    @NotNull(groups = ValidationService.Save.class) // 保存时不允许为空,更新时允许为空 ,表示不更新该字段
+    @Pattern(regexp = "^\\s*\\w+(?:\\.{0,1}[\\w-]+)*@[a-zA-Z0-9]+(?:[-.][a-zA-Z0-9]+)*\\.[a-zA-Z]+\\s*$")
+    private String email;
+ 
+    @Min(18) // 最小值
+    @Max(100) // 最大值
+    private int age;
+ 
+    @Past // 必须为一个过去的时间
+    private Date loginDate;
+ 
+    @Future // 必须为一个未来的时间
+    private Date expiryDate;
+    // 提供getter/setter方法
+}
+```
+
+5.分组验证示例  
+```java
+public interface ValidationService { // 缺省可按服务接口区分验证场景,如：@NotNull(groups = ValidationService.class)   
+    @interface Save{} // 与方法同名接口,首字母大写,用于区分验证场景,如：@NotNull(groups = ValidationService.Save.class),可选
+    void save(ValidationParameter parameter);
+    void update(ValidationParameter parameter);
+}
+```
+**解释:**  
+首先这里定义了一个ValidationService,这个Service中有两个方法save方法和update方法,这里需要在这个类下定义一个与方法名相同的首字母大写的注解,表明对save方法中的参数进行`@Save`这个注解的分组校验;那么在方法对应的参数ValidationParameter中就需要使用`groups`字段指定对应的分组注解,那么在执行目标方法时就会对特定的分组进行校验,如果目标方法不是该分组的就不校验.  
+**简化:**  
+这里说的太复杂了,可以简化一下,分组校验是<font color="#FF00FF">针对方法级别的</font>,如果对某个方法有特定的校验规则就<font color="#00FF00">定义一个对应的注解在Service类中</font>,接着对哪个参数实行特定的校验规则就在该参数上的`groups`属性中指定对应的注解.  
+
+6.关联校验示例  
+```java
+public interface ValidationService {   
+    @GroupSequence(Update.class) // 同时验证Update组规则
+    @interface Save{}
+    void save(ValidationParameter parameter);
+ 
+    @interface Update{} 
+    void update(ValidationParameter parameter);
+}
+```
+
+7.在客户端验证参数  
+```xml
+<dubbo:reference id="validationService" interface="org.apache.dubbo.examples.validation.api.ValidationService" validation="true" />
+```
+*提示:在消费者端进行参数的校验*  
+
+8.服务端验证参数  
+```xml
+<dubbo:service interface="org.apache.dubbo.examples.validation.api.ValidationService" ref="validationService" validation="true" />
+```
+*提示:在生产者端进行参数的校验*  
+
+> 如果需要启动客户端验证,并且使用jdk17,择需添加jvm启动参数`--add-opens java.base/java.lang=ALL-UNNAMED`做兼容处理  
+
+9.验证异常信息  
+```java
+public class ValidationConsumer {   
+    public static void main(String[] args) throws Exception {
+        String config = ValidationConsumer.class.getPackage().getName().replace('.', '/') + "/validation-consumer.xml";
+        ClassPathXmlApplicationContext context = new ClassPathXmlApplicationContext(config);
+        context.start();
+        ValidationService validationService = (ValidationService)context.getBean("validationService");
+        // Error
+        try {
+            parameter = new ValidationParameter();
+            validationService.save(parameter);
+            System.out.println("Validation ERROR");
+        } catch (RpcException e) { // 抛出的是RpcException
+            ConstraintViolationException ve = (ConstraintViolationException) e.getCause(); // 里面嵌了一个ConstraintViolationException
+            Set<ConstraintViolation<?>> violations = ve.getConstraintViolations(); // 可以拿到一个验证错误详细信息的集合
+            System.out.println(violations);
+        }
+    } 
+}
+```
+*提示:参数验证失败后会抛出一个RpcException异常,里面嵌套了Hibernate的ConstraintViolationException异常*  
+
+##### 2.2.1.8 服务分组  
+服务分组说的比较多了,详情见:1.1.3版本与分组、2.2.1.4服务分版本、2.2.1.3分组聚合  
+
+##### 2.2.1.9 集群容错  
+1.特性说明  
+当集群调用失败时,Dubbo提供了多种容错方案,缺省为failover重试  
+![重试](resources/dubbo/23.png)  
+各节点关系:  
+* 这里的`Invoker`是`Provider`的<font color="#FF00FF">一个</font>可调用`Service`的抽象,<font color="#00FF00">Invoker封装了Provider地址及Service接口信息</font>
+* `Directory`代表多个`Invoker`,可以把它看成`List<Invoker>`,但与List不同的是它的值可能是动态变化的,比如注册中心推送变更
+* `Cluster`将<font color="#00FF00">Directory中的多个Invoker伪装成一个Invoker</font>,对上层透明,伪装过程包含了容错逻辑,调用失败后重试另一个
+* `Router`负责从多个`Invoker`中按路由规则选出子集,比如读写分离、应用隔离等
+  *提示:`Router`*主要是负责选择不同类型的`Invoker`*  
+* `LoadBalance`负责从多个`Invoker`中选出具体的一个用于本次调用,选的过程包含了负载均衡算法,调用失败后需要重选
+  *提示:`LoadBalance`主要是从相同类型的`Invoker`中进行具体的调用,因为服务可能是集群的,最终具体调用某个服务的时候还需要再筛选,<font color="#00FF00">这点要与Router区分下来</font>*
+
+通过使用服务注册表和负载均衡,可以提高集群提供的容错能力,服务注册表用于存储有关可用服务及其位置的信息,负载均衡用于确保请求均匀分布在集群中的所有服务器上,如果一台服务器发生故障,负载将转移到其他可用服务器  
+*总结一下这张图:最外层的流量通过Dubbo集群容错策略从Cluster处调用服务,Cluster把流量转发到Directory,接着Directory把流量转发到Router,Router转发到LoadBalance,最终调用服务本体Invoker*  
+
+
+2.使用场景  
+多个服务器部署同一集群中,运行同一应用程序,如果一台服务器出现故障,其他服务器将接管负载,确保应用程序对用户仍然可用
+Dubbo的集群容错默认有如下策略:Failover、Failfast、Failsafe、Failback、Forking、Broadcast、Available、Mergeable、ZoneAware  
+如果需要可以自定义扩展集群容错策略,详情见:集群扩展  //todo  
+
+3.使用方式  
+3.1 Failover策略  
+在这种策略下,失败会自动切换,当出现失败重试其它服务器,通常用于读操作,但重试会带来更长的延迟,可通过`retries="2"`来设置重试次数  
+配置如下:  
+```xml
+<!-- 在服务提供者一方配置 -->
+<dubbo:service retries="2" />
+<!-- 在服务消费者一方配置 -->
+<dubbo:reference retries="2" />
+<!-- 针对某个方法进行配置 -->
+<dubbo:reference>
+    <dubbo:method name="findFoo" retries="2" />
+</dubbo:reference>
+```
+*提示:这种策略是默认的策略*  
+
+3.2 Failfast  
+快速失败,只发起一次调用,失败立即报错;通常用于非幂等性的写操作,比如新增记录  
+
+3.3 Failsafe  
+失败安全,出现异常时,直接忽略;通常用于写入审计日志等操作  
+
+3.4 Failback  
+失败自动恢复,后台记录失败请求,定时重发;通常用于消息通知操作  
+
+3.5 Forking  
+<font color="#FF00FF">并行调用</font>多个服务器,只要一个成功即返回;通常用于实时性要求较高的读操作,<font color="#00FF00">但需要浪费更多服务资源</font>;可通过`forks="2"`来设置最大并行数  
+
+3.6 Broadcast  
+广播调用所有提供者,逐个调用,任意一台报错则报错;通常用于通知所有提供者更新缓存或日志等<font color="#FF00FF">本地资源信息</font>(注意是本地)  
+高版本的dubbo,可以通过`broadcast.fail.percent`配置节点调用失败的比例,当达到这个比例之后`BroadcastClusterInvoker`将不再调用其它节点,直接抛出异常  
+broadcast.fail.percent<font color="#00FF00">取值在0～100范围内</font>;默认情况下当全部调用失败后,才会抛出异常;<font color="#00FF00">broadcast.fail.percent只是控制的当失败后是否继续调用其他节点</font>,并不改变结果(任意一台报错则报错)  
+`broadcast.fail.percent=20`代表了当20%的节点调用失败就抛出异常,不再调用其他节点;这个值默认是100  
+```java
+@reference(cluster = "broadcast", parameters = {"broadcast.fail.percent", "20"})
+``` 
+*解释:cluster表明要使用哪种策略,parameters是对这种策略具体使用什么样的配置/参数*  
+
+3.7 Available  
+调用目前可用的实例(只调用一个),如果当前没有可用的实例,则抛出异常;通常用于不需要负载均衡的场景  
+
+3.8 Mergeable  
+<font color="#00FF00">将集群中的调用结果聚合起来返回结果</font>,通常和group一起配合使用;<font color="#00FF00">通过分组对结果进行聚合并返回聚合后的结果</font>,比如菜单服务,用group区分同一接口的多种实现,<font color="#00FF00">现在消费方需从每种group中调用一次并返回结果,对结果进行合并之后返回</font>,这样就可以实现聚合菜单项  
+*提示:合并分组调用详情见2.2.1.3 分组聚合*  
+
+3.9 ZoneAware  
+<font color="#00FF00">多注册中心订阅</font>的场景,<font color="#FF00FF">注册中心集群间的负载均衡</font>(也就是从服务注册中心的层面进行负载均衡);对于多注册中心间的选址策略有如下四种:指定优先级、同中心优先、权重轮询、缺省值  
+* 指定优先级  
+  被设置为`preferred="true"`的注册中心将会被优先选择
+  ```xml
+  <dubbo:registry address="zookeeper://127.0.0.1:2181" preferred="true" />
+  ```
+* 同中心优先  
+  检查当前请求所属的区域,优先选择具有<font color="#00FF00">相同区域的注册中心</font>
+  ```xml
+  <dubbo:registry address="zookeeper://127.0.0.1:2181" zone="beijing" />
+  ```
+* 权重轮询
+  根据每个注册中心的权重分配流量
+  ```xml
+  <dubbo:registry id="beijing" address="zookeeper://127.0.0.1:2181" weight="100" />
+  <dubbo:registry id="shanghai" address="zookeeper://127.0.0.1:2182" weight="10" />
+  ```
+* 默认
+  选择一个可用的注册中心
+
+4.使用方式  
+使用方式分为两种,一种是使用xml的方式使用,一种是使用注解的方式使用;注解的方式上面已经讲过  
+```xml
+<!-- 分别在服务消费者和服务提供者方指定集群的容错策略,但是策略最终都是针对服务消费者而言的,只是说这个策略在这两个地方配置都可以;都是针对某个接口调用时的负载均衡策略是什么 -->
+<dubbo:service cluster="failsafe" />
+<dubbo:reference cluster="failsafe" />
+```
+
+
+##### 2.2.1.10 服务降级  
+*提示:本章可以参考1.7.1 Sentinel限流*  
+
+1.Mock使用方式1  
+当服务降级的时候希望可以返回一个模拟数据(Mock值),从而保障业务还能正常运行  
+```xml
+<dubbo:reference id="demoService" interface="com.xxx.service.DemoService" mock="true" />
+```
+这种方式需要在相同包下面有类+Mock的后缀实现类,即`com.xxx.service`包下有`DemoServiceMock`类  
+
+2.Mock使用方式2  
+```xml
+<dubbo:reference id="demoService" interface="com.xxx.service.DemoService" mock="com.xxx.service.DemoServiceMock" />
+```
+这种方式直接指定Mock类的全路径  
+
+3.Mock使用方式3  
+`mock="[fail|force] return|throw xxx"`格式  
+* `fail|force`:表示调用失败或不调用强制执行mock方法,如果不指定关键字默认为fail
+* `return`表示返回指定结果,`throw`表示抛出指定异常
+* `xx`当前面是return时候这里表示返回一个接口的默认值,当前面是throw时候这里表示抛出一个异常
+
+例如:
+```xml
+<dubbo:reference id="demoService" interface="com.xxx.service.DemoService" mock="return" />
+<dubbo:reference id="demoService" interface="com.xxx.service.DemoService" mock="return null" />
+<dubbo:reference id="demoService" interface="com.xxx.service.DemoService" mock="fail:return aaa" />
+<dubbo:reference id="demoService" interface="com.xxx.service.DemoService" mock="force:return true" />
+<dubbo:reference id="demoService" interface="com.xxx.service.DemoService" mock="fail:throw" />
+<dubbo:reference id="demoService" interface="com.xxx.service.DemoService" mock="force:throw java.lang.NullPointException" />
+```
+4.配置dubbo-admin使用  
+详情见1.5.1 Admin=>3.服务Mock
+
+##### 2.2.1.11 异步调用  
+1.背景  
+从dubbo2.7开始,dubbo的所有异步编程接口开始以CompletableFuture为基础  
+基于<font color="#FF00FF">NIO</font>的非阻塞实现并行调用,<font color="#00FF00">客户端不需要启动多线程即可完成并行调用多个远程服务,相对多线程开销较小</font>  
+![异步调用](resources/dubbo/24.png)  
+
+2.使用场景  
+将用户请求内容发送到目标请求,当目标请求遇到高流量或需要长时间处理,异步调用功能将允许<font color="#00FF00">立即向用户返回响应</font>,同时目标请求继续后台处理请求,当目标请求返回结果时,将内容显示给用户  
+*提示:本节的示例可以参考dubbo-sample->2-advanced->dubbo-samples-async*  
+
+3.使用  
+详情见1.1.2 异步调用  
+
+##### 2.2.1.12 流式调用  
+
+##### 2.2.1.13 线程池隔离  
+1.特性说明  
+一种新的线程池管理方式,使得提供者应用内各个服务的线程池隔离开来,互相独立;<font color="#00FF00">某个服务的线程池资源耗尽不会影响其他正常服务</font>  
+
+2.使用方式  
+使用线程池隔离来确保Dubbo用于<font color="#FF00FF">调用远程方法的线程与微服务用于执行其任务的线程是分开的</font>;可以通过防止线程阻塞或相互竞争来帮助提高系统的性能和稳定性  
+配置参数:  
+* `ApplicationConfig`新增`executor-management-mode`参数,配置的值为`default`和`isolation`;默认为`isolation`
+  * `executor-management-mode = default`使用原有<font color="#00FF00">以协议端口为粒度、服务间共享</font>的线程池管理方式
+  * `executor-management-mode = isolation`使用新增的以<font color="#00FF00">服务三元组为粒度、服务间隔离</font>的线程管理方案
+* 当使用`executor-management-mode = isolation`配置时,新增`Executor executor`参数,<font color="#00FF00">用以服务间隔离的线程池</font>可以由用户配置化、提供自己想要的线程池
+
+目前有三种使用方式:API、XML、Annotation
+
+3.API用法  
+```java
+public void test() {
+	// provider app
+	DubboBootstrap providerBootstrap = DubboBootstrap.newInstance();
+
+	ServiceConfig serviceConfig1 = new ServiceConfig();
+	serviceConfig1.setInterface(DemoService.class);
+	serviceConfig1.setRef(new DemoServiceImpl());
+	serviceConfig1.setVersion(version1);
+	// set executor1 for serviceConfig1, max threads is 10
+	NamedThreadFactory threadFactory1 = new NamedThreadFactory("DemoService-executor");
+	ExecutorService executor1 = Executors.newFixedThreadPool(10, threadFactory1);
+	serviceConfig1.setExecutor(executor1);
+
+	ServiceConfig serviceConfig2 = new ServiceConfig();
+	serviceConfig2.setInterface(HelloService.class);
+	serviceConfig2.setRef(new HelloServiceImpl());
+	serviceConfig2.setVersion(version2);
+	// set executor2 for serviceConfig2, max threads is 100
+	NamedThreadFactory threadFactory2 = new NamedThreadFactory("HelloService-executor");
+	ExecutorService executor2 = Executors.newFixedThreadPool(100, threadFactory2);
+	serviceConfig2.setExecutor(executor2);
+
+	ServiceConfig serviceConfig3 = new ServiceConfig();
+	serviceConfig3.setInterface(HelloService.class);
+	serviceConfig3.setRef(new HelloServiceImpl());
+	serviceConfig3.setVersion(version3);
+	// Because executor is not set for serviceConfig3, the default executor of serviceConfig3 is built using
+	// the threadpool parameter of the protocolConfig ( FixedThreadpool , max threads is 200)
+	serviceConfig3.setExecutor(null);
+
+	// It takes effect only if [executor-management-mode=isolation] is configured
+	// 当使用executor-management-mode = isolation配置时setExecutor()方法才会生效
+	ApplicationConfig applicationConfig = new ApplicationConfig("provider-app");
+	applicationConfig.setExecutorManagementMode("isolation");
+
+	providerBootstrap
+	.application(applicationConfig)
+	.registry(registryConfig)
+	// export with tri and dubbo protocol
+	.protocol(new ProtocolConfig("tri", 20001))
+	.protocol(new ProtocolConfig("dubbo", 20002))
+	.service(serviceConfig1)
+	.service(serviceConfig2)
+	.service(serviceConfig3);
+
+	providerBootstrap.start();
+}
+```
+
+4.XML用法  
+```xml
+<beans xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xmlns:dubbo="http://dubbo.apache.org/schema/dubbo"
+       xmlns="http://www.springframework.org/schema/beans"
+       xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-4.3.xsd
+       http://dubbo.apache.org/schema/dubbo http://dubbo.apache.org/schema/dubbo/dubbo.xsd">
+
+  <!-- NOTE: we need config executor-management-mode="isolation" -->
+  <dubbo:application name="demo-provider" executor-management-mode="isolation">
+  </dubbo:application>
+
+  <dubbo:config-center address="zookeeper://127.0.0.1:2181"/>
+  <dubbo:metadata-report address="zookeeper://127.0.0.1:2181"/>
+  <dubbo:registry id="registry1" address="zookeeper://127.0.0.1:2181?registry-type=service"/>
+
+  <dubbo:protocol name="dubbo" port="-1"/>
+  <dubbo:protocol name="tri" port="-1"/>
+
+  <!-- expose three service with dubbo and tri protocol-->
+  <bean id="demoServiceV1" class="org.apache.dubbo.config.spring.impl.DemoServiceImpl"/>
+  <bean id="helloServiceV2" class="org.apache.dubbo.config.spring.impl.HelloServiceImpl"/>
+  <bean id="helloServiceV3" class="org.apache.dubbo.config.spring.impl.HelloServiceImpl"/>
+
+  <!-- customized thread pool -->
+  <bean id="executor-demo-service"
+        class="org.apache.dubbo.config.spring.isolation.spring.support.DemoServiceExecutor"/>
+  <bean id="executor-hello-service"
+        class="org.apache.dubbo.config.spring.isolation.spring.support.HelloServiceExecutor"/>
+
+  <!-- this service use [executor="executor-demo-service"] as isolated thread pool-->
+  <dubbo:service executor="executor-demo-service"
+                 interface="org.apache.dubbo.config.spring.api.DemoService" version="1.0.0" group="Group1"
+                 timeout="3000" ref="demoServiceV1" registry="registry1" protocol="dubbo,tri"/>
+
+  <!-- this service use [executor="executor-hello-service"] as isolated thread pool-->
+  <dubbo:service executor="executor-hello-service"
+                 interface="org.apache.dubbo.config.spring.api.HelloService" version="2.0.0" group="Group2"
+                 timeout="5000" ref="helloServiceV2" registry="registry1" protocol="dubbo,tri"/>
+
+  <!-- not set executor for this service, the default executor built using threadpool parameter of the protocolConfig -->
+  <dubbo:service interface="org.apache.dubbo.config.spring.api.HelloService" version="3.0.0" group="Group3"
+                 timeout="5000" ref="helloServiceV3" registry="registry1" protocol="dubbo,tri"/>
+
+</beans>
+```
+
+5.Annotation用法  
+```java
+@Configuration
+@EnableDubbo(scanBasePackages = "org.apache.dubbo.config.spring.isolation.spring.annotation.provider")
+public class ProviderConfiguration {
+    @Bean
+    public RegistryConfig registryConfig() {
+        RegistryConfig registryConfig = new RegistryConfig();
+        registryConfig.setAddress("zookeeper://127.0.0.1:2181");
+        return registryConfig;
+    }
+
+    // NOTE: we need config executor-management-mode="isolation"
+    @Bean
+    public ApplicationConfig applicationConfig() {
+        ApplicationConfig applicationConfig = new ApplicationConfig("provider-app");
+
+        applicationConfig.setExecutorManagementMode("isolation");
+        return applicationConfig;
+    }
+
+    // expose services with dubbo protocol
+    @Bean
+    public ProtocolConfig dubbo() {
+        ProtocolConfig protocolConfig = new ProtocolConfig("dubbo");
+        return protocolConfig;
+    }
+
+    // expose services with tri protocol
+    @Bean
+    public ProtocolConfig tri() {
+        ProtocolConfig protocolConfig = new ProtocolConfig("tri");
+        return protocolConfig;
+    }
+
+    // customized thread pool
+    @Bean("executor-demo-service")
+    public Executor demoServiceExecutor() {
+        return new DemoServiceExecutor();
+    }
+
+    // customized thread pool
+    @Bean("executor-hello-service")
+    public Executor helloServiceExecutor() {
+        return new HelloServiceExecutor();
+    }
+}
+```
+
+```java
+// customized thread pool
+public class DemoServiceExecutor extends ThreadPoolExecutor {
+    public DemoServiceExecutor() {
+        super(10, 10, 60, TimeUnit.SECONDS, new LinkedBlockingDeque<>(),
+            new NamedThreadFactory("DemoServiceExecutor"));
+    }
+}
+```
+
+```java
+// customized thread pool
+public class HelloServiceExecutor extends ThreadPoolExecutor {
+    public HelloServiceExecutor() {
+        super(100, 100, 60, TimeUnit.SECONDS, new LinkedBlockingDeque<>(),
+            new NamedThreadFactory("HelloServiceExecutor"));
+    }
+}
+```
+
+```java
+// "executor-hello-service" is beanName
+@DubboService(executor = "executor-demo-service", version = "1.0.0", group = "Group1")
+public class DemoServiceImplV1 implements DemoService {
+
+  @Override
+  public String sayName(String name) {
+    return "server name";
+  }
+
+  @Override
+  public Box getBox() {
+    return null;
+  }
+}
+```
+
+```java
+@DubboService(version = "3.0.0", group = "Group3")
+public class HelloServiceImplV2 implements HelloService {
+    private static final Logger logger = LoggerFactory.getLogger(HelloServiceImplV2.class);
+
+    @Override
+    public String sayHello(String name) {
+        return "server hello";
+    }
+}
+```
+
+```java
+@DubboService(executor = "executor-hello-service", version = "2.0.0", group = "Group2")
+public class HelloServiceImplV3 implements HelloService {
+    private static final Logger logger = LoggerFactory.getLogger(HelloServiceImplV3.class);
+
+    @Override
+    public String sayHello(String name) {
+        return "server hello";
+    }
+}
+```
+
+##### 2.2.1.14 调用链路传递隐式参数  
+1.特性说明  
+可以通过`RpcContext`上的`setAttachment`和`getAttachment`在服务消费方和提供方之间进行参数的隐式传递  
+*提示:这点知识在1.1.4 上下文参数传递中有讲到过*   
+*提示:本节的示例可以参考dubbo-sample->2-advanced->dubbo-samples-rpccontext*  
+
+2.背景  
+上下文信息是RPC框架很重要的一个功能,使用`RpcContext`可以为单次调用指定不同配置.如分布式链路追踪场景,其实现原理就是在全链路的上下文中维护一个traceId,<font color="#00FF00">Consumer和Provider通过传递traceId来连接一次RPC调用,分别上报日志后可以在追踪系统中串联并展示完整的调用流程</font>.这样可以更方便地发现异常,定位问题.Dubbo中的`RpcContext`是一个`ThreadLocal`的临时状态记录器,当接收到RPC请求或发起RPC请求时,<font color="#00FF00">RpcContext的状态都会变化</font>比如:**A调B,B调C,则B机器上,在B调C之前,RpcContext记录的是A和B的信息,在B调C之后,RpcContext记录的是B和C的信息**  
+
+在Dubbo3中,RpcContext被拆分为四大模块,它们分别担任不同的职责:  
+* ServiceContext:在Dubbo内部使用,用于传递调用链路上的参数信息,如invoker对象等
+* ClientAttachment:在Client端使用,往ClientAttachment中写入的参数将被传递到Server端
+* ServerAttachment:在Server端使用,从ServerAttachment中读取的参数是从Client中传递过来的
+  ServerAttachment和ClientAttachment是对应的
+* ServerContext:在Client端和Server端使用,用于从Server端回传Client端使用,Server端写入到ServerContext的参数在调用结束后可以在Client端的ServerContext获取到
+
+流程图大致如下  
+![流程图](resources/dubbo/3.png) 
+这个流程图是我自已画的不够细致,下面是官方的流程图  
+![流程图](resources/dubbo/25.png)  
+如上图所示,<font color="#00FF00">消费端发起调用的时候可以直接通过Method Invoke向远程的服务发起调用,同时消费端往RpcClientAttachment写入的数据会连同Invoke的参数信息写入到Invocation中</font>.消费端的Invocation经过序列化后通过网络传输发送给服务端,<font color="#00FF00">服务端解析Invocation生成Method Invoke的参数和RpcServerAttachment,然后发起真实调用</font>.<font color="#DDDD00">在服务端处理结束之后,Method Response结果会连同RpcServiceContext一起生成Result对象.服务端的Result结果对象经过序列化后通过网络传输发送回消费端,消费端解析Result生成Method Response结果和RpcServiceContext,返回真实调用结果和上下文给消费端</font>
+
+> path、group、version、dubbo、token、timeout几个key是保留字段,请使用其它值
+
+3.使用方式  
+> `setAttachment`设置的KV对,在完成下面一次远程调用会被清空,即多次远程调用要多次设置
+
+3.1 在服务消费方端设置隐式参数
+```java
+RpcContext.getClientAttachment().setAttachment("index", "1"); // 隐式传参，后面的远程调用都会隐式将这些参数发送到服务器端，类似cookie，用于框架集成，不建议常规业务使用
+xxxService.xxx(); // 远程调用
+// ...
+```
+
+3.2 在服务提供方端获取隐式参数
+```java
+public class XxxServiceImpl implements XxxService {
+    public void xxx() {
+        // 获取客户端隐式传入的参数，用于框架集成，不建议常规业务使用
+        String index = RpcContext.getServerAttachment().getAttachment("index");
+    }
+}
+```
+
+3.3 在服务提供方写入回传参数
+```java
+public class XxxServiceImpl implements XxxService {
+    public void xxx() {
+        String index = xxx;
+        RpcContext.getServerContext().setAttachment("result", index);
+    }
+}
+```
+
+3.4 在消费端获取回传参数
+```java
+xxxService.xxx(); // 远程调用
+String result = RpcContext.getServerContext().getAttachment("result");
+// ...
+```
+
+4.参数透传问题  
+* 在Dubbo2.7中,在A端设置的参数,调用B以后,如果B继续调用了C,原来在A中设置的参数也会被带到C端过去,造成参数污染的问题.Dubbo 3对RpcContext进行了重构,支持可选参数透传,默认不开启参数透传
+* 在Dubbo 3中提供了如下的SPI,默认无实现,用户可以自行定义实现,select的结果(可以从RpcClientAttachment获取当前所有参数)将作为需要透传的键值对传递到下一跳,如果返回null则表示不透传参数
+```java
+@SPI
+public interface PenetrateAttachmentSelector {
+    /**
+     * Select some attachments to pass to next hop.
+     * These attachments can fetch from {@link RpcContext#getServerAttachment()} or user defined.
+     *
+     * @return attachment pass to next hop
+     */
+    Map<String, Object> select();
+}
+```
+
+##### 2.2.1.15 动态指定IP调用  
+1.特性说明  
+说用dubbo扩展,实现指定IP调用  
+
+2.使用场景  
+发起请求的时候需要指定本次调用的服务端,如消息回调、流量隔离等  
+
+3.pom依赖  
+```xml
+<dependency>
+  <groupId>org.apache.dubbo.extensions</groupId>
+  <artifactId>dubbo-cluster-specify-address-dubbo3</artifactId>
+  <version>1.0.0</version>
+</dependency>
+```
+
+4.调用示例  
+```java
+ReferenceConfig<DemoService> referenceConfig = new ReferenceConfig<>();
+// ... init
+DemoService demoService = referenceConfig.get();
+
+// for invoke
+// 1. find 10.10.10.10:20880 exist
+// 2. if not exist, create a invoker to 10.10.10.10:20880 if `needToCreate` is true (only support in Dubbo 3.x's implementation)
+UserSpecifiedAddressUtil.setAddress(new Address("10.10.10.10", 20880, true));
+demoService.sayHello("world");
+
+
+// 为了执行
+// 1. 寻找10.10.10.10的任意端口是否存在
+// 2. 如果不存在并且Address的第三个参数是true的话就创建一个invoker到10.10.10.10:20880
+UserSpecifiedAddressUtil.setAddress(new Address("10.10.10.10", 0, true));
+demoService.sayHello("world");
+```
+
+5.参数说明  
+```java
+public class Address implements Serializable {
+    // ip - priority: 3
+    private String ip;
+
+    // ip+port - priority: 2
+    private int port;
+
+    // address - priority: 1
+    private URL urlAddress;
+    
+    private boolean needToCreate = false;
+
+    // ignore setter and getter
+}
+```
+**解释:**  
+* `urlAddress`为最高优先级,如果指定了目标的URL地址,会优先使用该地址(不再匹配后续)
+* ip+port(非 0 端口)为第二优先级,会从注册中心已经推送的地址中进行匹配(不再匹配后续)
+* ip为第三优先级,会从注册中心已经推送的地址中进行匹配  
+
+特别的,如果指定了`needToCreate`为`true`将会自动根据传入的参数构建一个invoker,对于通过指定ip(+port)方式指定的地址,将会自动使用注册中心中第一个地址的参数为模板进行创建;如果无地址将基于Dubbo协议自动创建.如需定制创建invoker的逻辑请实现`org.apache.dubbo.rpc.cluster.specifyaddress.UserSpecifiedServiceAddressBuilder`接口  
+在构建完`Address`参数每次请求前通过`UserSpecifiedAddressUtil`工具类传递给dubbo框架,例如上面第4步的调用示例那样  
+
+> 必须每次都设置,而且设置后必须马上发起调用,如果出现拦截器报错(Dubbo框架内remove此值是在选址过程进行的)建议设置null以避免ThreadLocal内存泄漏导致影响后续调用
+
+
+
+
+
+##### 2.2.1.20 泛化调用(客户端泛化)  
+*提示:本节的知识可以参考1.任务=>1.1 开发任务=>1.1.5泛化调用*  
+
+
+## 3.其他  
