@@ -1565,6 +1565,13 @@ dubbo.consumer.router=stickfirst
 2.2.1.13 线程池隔离  
 2.2.1.14 调用链路传递隐式参数  
 2.2.1.15 动态指定IP调用  
+2.2.1.16 RPC调用上下文  
+2.2.1.17 服务接口Json兼容性检测  
+2.2.1.18 一致性哈希选址  
+2.2.1.19 只订阅  
+2.2.1.20 调用触发事件通知  
+2.2.1.21 多协议  
+2.2.1.22 服务端回调客户端  
 2.2.1.20 泛化调用(客户端泛化)  
 
 
@@ -2357,7 +2364,7 @@ public class HelloServiceImplV3 implements HelloService {
 
 3.1 在服务消费方端设置隐式参数
 ```java
-RpcContext.getClientAttachment().setAttachment("index", "1"); // 隐式传参，后面的远程调用都会隐式将这些参数发送到服务器端，类似cookie，用于框架集成，不建议常规业务使用
+RpcContext.getClientAttachment().setAttachment("index", "1"); // 隐式传参,后面的远程调用都会隐式将这些参数发送到服务器端,类似cookie,用于框架集成,不建议常规业务使用
 xxxService.xxx(); // 远程调用
 // ...
 ```
@@ -2366,7 +2373,7 @@ xxxService.xxx(); // 远程调用
 ```java
 public class XxxServiceImpl implements XxxService {
     public void xxx() {
-        // 获取客户端隐式传入的参数，用于框架集成，不建议常规业务使用
+        // 获取客户端隐式传入的参数,用于框架集成,不建议常规业务使用
         String index = RpcContext.getServerAttachment().getAttachment("index");
     }
 }
@@ -2468,6 +2475,347 @@ public class Address implements Serializable {
 
 > 必须每次都设置,而且设置后必须马上发起调用,如果出现拦截器报错(Dubbo框架内remove此值是在选址过程进行的)建议设置null以避免ThreadLocal内存泄漏导致影响后续调用
 
+##### 2.2.1.16 RPC调用上下文  
+1.特性说明  
+<font color="#00FF00">上下文中存放的是当前调用过程中所需的环境信息</font>,所有配置信息都将转换为URL的参数,详情[schema配置参考手册](https://cn.dubbo.apache.org/zh-cn/overview/mannual/java-sdk/reference-manual/config/properties/)中的对应URL参数一列  
+
+2.使用方式  
+本章的内容可以参考2.2.1.14 调用链路传递隐式参数节的内容  
+
+##### 2.2.1.17 服务接口Json兼容性检测  
+1.特性说明  
+`Dubbo`目前支持`Rest`协议进行服务调用,`Rest`协议默认会使用`JSON`作为序列化方式,但`JSON`并不支持`Java`的一些特殊用法,如`接口`和`抽象类`等  
+`Dubbo 3.3`版本在服务发布流程中增加了`服务接口JSON兼容性检测`功能,可以确保服务接口传输对象是否可以被JSON序列化,进一步提升Rest服务接口的正确性  
+
+2.使用场景  
+使用`Rest`作为通信协议,`JSON`作为序列化方式时,对服务接口进行兼容性检查,确保服务接口传输对象可以正确地被JSON序列化  
+
+3.使用方式  
+当使用`Rest`协议作为通信协议,`JSON`作为序列化方式时,可以在`xml`文件中通过配置`protocol`的`json-check-level`属性来配置`JSON`兼容性检查的级别  
+目前有三种级别,每种级别的具体含义如下:  
+* `disabled`:表示`不开启JSON兼容性检查`,此时不会对接口进行兼容性检查
+* `warn`:表示开启`JSON兼容性检查`,如果出现不兼容的情况,将会以`warn`级别的日志形式将不兼容的接口名称打印输出到终端
+  默认使用这种级别
+* `strict`:表示开启`JSON兼容性检查`,如果出现不兼容的情况,将会在启动时抛出IllegalStateException异常,<font color="#00FF00">终止启动流程</font>,<font color="#00FF00">同时会将不兼容的接口名称存放在异常信息中</font>
+
+4.使用示例  
+```xml
+
+<beans>
+    <context:component-scan base-package="com.example.rest"/>
+
+    <bean name="dubboConfig" class="com.example.rest.config.DubboConfig"></bean>
+
+    <dubbo:application name="rest-provider" owner="programmer" organization="dubbo"/>
+
+    <dubbo:registry address="zookeeper://${zookeeper.address:127.0.0.1}:2180"/>
+
+    <!-- 将JSON兼容性检查级别设为disabled  -->
+    <dubbo:protocol name="rest" port="8880" threads="300" json-check-level="disabled"/>
+
+    <!-- 将JSON兼容性检查级别设为warn  -->
+    <dubbo:protocol name="rest" port="8880" threads="300" json-check-level="warn"/>
+
+    <!-- 将JSON兼容性检查级别设为strict  -->
+    <dubbo:protocol name="rest" port="8880" threads="300" json-check-level="strict"/>
+</beans>
+```
+
+##### 2.2.1.18 一致性哈希选址
+1.特性说明  
+在分布式系统中跨多个节点均匀分布请求的方法,使用哈希算法创建请求的哈希并根据哈希值确定哪个节点应该处理请求,算法确保每个节点处理的请求数量大致相等.如果一个节点发生故障,其他节点可以快速接管请求,保持系统高可用性,即使一个节点出现故障,系统的数据映射到系统中有限数量节点的哈希算法,在系统中添加或删除节点时,只需更改有限数量的映射,确保数据均匀分布在系统中的所有节点上提高系统的性能  
+
+2.使用场景  
+在有多台服务端的时候根据请求参数,进行一致性哈希散列选择服务端
+
+3.使用方式  
+3.1 注解配置  
+```java
+@DubboReference(loadbalance = "consistenthash")
+```
+
+3.2 API配置  
+```java
+referenceConfig.setLoadBalance(“consistenthash”);
+```
+
+3.3 Properties配置  
+```properties
+dubbo.reference.loadbalance=consistenthash
+```
+
+3.4 XML配置  
+```xml
+<dubbo:reference loadbalance="consistenthash" />
+```
+
+默认采用第一个参数作为哈希key,如果需要切换参数,可以指定`hash.arguments`属性  
+```java
+ReferenceConfig<DemoService> referenceConfig = new ReferenceConfig<DemoService>();
+// ... init
+Map<String, String> parameters = new HashMap<String, String>();
+parameters.put("hash.arguments", "1");
+parameters.put("sayHello.hash.arguments", "0,1");
+referenceConfig.setParameters(parameters);
+referenceConfig.setLoadBalance("consistenthash");
+referenceConfig.get();
+```
+
+##### 2.2.1.19 只订阅  
+1.特性说明  
+为方便开发测试,经常会在线下共用一个所有服务可用的注册中心,这时如果一个正在开发中的服务提供者注册,可能会影响消费者不能正常运行.  
+可以让服务提供者开发方,<font color="#00FF00">只订阅服务</font>(开发的服务可能依赖其它服务),而不注册正在开发的服务,通过直连测试正在开发的服务  
+![只订阅](resources/dubbo/26.png)  
+
+**使用场景:**  
+* 消费者是一个正在开发但尚未部署的新应用程序.<font color="#00FF00">消费者希望订阅未注册的服务</font>,以确保在部署后能够访问所需的服务
+  图中Develop消费者通过直连的方式消费Develop服务提供者
+* 消费者是正在更新或修改的现有应用程序;消费者希望订阅未注册的服务以确保它能够访问更新或修改的服务.
+* 消费者是在暂存环境中开发或测试的应用程序.消费者希望订阅未注册的服务,以确保在开发或测试时能够访问所需的服务
+
+2.使用方式  
+禁用注册配置  
+```xml
+<!-- 不注册到注册中心 -->
+<dubbo:registry address="10.20.153.10:9090" register="false" />
+<!-- 另外一种配置方式 -->
+<dubbo:registry address="10.20.153.10:9090?register=false" />
+```
+
+##### 2.2.1.20 调用触发事件通知  
+1.特性说明  
+在调用之前、调用之后、出现异常时,会触发`oninvoke`、`onreturn`、`onthrow`三个事件.可以配置当事件发生时,通知(<font color="#00FF00">回调</font>)哪个类的哪个方法  
+
+2.使用场景  
+调用服务方法前我们可以记录开始时间,调用结束后统计整个调用耗费,发生异常时我们可以告警或打印错误日志或者调用服务前后记录请求日志、响应日志等  
+*提示:说白了就是一个事件回调*  
+
+3.使用方式  
+3.1 服务提供者与服务消费者共享服务接口  
+```java
+interface IDemoService {
+    public Person get(int id);
+}
+```
+
+3.2 服务提供者实现  
+```java
+class NormalDemoService implements IDemoService {
+    public Person get(int id) {
+        return new Person(id, "charles`son", 4);
+    }
+}
+```
+
+3.3 服务提供者配置  
+```java
+<dubbo:application name="rpc-callback-demo" />
+<dubbo:registry address="zookeeper://127.0.0.1:2181"/>
+<bean id="demoService" class="org.apache.dubbo.callback.implicit.NormalDemoService" />
+<dubbo:service interface="org.apache.dubbo.callback.implicit.IDemoService" ref="demoService" version="1.0.0" group="cn"/>
+```
+
+3.4 服务消费者Callback(回调)接口  
+```java
+interface Notify {
+    public void onreturn(Person msg, Integer id);
+    public void onthrow(Throwable ex, Integer id);
+}
+```
+
+3.5 服务消费者Callback实现  
+```java
+class NotifyImpl implements Notify {
+    public Map<Integer, Person> ret = new HashMap<Integer, Person>();
+    public Map<Integer, Throwable> errors = new HashMap<Integer, Throwable>();
+    
+    public void onreturn(Person msg, Integer id) {
+        System.out.println("onreturn:" + msg);
+        ret.put(id, msg);
+    }
+    
+    public void onthrow(Throwable ex, Integer id) {
+        errors.put(id, ex);
+    }
+}
+```
+
+3.6 服务消费者Callback配置  
+两者叠加存在以下几种组合情况:  
+* 异步回调模式:`async=true onreturn="xxx"`  
+* 同步回调模式:`async=false onreturn="xxx"`  
+* 异步无回调:`async=true`  
+* 同步无回调:`async=false`  
+
+`callback`与`async`功能正交分解,`async=true`表示结果马上返回,`async=false`默认,`onreturn`表示是否需要回调  
+```xml
+<bean id ="demoCallback" class = "org.apache.dubbo.callback.implicit.NotifyImpl" />
+<dubbo:reference id="demoService" interface="org.apache.dubbo.callback.implicit.IDemoService" version="1.0.0" group="cn" >
+      <dubbo:method name="get" async="true" onreturn = "demoCallback.onreturn" onthrow="demoCallback.onthrow" />
+</dubbo:reference>
+```
+**解释:**  
+这段代码对于get方法采取了同步回调的策略,当远程调用的方法返回结果时会同步调用`demoCallback.onreturn`方法,当远程调用产生异常时会调用`demoCallback.onthrow`方法  
+
+
+4.测试代码  
+```java
+IDemoService demoService = (IDemoService) context.getBean("demoService");
+NotifyImpl notify = (NotifyImpl) context.getBean("demoCallback");
+int requestId = 2;
+Person ret = demoService.get(requestId);
+Assert.assertEquals(null, ret);
+//for Test：只是用来说明callback正常被调用，业务具体实现自行决定.
+for (int i = 0; i < 10; i++) {
+    if (!notify.ret.containsKey(requestId)) {
+        Thread.sleep(200);
+    } else {
+        break;
+    }
+}
+Assert.assertEquals(requestId, notify.ret.get(requestId).getId());
+```
+
+##### 2.2.1.21 多协议  
+1.特性说明  
+Dubbo允许配置多协议,在<font color="#FF00FF">不同服务上支持不同协议或者同一服务上同时支持多种协议</font>  
+
+2.使用场景  
+与不同系统的兼容:如果你正在与一个<font color="#00FF00">支持特定协议的系统集成</font>,你可以使用Dubbo对该协议的支持来方便通信.例如,如果您正在与使用RMI的遗留系统进行集成,则可以使用Dubbo的RMI协议支持与该系统进行通信.使用多种协议可以提供灵活性,<font color="#00FF00">并允许您为您的特定用例选择最佳协议</font>  
+* 改进的性能:不同的协议可能具有不同的性能特征,这取决于传输的数据量和网络条件等因素.通过使用多种协议,可以根据您的性能要求选择最适合给定情况的协议
+* 安全性:一些协议可能提供比其他协议更好的安全特性.HTTPS协议通过加密传输的数据来提供安全通信,这对于保护敏感数据非常有用
+* 易用性:某些协议在某些情况下可能更易于使用.如果正在构建Web应用程序并希望与远程服务集成,使用HTTP协议可能比使用需要更复杂设置的协议更方便
+
+3.使用方式  
+3.1 不同服务不同协议  
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xmlns:dubbo="http://dubbo.apache.org/schema/dubbo"
+    xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-4.3.xsd http://dubbo.apache.org/schema/dubbo http://dubbo.apache.org/schema/dubbo/dubbo.xsd"> 
+    <dubbo:application name="world"  />
+    <dubbo:registry id="registry" address="10.20.141.150:9090" username="admin" password="hello1234" />
+    <!-- 多协议配置 -->
+    <dubbo:protocol name="dubbo" port="20880" />
+    <dubbo:protocol name="rmi" port="1099" />
+    <!-- 使用dubbo协议暴露服务 -->
+    <dubbo:service interface="com.alibaba.hello.api.HelloService" version="1.0.0" ref="helloService" protocol="dubbo" />
+    <!-- 使用rmi协议暴露服务 -->
+    <dubbo:service interface="com.alibaba.hello.api.DemoService" version="1.0.0" ref="demoService" protocol="rmi" /> 
+</beans>
+```
+*提示:上述配置是应用对外暴露多个端口,每个端口使用不同的协议*  
+
+3.2 多协议暴露服务  
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xmlns:dubbo="http://dubbo.apache.org/schema/dubbo"
+    xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-4.3.xsd http://dubbo.apache.org/schema/dubbo http://dubbo.apache.org/schema/dubbo/dubbo.xsd">
+    <dubbo:application name="world"  />
+    <dubbo:registry id="registry" address="10.20.141.150:9090" username="admin" password="hello1234" />
+    <!-- 多协议配置 -->
+    <dubbo:protocol name="dubbo" port="20880" />
+    <dubbo:protocol name="hessian" port="8080" />
+    <!-- 使用多个协议暴露服务 -->
+    <dubbo:service id="helloService" interface="com.alibaba.hello.api.HelloService" version="1.0.0" protocol="dubbo,hessian" />
+</beans>
+```
+*提示:上述配置是应用对外暴露多个端口,每个端口使用不同的协议,同一个服务能够使用多个不同的协议/端口*  
+
+##### 2.2.1.22 服务端回调客户端  
+1.特性说明  
+参数回调方式与调用本地callback或listener相同,只需要在Spring的配置文件中声明哪个参数是callback类型即可.Dubbo将基于长连接生成反向代理,<font color="#00FF00">这样就可以从服务器端调用客户端</font>  
+*提示:本节的示例可以参考dubbo-sample->2-advanced->dubbo-samples-callback*  
+
+2.使用场景  
+回调函数通知客户端执行结果,或发送通知,在方法执行时间比较长时,类似异步调用,审批工作流中回调客户端审批结果  
+
+3.使用方式  
+3.1 服务接口示例  
+```java
+public interface CallbackService {
+    void addListener(String key, CallbackListener listener);
+}
+public interface CallbackListener {
+    void changed(String msg);
+}
+```
+
+3.2 服务提供者接口实现  
+```java
+public class CallbackServiceImpl implements CallbackService {
+     
+    private final Map<String, CallbackListener> listeners = new ConcurrentHashMap<String, CallbackListener>();
+  
+    public CallbackServiceImpl() {
+        Thread t = new Thread(new Runnable() {
+            public void run() {
+                while(true) {
+                    try {
+                        for(Map.Entry<String, CallbackListener> entry : listeners.entrySet()){
+                           try {
+                               entry.getValue().changed(getChanged(entry.getKey()));
+                           } catch (Throwable t) {
+                               listeners.remove(entry.getKey());
+                           }
+                        }
+                        Thread.sleep(5000); // 定时触发变更通知
+                    } catch (Throwable t) { // 防御容错
+                        t.printStackTrace();
+                    }
+                }
+            }
+        });
+        t.setDaemon(true);
+        t.start();
+    }
+  
+    public void addListener(String key, CallbackListener listener) {
+        listeners.put(key, listener);
+        listener.changed(getChanged(key)); // 发送变更通知
+    }
+     
+    private String getChanged(String key) {
+        return "Changed: " + new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date());
+    }
+}
+```
+
+3.3 服务提供者配置示例  
+```xml
+<bean id="callbackService" class="com.callback.impl.CallbackServiceImpl" />
+<dubbo:service interface="com.callback.CallbackService" ref="callbackService" connections="1" callbacks="1000">
+    <dubbo:method name="addListener">
+        <dubbo:argument index="1" callback="true" />
+        <!--也可以通过指定类型的方式-->
+        <!--<dubbo:argument type="com.demo.CallbackListener" callback="true" />-->
+    </dubbo:method>
+</dubbo:service>
+```
+
+
+3.4 服务消费者示例  
+```xml
+<dubbo:reference id="callbackService" interface="com.callback.CallbackService" />
+```
+
+3.5 服务消费者调用示例  
+```java
+ClassPathXmlApplicationContext context = new ClassPathXmlApplicationContext("classpath:consumer.xml");
+context.start();
+ 
+CallbackService callbackService = (CallbackService) context.getBean("callbackService");
+ 
+// 相当于这里的第二个参数CallbackListener会被服务端回调,这个功能很神奇
+callbackService.addListener("foo.bar", new CallbackListener(){
+    public void changed(String msg) {
+        System.out.println("callback1:" + msg);
+    }
+});
+```
 
 
 
