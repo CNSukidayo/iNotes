@@ -1572,7 +1572,15 @@ dubbo.consumer.router=stickfirst
 2.2.1.20 调用触发事件通知  
 2.2.1.21 多协议  
 2.2.1.22 服务端回调客户端  
-2.2.1.20 泛化调用(客户端泛化)  
+2.2.1.23 本地伪装  
+2.2.1.24 多注册中心  
+2.2.1.25 本地存根  
+2.2.1.26 回声测试  
+2.2.1.27 调用信息记录  
+2.2.1.28 泛化调用(客户端泛化)  
+2.2.1.29 泛化调用(服务端泛化)  
+2.2.1.30 本地调用  
+2.2.1.31 延迟暴露  
 
 
 ##### 2.2.1.1 端口协议复用
@@ -2817,11 +2825,448 @@ callbackService.addListener("foo.bar", new CallbackListener(){
 });
 ```
 
+##### 2.2.1.23 本地伪装  
+本章可以参考2.2.1.10 服务降级  
+1.特性说明  
+在Dubbo3中有一种机制可以实现<font color="#00FF00">轻量级的服务降级</font>,也就是本地伪装  
+Mock是Stub的一个子集,便于服务提供方在客户端执行容错逻辑,因经常需要在出现RpcException(比如网络失败，超时等)时进行容错,而在出现业务异常(比如登录用户名密码错误)时不需要容错,如果用Stub;可能就需要捕获并依赖RpcException类,而用Mock就可以不依赖RpcException,因为它的约定就是只有出现RpcException时才执行  
+
+2.使用场景  
+本地伪装常被用于服务降级;比如某验权服务,当服务提供方全部挂掉后,假如此时服务消费方发起了一次远程调用,那么本次调用将会失败并抛出一个RpcException异常  
+为了<font color="#FF00FF">避免出现这种直接抛出异常的情况出现</font>,那么客户端就可以利用本地伪装来提供Mock数据返回授权失败  
+*提示:远程调用的异常分为两种,一种是调用出现网络超时、失败等非业务异常,另一张破那个就是业务失败异常,比如订单不存在等异常,<font color="#00FF00">对于非业务异常我们不希望它抛出RpcException就可以使用Mock</font>*  
+
+3.使用方式  
+3.1 开启Mock配置  
+```xml
+<dubbo:reference interface="com.foo.BarService" mock="true" />
+<!-- 或者 -->
+<dubbo:reference interface="com.foo.BarService" mock="com.foo.BarServiceMock" />
+```
+**实现类的约定:** 在<font color="#00FF00">interface</font>旁边放一个Mock实现,它实现`BarService`接口,并有一个无参构造函数.同时,如果没有在配置文件中显示指定Mock类的时候(即上述的第一种配置),那么需要保障Mock类的全限定名是`原全限定类名+Mock`的形式,例如`com.foo.BarServiceMock`否则将会Mock失败  
+
+3.2 使用return关键字Mock返回值  
+使用`return`来返回一个字符串表示的对象,作为Mock的返回值,合法的字符串可以是:  
+* empty:代表空,返回<font color="#00FF00">基本类型的默认值、集合类的空值、自定义实体类的空对象</font>,如果返回值是一个实体类,那么此时返回的将会是一个<font color="#FF00FF">属性都为默认值</font>的空对象而不是null  
+* null:返回`null`
+* true:返回`true`
+* false:返回`false`
+* JSON字符串:返回反序列化`JSON串`后所得到的对象
+
+3.3 例子  
+如果服务的消费方经常需要try-catch捕获异常,如:  
+```java
+public class DemoService {
+
+    public Offer findOffer(String offerId) {
+        Offer offer = null;
+        try {
+            offer = offerService.findOffer(offerId);
+        } catch (RpcException e) {
+            logger.error(e);
+        }
+
+        return offer;
+    }
+}
+```
+
+那么请考虑改为Mock实现,并在Mock实现中return null.如果只是想简单的<font color="#00FF00">忽略异常</font>,在 2.0.11以上版本可用:  
+```xml
+<dubbo:reference interface="com.foo.BarService" mock="return null" />
+```
+
+3.4 使用throw关键字Mock抛出异常  
+使用throw来返回一个Exception对象,作为Mock的返回值,当调用出错时抛出一个默认的RPCException,例如:  
+```xml
+<dubbo:reference interface="com.foo.BarService" mock="throw"/>
+```  
+当然也可以抛出一个自定义异常,不过该自定义异常必须有一个入参为String的构造函数,该构造函数将用于接受异常信息,例如:  
+```xml
+<dubbo:reference interface="com.foo.BarService" mock="throw com.foo.MockException"/>
+```
+
+3.5 使用force和fail关键字来配置Mock的行为  
+* `force`:代表强制使用Mock行为,<font color="#00FF00">在这种情况下不会走远程调用</font>
+* `fail`:与默认行为一致,只有当远程调用发生错误时才使用Mock行为.也就是说,配置的时候其实是可以不使用fail关键字的,直接使用throw或者return就可以了  
+
+**强制返回指定值:**  
+```xml
+<dubbo:reference interface="com.foo.BarService" mock="force:return fake"/>
+```  
+
+**强制抛出指定异常:**  
+```xml
+<dubbo:reference interface="com.foo.BarService" mock="force:throw com.foo.MockException"/>
+```
+
+**调用失败时返回指定值:**  
+```xml
+<dubbo:reference interface="com.foo.BarService" mock="fail:return fake"/>
+
+<!-- 等价于以下写法 -->
+<dubbo:reference interface="com.foo.BarService" mock="return fake"/>
+```
+
+**调用失败时抛出异常:**  
+```xml
+<dubbo:reference interface="com.foo.BarService" mock="fail:throw com.foo.MockException"/>
+
+<!-- 等价于以下写法 -->
+<dubbo:reference interface="com.foo.BarService" mock="throw com.foo.MockException"/>
+```
+
+**在方法级别配置Mock:**  
+Mock可以在方法级别上指定,假定`com.foo.BarService`上有好几个方法,我们可以单独为`sayHello()`方法指定Mock行为,具体配置如下所示,在本例中只要`sayHello()`被调用到时,强制返回"fake":  
+```xml
+<dubbo:reference id="demoService" check="false" interface="com.foo.BarService">
+    <dubbo:parameter key="sayHello.mock" value="force:return fake"/>
+</dubbo:reference>
+```
+
+##### 2.2.1.24 多注册中心  
+1.特性说明  
+Dubbo支持<font color="#00FF00">同一服务向多注册中心同时注册</font>,或者不同服务分别注册到不同的注册中心上去,甚至可以同时引用注册在不同注册中心上的同名服务.另外,注册中心是支持自定义扩展的  
+
+2.使用场景  
+* 高可用:多个注册服务器确保即使其中一个注册服务器出现故障,服务仍然可用
+* 负载:同时访问大量服务,使用多个注册服务器帮助在多个服务器之间分配负载提高系统的整体性能和可扩展性
+* 区域:不同地理位置的服务,使用多个注册服务器来确保根据其位置注册和发现服务减少请求需要传输的距离来帮助提高系统的性能和可靠性
+* 安全:使用多个注册服务器;期望将一台注册服务器用于内部服务,另一台用于外部服务,以确保只有授权的客户端才能访问您的内部服务
+
+3.使用方式  
+3.1 多注册中心注册  
+例如:中文站有些服务来不及在青岛部署,只在杭州部署,而青岛的其它应用需要引用此服务,就可以将服务同时注册到两个注册中心  
+*解释:有两个注册中心,一个是青岛的一个是杭州的,注册在青岛的服务希望访问杭州的服务,此时就可以将需要使用杭州服务的部分青岛的服务也注册一份到杭州的注册中心*  
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xmlns:dubbo="http://dubbo.apache.org/schema/dubbo"
+    xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-4.3.xsd http://dubbo.apache.org/schema/dubbo http://dubbo.apache.org/schema/dubbo/dubbo.xsd">
+    <dubbo:application name="world"  />
+    <!-- 多注册中心配置 -->
+    <dubbo:registry id="hangzhouRegistry" address="10.20.141.150:9090" />
+    <dubbo:registry id="qingdaoRegistry" address="10.20.141.151:9010" default="false" />
+    <!-- 向多个注册中心注册 -->
+    <dubbo:service interface="com.alibaba.hello.api.HelloService" version="1.0.0" ref="helloService" registry="hangzhouRegistry,qingdaoRegistry" />
+</beans>
+```
+
+3.2 不同服务使用不同注册中心  
+例如:有些服务是专门为国际站设计的,有些服务是专门为中文站设计的  
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xmlns:dubbo="http://dubbo.apache.org/schema/dubbo"
+    xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-4.3.xsd http://dubbo.apache.org/schema/dubbo http://dubbo.apache.org/schema/dubbo/dubbo.xsd">
+    <dubbo:application name="world"  />
+    <!-- 多注册中心配置 -->
+    <dubbo:registry id="chinaRegistry" address="10.20.141.150:9090" />
+    <dubbo:registry id="intlRegistry" address="10.20.154.177:9010" default="false" />
+    <!-- 向中文站注册中心注册 -->
+    <dubbo:service interface="com.alibaba.hello.api.HelloService" version="1.0.0" ref="helloService" registry="chinaRegistry" />
+    <!-- 向国际站注册中心注册 -->
+    <dubbo:service interface="com.alibaba.hello.api.DemoService" version="1.0.0" ref="demoService" registry="intlRegistry" />
+</beans>
+```
+
+3.3 多注册中心引用  
+例如:假设某应用需同时调用中文站和国际站的HelloService服务,HelloService在中文站和国际站均有部署,接口及版本号都一样,但连的数据库不一样,<font color="#00FF00">此时就可以引用不同注册中心中的同一个服务</font>  
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xmlns:dubbo="http://dubbo.apache.org/schema/dubbo"
+    xsi:schemaLocation="http://www.springframework.org/schema/beans
+    http://www.springframework.org/schema/beans/spring-beans-4.3.xsd
+    http://dubbo.apache.org/schema/dubbo
+    http://dubbo.apache.org/schema/dubbo/dubbo.xsd">
+    <dubbo:application name="world"  />
+    <!-- 多注册中心配置 -->
+    <dubbo:registry id="chinaRegistry" address="10.20.141.150:9090" />
+    <dubbo:registry id="intlRegistry" address="10.20.154.177:9010" default="false" />
+    <!-- 引用中文站服务 -->
+    <dubbo:reference id="chinaHelloService" interface="com.alibaba.hello.api.HelloService" version="1.0.0" registry="chinaRegistry" />
+    <!-- 引用国际站服务 -->
+    <dubbo:reference id="intlHelloService" interface="com.alibaba.hello.api.HelloService" version="1.0.0" registry="intlRegistry" />
+</beans>
+```
+如果只是测试环境临时需要连接两个不同注册中心,<font color="#FF00FF">使用竖号分隔多个不同类型的注册中心地址,使用逗号分割同一类型注册中心的地址</font>  
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xmlns:dubbo="http://dubbo.apache.org/schema/dubbo"
+    xsi:schemaLocation="http://www.springframework.org/schema/beans
+    http://www.springframework.org/schema/beans/spring-beans-4.3.xsd 
+    http://dubbo.apache.org/schema/dubbo
+    http://dubbo.apache.org/schema/dubbo/dubbo.xsd">
+    <dubbo:application name="world"  />
+    <!-- 多注册中心配置，竖号分隔表示同时连接多个不同注册中心，同一注册中心的多个集群地址用逗号分隔 -->
+    <dubbo:registry address="10.20.141.150:9090|10.20.154.177:9010" />
+    <!-- 引用服务 -->
+    <dubbo:reference id="helloService" interface="com.alibaba.hello.api.HelloService" version="1.0.0" />
+</beans>
+```
+
+##### 2.2.1.25 本地存根  
+1.特性说明  
+使用远程服务调用后,客户端通常只剩下接口,而实现全在服务器端,<font color="#00FF00">但提供方有些时候想在客户端也执行部分逻辑</font>  
+![本地存根](resources/dubbo/27.png)  
+**上图解释:**  
+* <font color="#FF00FF">stub</font>:stub即存根<font color="#00FF00">是一种被设计用于替代真实实现的轻量级组件或模块</font>,这些存根在开发过程中用作替代品,以便进行系统集成和测试.存根通常提供与实际组件相同的接口,但它们的实现<font color="#00FF00">仅限于提供硬编码的响应或简单的行为,而不涉及复杂的业务逻辑</font>.这种做法有助于并行开发,允许开发人员在不依赖实际实现的情况下继续工作
+  假设我们正在开发一个在线购物应用程序,该应用程序需要与信用卡支付服务进行集成;此时我们就可以创建一个信用卡支付服务的存根,这个存根将模拟信用卡支付服务的接口供在线购物应用程序进行模拟调用,存根的实际实现只是返回一个硬编码的成功支付响应,而不涉及实际的支付处理  
+* 消费者端的Action接口引用了xxxService这个接口,真正调用的时候会调用stub存根类,存根类会执行部分逻辑,接着存根类会调用目标接口的方法,目标接口又被dubbo的代理类(xxxServiceProxy)代理进行声明式的接口实现去真正调用远程服务接口,如果出现异常则会回调Mock类的对应方法
+* 图中inherit是扩展的意思
+
+2.使用场景  
+做ThreadLocal缓存,提前验证参数,调用失败后伪造容错数据等等,此时就需要在API中带上Stub,客户端生成Proxy实例,会把Proxy通过构造函数传给Stub,然后把Stub暴露给用户,Stub可以决定要不要去调Proxy  
+
+3.使用方式  
+3.1 Spring配置文件  
+```xml
+<!-- 使用这种方式就类似Mock类一样,默认需要在该接口下提供一个接口名+Stub的实现类才会生效 -->
+<dubbo:consumer interface="com.foo.BarService" stub="true" />
+<!-- 或者 -->
+<dubbo:consumer interface="com.foo.BarService" stub="com.foo.BarServiceStub" />
+```
+
+3.2 提供stub实现  
+```java
+public class BarServiceStub implements BarService {
+    private final BarService barService;
+    
+    // 构造函数传入真正的远程代理对象
+    // 必须要有能够传入目标接口的构造方法
+    public BarServiceStub(BarService barService){
+        this.barService = barService;
+    }
+ 
+    public String sayHello(String name) {
+        // 此代码在客户端执行, 你可以在客户端做ThreadLocal本地缓存，或预先验证参数是否合法，等等
+        try {
+            return barService.sayHello(name);
+        } catch (Exception e) {
+            // 你可以容错，可以做任何AOP拦截事项
+            return "容错数据";
+        }
+    }
+}
+```
+
+##### 2.2.1.26 回声测试  
+1.特性说明  
+<font color="#00FF00">回声测试用于检测服务是否可用</font>,回声测试按照正常请求流程执行,能够测试整个调用是否通畅,可用于监控.执行回声测试,客户端发送一个包含特定值(如字符串)的请求.<font color="#00FF00">服务器应使用相同的值进行响应</font>,从而验证请求是否已成功接收和处理.如果响应与请求不匹配,则表示服务运行不正常.  
+要求Dubbo服务器正在运行,并且服务器和客户端之间具有网络连接.在客户端,必须配置Dubbo客户端以连接到服务器,客户端将向服务器发送请求,然后服务器应返回与请求相同的响应  
+
+2.使用场景  
+<font color="#00FF00">测试验证是否可以调用服务以及响应是否正确</font>,对于在生产环境中使用服务之前验证服务的场景十分有效.echo测试是验证Dubbo服务基本功能的一种简单有效的方法,在将服务部署到生产环境之前执行此测试非常重要,以确保服务按预期工作.  
+*提示:本节的示例可以参考dubbo-sample->2-advanced->dubbo-samples-echo*  
+
+3.使用方式  
+所有服务自动实现EchoService接口(Dubbo的服务默认都实现了该接口),只需将任意服务引用类型强转为`EchoService`即可使用.  
+```xml
+<!-- spring配置 -->
+<dubbo:reference id="memberService" interface="com.xxx.MemberService" />
+```
+
+3.1 代码测试  
+```java
+// 远程服务引用
+MemberService memberService = ctx.getBean("memberService"); 
+ 
+EchoService echoService = (EchoService) memberService; // 强制转型为EchoService
+
+// 回声测试可用性
+String status = echoService.$echo("OK"); 
+ 
+assert(status.equals("OK"));
+```
+
+##### 2.2.1.27 调用信息记录  
+1.特性说明  
+dubbo3中日志分为`日志适配`和`访问日志`,如果想记录每一次请求信息,可开启访问日志,类似于Apache的访问日志  
+
+2.使用场景  
+基于审计需要等类似<font color="#00FF00">nginx accesslog</font>输出的场景  
+
+3.使用方式  
+3.1 log4j日志  
+将访问日志输出到当前应用的log4j日志,这种配置的输出目的地会共用log4j的输出目的地  
+```xml
+<dubbo:protocol accesslog="true" />
+```
+
+3.2 指定文件  
+```xml
+<dubbo:protocol accesslog="http://10.20.160.198/wiki/display/dubbo/foo/bar.log" />
+```
 
 
-
-##### 2.2.1.20 泛化调用(客户端泛化)  
+##### 2.2.1.28 泛化调用(客户端泛化)  
 *提示:本节的知识可以参考1.任务=>1.1 开发任务=>1.1.5泛化调用*  
+
+##### 2.2.1.29 泛化调用(服务端泛化)  
+1.特性说明  
+服务端泛化<font color="#00FF00">主要用于服务器端没有API接口及模型类元的情况</font>,参数及返回值的所有POJO均用Map表示,通常用于框架集成,比如:实现一个通用的远程服务Mock框架,可通过实现`GenericService`接口处理所有服务请求  
+
+2.使用场景  
+* 注册服务:服务提供者在服务注册表中注册服务,例如Zookeeper服务注册表存储有关服务的信息,例如其接口、实现类和地址
+* 部署服务:服务提供商将服务部署在服务器并使其对消费者可用
+* 调用服务:使用者使用服务注册表生成的代理调用服务,代理将请求转发给服务提供商,服务提供商执行服务并将响应发送回消费者
+* 监视服务:提供者和使用者可以使用Dubbo框架监视服务,允许他们查看服务的执行情况,并在必要时进行调整
+
+3.使用方式  
+在Java代码中实现`GenericService`接口(服务提供者)  
+```java
+public class MyGenericService implements GenericService {
+ 
+    public Object $invoke(String methodName, String[] parameterTypes, Object[] args) throws GenericException {
+        if ("sayHello".equals(methodName)) {
+            return "Welcome " + args[0];
+        }
+    }
+}
+```
+**解释:**  
+因为是泛化实现,所以并不知道服务消费者具体调用的是哪个接口,`$invoke`方法就得有三个参数:方法名、方法的参数类型、方法的参数值  
+这三个值实际上就是<font color="#FF00FF">方法签名</font>  
+如果加上`$invoke`方法本身的返回值就构成了<font color="#FF00FF">方法描述符</font>
+*注意:方法描述符不要和方法签名弄混了*  
+
+
+3.1 通过Spring暴露泛化实现  
+```xml
+<bean id="genericService" class="com.foo.MyGenericService" />
+<dubbo:service interface="com.foo.BarService" ref="genericService" />
+```
+
+3.2 通过API方式暴露泛化实现  
+```java
+// 用org.apache.dubbo.rpc.service.GenericService可以替代所有接口实现 
+GenericService xxxService = new XxxGenericService(); 
+
+// 该实例很重量，里面封装了所有与注册中心及服务提供方连接，请缓存 
+ServiceConfig<GenericService> service = new ServiceConfig<GenericService>();
+// 弱类型接口名 
+service.setInterface("com.xxx.XxxService");  
+service.setVersion("1.0.0"); 
+// 指向一个通用服务实现 
+service.setRef(xxxService); 
+ 
+// 暴露及注册服务 
+service.export();
+```
+
+##### 2.2.1.30 本地调用  
+1.特性说明  
+本地调用使用了`injvm`协议,是一个伪协议,它不开启端口,<font color="#00FF00">不发起远程调用</font>,只在JVM内直接关联,但执行Dubbo的Filter链  
+*提示:它除了不真实发送远程调用,别的该执行的都执行了*  
+
+2.使用场景  
+当我们需要调用远程服务时,远程服务并没有开发完成,使用`injvm`协议在本地实现类似服务,<font color="#00FF00">调用此服务时可以调用我们本地的实现服务</font>  
+*提示:这种效果就类似使用服务Mock中的foce关键字,详情见2.2.1.23 本地伪装=>3.5 使用force和fail关键字来配置Mock的行为,但是和Mock还是有区别的,<font color="#00FF00">Mock是指定执行哪个类,而本地调用是在本地模拟远程的服务,并且调用的时候走本地调用而不是远程</font>,<font color="#FF00FF">它们两个是有区别的</font>*  
+
+3.使用方式  
+3.1 定义`injvm`协议  
+```xml
+<dubbo:protocol name="injvm" />
+```
+
+3.2 设置服务协议  
+```xml
+<dubbo:service protocol="injvm" />
+```
+
+3.3 优先使用injvm  
+```xml
+<dubbo:reference injvm="true" .../>
+<dubbo:service injvm="true" .../>
+```
+
+> Dubbo从2.2.0开始<font color="#00FF00">每个服务都会在本地暴露</font>,无需进行任何配置即可进行本地引用,如果不希望服务进行远程暴露,只需要在provider将protocol设置成injvm即可  
+> 每个服务在本地暴露和直接把服务注入到消费者上是有区别的,假设A接口想调用B接口,而B接口在项目中已经有实现了,当然可以把B接口直接注入到A接口中,但这种是<font color="#00FF00">依赖注入</font>,但如果B接口暴露在本地了,那A接口可以使用`@DubboReference`注解把B接口的远程调用接口注入进来,虽然从最终结果上都是A接口调用了本地的B接口,<font color="#FF00FF">但方式是不同的</font>,一个是依赖注入一个是远程调用(实际上是本地调用)  
+
+
+3.4 自动暴露  
+从`2.2.0`开始,每个服务默认都会在本地暴露;在引用服务的时候,默认优先引用本地服务.如果希望引用远程服务可以使用一下配置强制引用远程服务  
+```xml
+<dubbo:reference ... scope="remote" />
+```
+
+3.5 动态配置调用行为  
+从`3.2`开始,Dubbo提供API可以让用户在代码中动态地指定<font color="#00FF00">本次调用</font>是本地调用还是远程调用,当没有配置的时候默认优先使用本地调用  
+```java
+// 配置本次调用为远程调用
+RpcContext.getServiceContext().setLocalInvoke(false);
+// 配置本次调用为本地调用
+RpcContext.getServiceContext().setLocalInvoker(true);
+```
+
+##### 2.2.1.31 延迟暴露  
+1.特性说明  
+如果你的服务需要预热时间,比如初始化缓存、等待相关资源就位,可以使用`delay`进行延迟暴露;<font color="#00FF00">延迟的时间是从Spring初始化完成后开始计算</font>  
+
+2.使用场景  
+当服务完全配置并准备好向外界暴露时才会触发服务的暴露,保证服务在准备就绪时暴露,提高了服务系统可靠性  
+
+3.使用方式  
+```xml
+<!-- 延迟5s暴露服务 -->
+<dubbo:service delay="5000" />
+```
+
+4.Spring 2.x初始化死锁问题  
+4.1 触发条件  
+在Spring解析到`<dubbo:service />`时,就已经向外暴露了服务,而Spring还在接着初始化其它Bean;如果这时有请求进来,并且服务的实现类里有调用`applicationContext.getBean()`的用法就会触发死锁  
+
+4.2 请求线程导致Bean调用`applicationContext.getBean()`,先同步`singletonObjects`判断Bean是否存在,不存在就同步`beanDefinitionMap`进行初始化,并再次同步`singletonObjects`写入Bean实例缓存  
+
+4.3 而Spring初始化线程,因不需要判断Bean的存在,直接同步`beanDefinitionMap`进行初始化,并同步`singletonObjects`写入Bean实例缓存  
+这样就导致getBean线程,先锁`singletonObjects`,再锁`beanDefinitionMap`,再次锁`singletonObjects`  
+而Spring初始化线程,先锁`beanDefinitionMap`再锁`singletonObjects`,反向锁导致线程死锁,不能提供服务,启动不了  
+
+5.避免方法  
+5.1 强烈建议不要在服务的实现类中有`applicationContext.getBean()`的调用,全部采用IoC注入的方式使用Spring的Bean
+5.2 如果实在要调`getBean()`,可以将Dubbo的配置放在Spring的最后加载
+5.3 如果不想依赖配置顺序,可以使用`<dubbo:provider delay="-1" />`,使Dubbo在Spring容器初始化完后,再暴露服务
+这个配置是dubbo老版本才会生效,<font color="#FF00FF">新版本默认dubbo对外暴露的服务会在spring容器初始化完成后才会暴露</font>  
+5.4 如果大量使用`getBean()`,相当于已经把Spring退化为工厂模式在用,可以将Dubbo的服务隔离单独的Spring容器  
+5.5 基于Spring的`ContextRefreshedEvent`事件触发暴露  
+
+#### 2.2.2 可观测性  
+**目录:**  
+2.2.2.1 可观测性介绍  
+2.2.2.2 Metrics  
+
+##### 2.2.2.1 可观测性介绍
+1.什么是可观测性  
+可观测性是从外部观察正在运行的系统的内部状态的能力.它由日志记录、指标和跟踪三大支柱组成  
+
+2.Dubbo可观测性  
+为了深入观察Dubbo内部的运行状,Dubbo可观测性包括许多附加功能,帮助您在将应用程序推向生产时监视和管理应用程序.您可以选择使用HTTP端点或JMX来管理和监视应用程序.审计、运行状况和度量收集也可以自动应用于应用程序
+
+##### 2.2.2.2 Metrics  
+1.概述  
+之前在K8S、skywalking等笔记中也有提到过Metrics,它就是一种度量/监控相关的概念  
+Dubbo Metrics的总体设计请参考 3.其他=>提案=>指标埋点  
+*提示:本节的示例可以参考dubbo-sample->4-governance->dubbo-samples-metrics-spring-boot*  
+本节完整配置手册见2.3 参考手册=>配置说明=>配置项手册  
+
+2.引入依赖  
+```xml
+<dependency>
+    <groupId>org.apache.dubbo</groupId>
+    <artifactId>dubbo-spring-boot-observability-starter</artifactId>
+    <version>3.2.0</version>
+</dependency>
+```
+
+3.代码结构与工作流程  
+
+
 
 
 ## 3.其他  
