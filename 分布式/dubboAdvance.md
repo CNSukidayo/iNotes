@@ -1,1595 +1,86 @@
 # 目录  
-1.任务  
-2.SDK手册  
-3.其他  
+1.快速入门  
+2.高级特性和用法  
+3.参考手册  
+4.升级和兼容  
+5.错误码  
 
 
-
-## 1.任务  
+## 1.快速入门  
 **目录:**  
-1.1 开发任务  
-1.2 部署服务  
-1.3 流量管理  
-1.4 微服务生态  
-1.5 观测服务  
-1.6 通信协议  
-1.7 限流降级  
-1.8 自定义扩展  
-
-### 1.1 开发任务
-**目录:**  
-1.1.1 发布调用dubbo  
-1.1.2 异步调用  
-1.1.3 版本与分组  
-1.1.4 上下文参数传递  
-1.1.5 泛化调用  
-1.1.6 IDL开发服务  
-
-
-#### 1.1 发布调用dubbo  
-1.编写pom  
-*提示:本次示例基于springboot3.0,本次案例来源于dubbo-sample=>1-basic=>dubbo-samples-spring-boot*  
-```xml
-<!-- registry dependency -->
-<dependency>
-    <groupId>com.alibaba.nacos</groupId>
-    <artifactId>nacos-client</artifactId>
-    <version>${nacos.version}</version>
-</dependency>
-
-<!-- dubbo dependency-->
-<dependency>
-    <groupId>org.apache.dubbo</groupId>
-    <artifactId>dubbo-spring-boot-starter</artifactId>
-    <version>${dubbo.version}</version>
-</dependency>
-
-<dependency>
-    <groupId>org.springframework.boot</groupId>
-    <artifactId>spring-boot-starter</artifactId>
-</dependency>
-```
-
-2.定义服务接口  
-类似于OpenFeign一样需要定义一个服务接口  
-```java
-public interface DemoService {
-    String sayHello(String name);
-}
-```
-
-3.服务接口实现  
-```java
-@DubboService
-public class DemoServiceImpl implements DemoService {
-    @Override
-    public String sayHello(String name) {
-        return "Hello " + name;
-    }
-}
-```
-*提示:这里需要使用@DubboService注解将服务注册到Spring中*  
-
-4.服务消费者  
-```java
-@Component
-public class Task implements CommandLineRunner {
-    @DubboReference
-    private DemoService demoService;
-
-    @Override
-    public void run(String... args) throws Exception {
-        String result = demoService.sayHello("world");
-        System.out.println("Receive result ======> " + result);
-
-        new Thread(()-> {
-            while (true) {
-                try {
-                    Thread.sleep(1000);
-                    System.out.println(new Date() + " Receive result ======> " + demoService.sayHello("world"));
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
-                    Thread.currentThread().interrupt();
-                }
-            }
-        }).start();
-    }
-}
-```
-*提示:通过@DubboReference注解对需要调用的服务进行依赖注入*  
-
-5.编写服务消费者和服务生产者的yml  
-```yml
-dubbo:
-  application:
-    # 这里是服务提供者,如果是服务消费者就使用服务消费者的名称
-    name: dubbo-springboot-demo-provider
-    # 关闭qos
-    qos-enable: false
-  protocol:
-    name: dubbo
-    port: -1
-  registry:
-    # 选择一个合适的注册中心,推荐使用nacos
-    # address: nacos://${nacos.address:192.168.230.128}:8848?username=nacos&password=nacos
-    # address: zookeeper://${zookeeper.address:192.168.230.128}:2181
-```
-
-6.编写服务消费者和服务提供者的启动类  
-```java
-@SpringBootApplication
-@EnableDubbo
-public class ConsumerApplication {
-
-    public static void main(String[] args) {
-        SpringApplication.run(ConsumerApplication.class, args);
-    }
-}
-```
-*提示:不管是服务消费者还是服务提供者,都需要在启动类上标注@EnableDubbo注解*  
-
-7.运行  
-运行成功后在消费者控制台成功打印如下内容  
-![运行成功](resources/dubbo/1.png)  
-同理查看远程nacos的信息  
-服务列表和配置列表两个地方都有了两个微服务的相关信息,并且点击进入服务消费者或者服务生产者的详情会看到当前服务的元数据信息  
-![元数据](resources/dubbo/2.png)  
-
-#### 1.1.2 异步调用
-*提示:本节的示例来自dubbo-sample->2-advanced->dubbo-samples-async-simple-boot*  
-
-1.接口定义  
-```java
-public interface AsyncService {
-    /**
-     * 同步调用方法
-     */
-    String invoke(String param);
-    /**
-     * 异步调用方法
-     */
-    CompletableFuture<String> asyncInvoke(String param);
-}
-```
-
-2.服务实现  
-```java
-@DubboService
-public class AsyncServiceImpl implements AsyncService {
-
-    @Override
-    public String invoke(String param) {
-        try {
-            long time = ThreadLocalRandom.current().nextLong(1000);
-            Thread.sleep(time);
-            StringBuilder s = new StringBuilder();
-            s.append("AsyncService invoke param:").append(param).append(",sleep:").append(time);
-            return s.toString();
-        }
-        catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
-        return null;
-    }
-
-    @Override
-    public CompletableFuture<String> asyncInvoke(String param) {
-        // 建议为supplyAsync提供自定义线程池
-        return CompletableFuture.supplyAsync(() -> {
-            try {
-                // Do something
-                long time = ThreadLocalRandom.current().nextLong(1000);
-                Thread.sleep(time);
-                StringBuilder s = new StringBuilder();
-                s.append("AsyncService asyncInvoke param:").append(param).append(",sleep:").append(time);
-                return s.toString();
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-            return null;
-        });
-    }
-}
-```
-通过`return CompletableFuture.supplyAsync()`,业务执行已从Dubbo线程切换到业务线程,避免了对Dubbo线程池的阻塞  
-**理解:** 这句话是什么意思?每当来一个请求Dubbo都会起一个线程去处理,假设该线程要执行的业务方法时长非常长,则该线程会一直阻塞处理不被利用,而现在dubbo调用`asyncInvoke()`方法,该方法快速返回一个CompletableFuture接口不阻塞,dubbo拿到该返回对象就会自动使用业务线程来执行该方法,dubbo线程会立即得到释放,等到执行完毕之后再将结果返回出去.  
-
-3.消费端异步  
-```java
-@DubboReference
-private AsyncService asyncService;
-
-@Override
-public void run(String... args) throws Exception {
-    //调用异步接口
-    CompletableFuture<String> future1 = asyncService.asyncInvoke("async call request1");
-    future1.whenComplete((v, t) -> {
-        if (t != null) {
-            t.printStackTrace();
-        } else {
-            System.out.println("AsyncTask Response-1: " + v);
-        }
-    });
-    //两次调用并非顺序返回
-    CompletableFuture<String> future2 = asyncService.asyncInvoke("async call request2");
-    future2.whenComplete((v, t) -> {
-        if (t != null) {
-            t.printStackTrace();
-        } else {
-            System.out.println("AsyncTask Response-2: " + v);
-        }
-    });
-    //consumer异步调用
-    CompletableFuture<String> future3 =  CompletableFuture.supplyAsync(() -> {
-        return asyncService.invoke("invoke call request3");
-    });
-    future3.whenComplete((v, t) -> {
-        if (t != null) {
-            t.printStackTrace();
-        } else {
-            System.out.println("AsyncTask Response-3: " + v);
-        }
-    });
-
-    System.out.println("AsyncTask Executed before response return.");
-}
-```
-*提示:这里的whenComplete()方法并不会阻塞,这样就可以做到同时发送多个远程调用,而不是等一个远程调用处理完毕之后再处理一个远程调用;这里的三个远程全是异步的*  
-
-4.使用场景  
-* 对于服务提供者来说,如果接口比较耗时,避免dubbo线程被阻塞,可以使用异步将线程切换到业务线程
-* 对于服务消费者来说,要一次性调用多个dubbo接口,并且这些接口在时间上没有严格的顺序就可以使用异步调用
-  最终组装数据的时候可以同步等待所有接口返回完毕后再组装数据,这个例子可以看之前的尚上优选项目
-
-
-#### 1.1.3 版本与分组  
-在dubbo中接口并不能唯一确定一个服务,<font color="#00FF00">只有接口+分组+版本号才能唯一确定一个服务</font>
-*提示:本节的示例可以参考dubbo-sample->2-advanced->dubbo-samples-group*  
-1.使用场景  
-* 当同一个接口针对不同的业务场景、不同的使用需求或者不同的功能模块等场景,可使用服务分组来区分不同的实现方式.同时,这些不同实现所提供的服务是可并存的,也支持互相调用
-* <font color="#00FF00">当接口实现需要升级又要保留原有实现的情况下,即出现不兼容升级时,我们可以使用不同版本号进行区分</font>
-
-2.接口定义  
-```java
-public interface DevelopService {
-    String invoke(String param);
-}
-```
-
-3.接口实现  
-使用`@DubboService`注解,添加group参数和version参数  
-**接口实现1**  
-```java
-@DubboService(group = "group1",version = "1.0")
-public class DevelopProviderServiceV1 implements DevelopService{
-    @Override
-    public String invoke(String param) {
-        StringBuilder s = new StringBuilder();
-        s.append("ServiceV1 param:").append(param);
-        return s.toString();
-    }
-}
-```
-
-**接口实现2**  
-```java
-@DubboService(group = "group2",version = "2.0")
-public class DevelopProviderServiceV2 implements DevelopService{
-    @Override
-    public String invoke(String param) {
-        StringBuilder s = new StringBuilder();
-        s.append("ServiceV2 param:").append(param);
-        return s.toString();
-    }
-}
-```
-
-4.客户端调用  
-> 使用`@DubboReference`注解,添加group参数和version参数  
-
-```java
-@DubboReference(group = "group1",version = "1.0")
-private DevelopService developService;
-
-@DubboReference(group = "group2",version = "2.0")
-private DevelopService developServiceV2;
-
-@Override
-public void run(String... args) throws Exception {
-    //调用DevelopService的group1分组实现
-    System.out.println("Dubbo Remote Return ======> " + developService.invoke("1"));
-    //调用DevelopService的group2分组实现
-    System.out.println("Dubbo Remote Return ======> " + developServiceV2.invoke("2"));
-}
-```
-
-4.小总结  
-某个服务接口需要通过<font color="#FF00FF">接口+分组+版本号</font>才能唯一确定,这点相较于OpenFeign优势就非常大了  
-
-
-#### 1.1.4 上下文参数传递
-*提示:本节的示例可以参考dubbo-sample->2-advanced->dubbo-samples-async-simple-boot*  
-*提示:本章的知识在2.2 高级特性和用法=>2.2.1 框架与服务=>2.2.1.14 调用链路传递隐式参数中还有详细的介绍*  
-
-在Dubbo3中,RpcContext被拆分为四大模块,它们分别担任不同的职责:  
-* ServiceContext:在Dubbo内部使用,用于传递调用链路上的参数信息,如invoker对象等
-* ClientAttachment:在Client端使用,往ClientAttachment中写入的参数将被传递到Server端
-* ServerAttachment:在Server端使用,从ServerAttachment中读取的参数是从Client中传递过来的
-  ServerAttachment和ClientAttachment是对应的
-* ServerContext:在Client端和Server端使用,用于从Server端回传Client端使用,Server端写入到ServerContext的参数在调用结束后可以在Client端的ServerContext获取到
-
-流程图大致如下  
-![流程图](resources/dubbo/3.png)  
-
-
-1.接口定义  
-*提示:setAttachment设置的KV对,在完成下面一次远程调用会被清空,即多次远程调用要多次设置*  
-```java
-public interface ContextService {
-    String invoke(String param);
-}
-```
-
-2.服务实现  
-```java
-@DubboService
-public class ContextServiceImpl implements ContextService{
-    @Override
-    public String invoke(String param) {
-        //ServerAttachment接收客户端传递过来的参数
-        Map<String, Object> serverAttachments = RpcContext.getServerAttachment().getObjectAttachments();
-        System.out.println("ContextService serverAttachments:" + JSON.toJSONString(serverAttachments));
-        //往客户端传递参数
-        RpcContext.getServerContext().setAttachment("serverKey","serverValue");
-        StringBuilder s = new StringBuilder();
-        s.append("ContextService param:").append(param);
-        return s.toString();
-    }
-}
-```
-`setAttachment`方法是设置一个KV键值对  
-其中path、group、version、dubbo、token、timeout这几个字段是保留字段,不可以设置  
-
-3.接口调用  
-```java
-//往服务端传递参数
-RpcContext.getClientAttachment().setAttachment("clientKey1","clientValue1");
-String res = contextService.invoke("context1");
-//接收传递回来参数
-Map<String, Object> clientAttachment = RpcContext.getServerContext().getObjectAttachments();
-System.out.println("ContextTask clientAttachment:" + JSON.toJSONString(clientAttachment));
-System.out.println("ContextService Return : " + res);
-```
-
-#### 1.1.5 泛化调用
-泛化调用:是指调用方没有服务方提供的API(SDK)的情况下,对服务方进行调用,并且可以正常拿到调用结果  
-之前的实验结果有一个前提是服务消费者拥有<font color="#00FF00">定义的接口</font>并且使用`@DubboReference`直接依赖注入了该接口,假设现在服务消费者没有该接口的定义,则如何调用目标服务并拿到返回值便是泛化调用  
-
-*提示:本节示例参考自2-advanced=>dubbo-samples-generic=>dubbo-samples-generic-call*  
-
-1.接口定义  
-```java
-public interface DevelopService {
-    String invoke(String param);
-}
-```
-
-2.接口实现1  
-```java
-@DubboService(group = "group1",version = "1.0")
-public class DevelopProviderServiceV1 implements DevelopService{
-    @Override
-    public String invoke(String param) {
-        StringBuilder s = new StringBuilder();
-        s.append("ServiceV1 param:").append(param);
-        return s.toString();
-    }
-}
-```
-
-3.消费者调用  
-```java
-@Component
-public class GenericTask implements CommandLineRunner {
-
-    @Override
-    public void run(String... args) throws Exception {
-        GenericService genericService = buildGenericService("org.apache.dubbo.samples.develop.DevelopService","group2","2.0");
-        //传入需要调用的方法,参数类型列表,参数列表
-        Object result = genericService.$invoke("invoke", new String[]{"java.lang.String"}, new Object[]{"g1"});
-        System.out.println("GenericTask Response: " + JSON.toJSONString(result));
-    }
-
-    private GenericService buildGenericService(String interfaceClass, String group, String version) {
-        ReferenceConfig<GenericService> reference = new ReferenceConfig<>();
-        reference.setInterface(interfaceClass);
-        reference.setVersion(version);
-        //开启泛化调用
-        reference.setGeneric("true");
-        reference.setTimeout(30000);
-        reference.setGroup(group);
-        ReferenceCache cache = SimpleReferenceCache.getCache();
-        try {
-            return cache.get(reference);
-        } catch (Exception e) {
-            throw new RuntimeException(e.getMessage());
-        }
-    }
-}
-```
-
-4.通过Spring使用泛化调用  
-4.1 消费者在原有的`dubbo:reference`标签加上`generic=true`的属性  
-```xml
- <dubbo:reference id="helloService" generic = "true" interface="org.apache.dubbo.samples.generic.call.api.HelloService"/>
-```
-
-4.2 获取Bean容器,通过Bean容器拿到`GenericService`实例  
-
-4.3 调用`$invoke`方法获取结果  
-```java
-private static GenericService genericService;
-
-public static void main(String[] args) throws Exception {
-	ClassPathXmlApplicationContext context = new ClassPathXmlApplicationContext("spring/generic-impl-consumer.xml");
-	context.start();
-	//服务对应bean的名字由xml标签的id决定
-	genericService = context.getBean("helloService");
-	//获得结果
-	Object result = genericService.$invoke("sayHello", new String[]{"java.lang.String"}, new Object[]{"world"});
-}
-```
-
-5.Protobuf对象泛化调用  
-一般泛化调用只能用于生成的服务参数为POJO的情况,而GoogleProtobuf的对象是基于Builder生成的非正常POJO,可以通过protobuf-json泛化调用  
-
-5.1 通过Spring对Google Protobuf对象泛化调用  
-```xml
-<dubbo:reference id="barService" interface="com.foo.BarService" generic="protobuf-json" />
-```
-
-5.2 在Java代码获取barService并开始泛化调用  
-```java
-GenericService barService = (GenericService) applicationContext.getBean("barService");
-Object result = barService.$invoke("sayHello",new String[]{"org.apache.dubbo.protobuf.GooglePbBasic$CDubboGooglePBRequestType"}, new Object[]{"{\"double\":0.0,\"float\":0.0,\"bytesType\":\"Base64String\",\"int32\":0}"});
-```
-
-5.3 通过API方式对Google Protobuf对象泛化调用  
-没什么用,不介绍了  
-
-
-
-
-
-#### 1.1.6 IDL开发服务
-Dubbo开发的基本流程是:用户定义RPC服务,通过约定的配置方式将RPC声明为dubbo服务,然后就可以基于服务API进行变成了,<font color="#00FF00">对服务提供者来说是提供RPC服务的具体实现,而对服务消费者来说则是使用特定数据发起服务调用</font>.  
-我们之前使用的特定数据实际上是依赖注入的`@DubboReference`接口,<font color="#FF00FF">IDL的思想是为了具备通用性,为了能够实现跨语言调用而提出的一种通用的接口定义格式</font>  
-*提示:本节内容参考自3-extensions=>protocol=>dubbo-samples-triple*  
-
-1.定义服务  
-Dubbo3推荐使用IDL定义跨语言服务  
-```proto
-syntax = "proto3";
-
-option java_multiple_files = true;
-option java_package = "org.apache.dubbo.demo";
-option java_outer_classname = "DemoServiceProto";
-option objc_class_prefix = "DEMOSRV";
-
-package demoservice;
-
-// The demo service definition.
-service DemoService {
-  rpc SayHello (HelloRequest) returns (HelloReply) {}
-}
-
-// The request message containing the user's name.
-message HelloRequest {
-  string name = 1;
-}
-
-// The response message containing the greetings
-message HelloReply {
-  string message = 1;
-}
-```
-以上是使用IDL定义服务的一个简单示例(它的作用就类似我们之前定义的Java接口,但为了通用性别的语言肯定没有Java接口这种说法,<font color="#FF00FF">所以就高度抽象出一种语言无关的接口定义,这就是IDL</font>),我们可以把它命名为DemoService.proto,即IDL定义的服务文件名以.proto结尾;<font color="#00FF00">那么这个文件就可以做到一次编写到处使用了</font>  
-
-proto文件中定义了RPC服务名称DemoService与方法签名S`ayHello (HelloRequest) returns (HelloReply) {}`,同时还定义了方法的入参结构体、出参结构体HelloRequest与HelloReply.IDL格式的服务依赖<font color="#00FF00">Protobuf编译器</font>,用来生成可以被用户调用的客户端与服务端编程API,<font color="#DDDD00">Dubbo在原生Protobuf Compiler的基础上提供了适配多种语言的特有插件</font>,框架特有的API与编程模型  
-> 使用Dubbo3 IDL定义的服务只允许一个入参与出参,这种形式的服务签名有两个优势,一是对多语言实现更友好,二是可以保证服务的向后兼容性,依赖于Protobuf序列化的兼容性,我们可以很容易的调整传输的数据结构如增、删字段等,完全不用担心接口的兼容性
-
-2.编译服务  
-根据当前采用的比编程语言,配置相应的Protobuf插件,编译后将产生生产语言相关的服务定义stub  
-Java compiler配置参考(本质是通过Maven插件来实现的)  
-```xml
-<plugin>
-    <groupId>org.xolstice.maven.plugins</groupId>
-    <artifactId>protobuf-maven-plugin</artifactId>
-    <version>0.6.1</version>
-    <configuration>
-        <protocArtifact>com.google.protobuf:protoc:${protoc.version}:exe:${os.detected.classifier}
-        </protocArtifact>
-        <pluginId>grpc-java</pluginId>
-        <pluginArtifact>io.grpc:protoc-gen-grpc-java:${grpc.version}:exe:${os.detected.classifier}
-        </pluginArtifact>
-        <protocPlugins>
-            <protocPlugin>
-                <id>dubbo</id>
-                <groupId>org.apache.dubbo</groupId>
-                <artifactId>dubbo-compiler</artifactId>
-                <version>3.0.10</version>
-                <mainClass>org.apache.dubbo.gen.tri.Dubbo3TripleGenerator</mainClass>
-            </protocPlugin>
-        </protocPlugins>
-    </configuration>
-    <executions>
-        <execution>
-            <goals>
-                <goal>compile</goal>
-                <goal>test-compile</goal>
-                <goal>compile-custom</goal>
-                <goal>test-compile-custom</goal>
-            </goals>
-        </execution>
-    </executions>
-</plugin>
-```
-
-Java语言通过Protobuf生成的stub如下,实际上就是生成之前我们手动定义的那个Java接口  
-```java
-@javax.annotation.Generated(
-value = "by Dubbo generator",
-comments = "Source: DemoService.proto")
-public interface DemoService {
-    static final String JAVA_SERVICE_NAME = "org.apache.dubbo.demo.DemoService";
-    static final String SERVICE_NAME = "demoservice.DemoService";
-
-    org.apache.dubbo.demo.HelloReply sayHello(org.apache.dubbo.demo.HelloRequest request);
-
-    CompletableFuture<org.apache.dubbo.demo.HelloReply> sayHelloAsync(org.apache.dubbo.demo.HelloRequest request);
-}
-```
-
-Go语言生成的stub如下  
-```go
-func _DUBBO_Greeter_SayHello_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(HelloRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	base := srv.(dgrpc.Dubbo3GrpcService)
-	args := []interface{}{}
-	args = append(args, in)
-	invo := invocation.NewRPCInvocation("SayHello", args, nil)
-	if interceptor == nil {
-		result := base.GetProxyImpl().Invoke(ctx, invo)
-		return result.Result(), result.Error()
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: "/main.Greeter/SayHello",
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		result := base.GetProxyImpl().Invoke(context.Background(), invo)
-		return result.Result(), result.Error()
-	}
-	return interceptor(ctx, in, info, handler)
-}
-```
-
-3.配置并加载服务  
-服务提供者负责提供具体的dubbo服务实现,也就是遵循RPC签名所约束的格式,去实现具体的业务逻辑代码.在实现服务之后,<font color="#00FF00">要将服务实现注册为标准的Dubbo服务</font>,之后Dubbo框架就能根据接收到的请求转发给服务实现,执行方法,并将结果返回.  
-消费端的配置会更简单一些,只需要声明IDL定义的服务为标准的Dubbo服务,框架就可以帮助开发者生成相应的proxy,开发者将完全<font color="#FF00FF">面向proxy编程</font>,基本上Dubbo所有语言的实现都保证了proxy依据IDL服务定义暴露标准化的接口  
-
-Java生产者端代码示例  
-```java
-public class DemoServiceImpl implements DemoService {
-    private static final Logger logger = LoggerFactory.getLogger(DemoServiceImpl.class);
-
-    @Override
-    public HelloReply sayHello(HelloRequest request) {
-        logger.info("Hello " + request.getName() + ", request from consumer: " + RpcContext.getContext().getRemoteAddress());
-        return HelloReply.newBuilder()
-    .setMessage("Hello " + request.getName() + ", response from provider: "
-            + RpcContext.getContext().getLocalAddress())
-    .build();
-    }
-
-    @Override
-    public CompletableFuture<HelloReply> sayHelloAsync(HelloRequest request) {
-        return CompletableFuture.completedFuture(sayHello(request));
-    }
-}
-```
-
-4.服务生产者注册服务(以Spring XML为例)  
-```xml
-<bean id="demoServiceImpl" class="org.apache.dubbo.demo.provider.DemoServiceImpl"/>
-<dubbo:service serialization="protobuf" interface="org.apache.dubbo.demo.DemoService" ref="demoServiceImpl"/>
-```
-
-5.服务消费者引用服务  
-```xml
-<dubbo:reference scope="remote" id="demoService" check="false" interface="org.apache.dubbo.demo.DemoService"/>
-```
-
-6.服务消费者使用服务proxy  
-```java
-public void callService() throws Exception {
-    // do something...
-    DemoService demoService = context.getBean("demoService", DemoService.class);
-    HelloRequest request = HelloRequest.newBuilder().setName("Hello").build();
-    HelloReply reply = demoService.sayHello(request);
-    System.out.println("result: " + reply.getMessage());
-}
-```
-
-### 1.2 部署服务  
-**目录:**  
-1.2.1 部署到虚拟机  
-1.2.2 部署到docker  
-1.2.3 部署到K8S+docker  
-1.2.4 部署到K8S+Containerd  
-
-#### 1.2.2 部署到docker
-1.工作原理  
-![工作原理](resources/dubbo/4.png)  
-
-2.详情  
-详情见:[https://cn.dubbo.apache.org/zh-cn/overview/tasks/deploy/deploy-on-docker/](https://cn.dubbo.apache.org/zh-cn/overview/tasks/deploy/deploy-on-docker/)  
-
-
-### 1.3 流量管理
-**目录:**  
-1.3.1 流量管理基本介绍  
-1.3.2 调整超时时间  
-1.3.3 服务重试  
-1.3.4 访问日志  
-1.3.5 同区域优先  
-1.3.6 环境隔离  
-1.3.7 参数路由  
-1.3.8 权重比例  
-1.3.9 服务降级  
-1.3.10 固定机器导流  
-
-
-#### 1.3.1 流量管理基本介绍
-1.实验环境  
-本次实验环境基于一个简单的线上商城微服务系统演示了Dubbo的流量管控能力  
-线上商城架构图如下  
-![线上商城](resources/dubbo/5.png)  
-系统由5个微服务应用组成:  
-* Frontend商城主页:作为与用户交互的web界面,通过调用User、Detail、Order模块为用户提供服务
-* User用户服务:负责用户数据管理、身份校验等
-* Order订单服务:提供订单创建、订单查询等服务,调用`Detail`服务校验商品库存等信息
-* Detail商品详情服务:展示商品详情信息,调用`Comment`服务展示用户对商品的评论记录
-* Comment评论服务:管理用户对商品的评论数据
-
-2.部署商城系统  
-本节的代码参考自:dubbo-sample=>10-task=>dubbo-samples-shop  
-
-3.完整部署的架构图  
-![完整部署的架构图](resources/dubbo/6.png)  
-`Order`订单服务有两个版本V1和V2,V2是订单服务优化后发布的新版本
-* 版本v1只是简单的创建订单,不展示订单详情
-* 版本v2在订单创建成功后会展示订单的收货地址详情
-
-`Detail`和`Comment`服务也分别有两个版本v1和v2,我们通过多个版本来演示流量导流后的效果  
-* 版本v1默认为所有请求提供服务
-* 版本v2模拟被部署在<font color="#00FF00">特定的区域的服务</font>,因此v2实例会带有特定的标签
-  关于标签详情见dubboBasis笔记 2.dubbo功能=>2.5 流量管理=>2.5.2 标签路由
-
-4.支撑环境  
-除了上述的微服务外,示例还拉起了nacos注册中心、Dubbo Admin控制台和Skywalking链路追踪  
-
-#### 1.3.2 调整超时时间
-1.需求解释  
-商城项目通过org.apache.dubbo.samples.UserService提供用户信息管理服务,访问 http://localhost:8080/ 打开商城并输入任意账号密码,点击Login即可以正常登录到系统  
-![正常登录](resources/dubbo/7.png)  
-有些场景下,User服务的运行速度会变慢,比如存储用户数据的数据库负载过高导致查询变慢,这时就会出现UserService访问超时的情况,导致登录失败  
-![登陆超时](resources/dubbo/8.png)  
-
-2.动态调整超时时间  
-为了解决突发的登录超时问题,我们只需要<font color="#00FF00">适当增加UserService服务调用的等待时间即可</font>  
-
-3.1 打开Dubbo Admin控制台  
-3.2 在左侧导航栏选择[服务治理]>[动态配置]  
-3.3 点击"创建",输入服务`org.apache.dubbo.samples.UserService`和新的超时时间如2000即可  
-![超时](resources/dubbo/9.png)  
-
-4.规则解释  
-```yml
-configVersion: v3.0
-enabled: true
-configs:
-    # 针对服务提供者
-  - side: provider
-    parameters:
-      timeout: 2000
-```
-从`UserService`<font color="#00FF00">服务提供者视角</font>,将超时时间总体调整为2S,超时是针对服务提供者的  
-`side: provider`配置会将规则发送到服务提供方实例,所有UserService服务实例会基于新的timeout值进行重新发布,并通过注册中心通知给所有消费方  
-如果要基于服务粒度,<font color="#00FF00">则需要使用之前提到的scope: service作用域</font>  
-
-#### 1.3.3 服务重试  
-1.实验背景  
-现在Frontend这个微服务需要访问User这个微服务,获取用户的个人信息;但User这个微服务本身可能存在网络不稳定等问题导致Frontend微服务获取用户信息的时候超时  
-此时就可以通过设置Frontend微服务的超时次数从而使得数据最终能够展示出来  
-
-2.1 打开Dubbo Admin控制台  
-2.2 点击左侧导航栏选择**服务治理 -> 动态配置**  
-2.3 点击创建,输入服务`org.apache.dubbo.samples.UserService`和失败重试次数即可  
-
-3.规则详解  
-规则key:`org.apache.dubbo.samples.UserService`  
-规则体:  
-```yml
-configVersion: v3.0
-enabled: true
-configs:
-    # 规则针对服务消费者
-  - side: consumer
-    parameters:
-      # 设置重试次数为5次
-      retries: 5
-```
-
-关于这里的key再说一下,dubbo中key就表明当前规则要对哪个对象生效,同时它需要配合scope使用  
-<font color="#00FF00">当scope:service时,</font><font color="#FF00FF">key应该是该规则生效的服务名(Service)比如org.apache.dubbo.samples.CommentService,表明当前规则只对所有微服务的接口生效</font>  
-<font color="#00FF00">当scope:application时,</font><font color="#FF00FF">则key应该是该规则应该生效的应用名称,比如说my-dubbo-service;则表明该规则对所有my-dubbo-service微服务下的所有接口生效</font>  
-
-#### 1.3.4 访问日志  
-1.实验背景  
-商城的所有用户服务都由`User`应用的`UserService`提供,通过这个任务,我们为`User`应用的某一台或几台机器<font color="#00FF00">开启访问日志</font>,以便观察用户服务的整体访问情况  
-
-2.动态开启访问日志  
-通过dubbo的`accesslog`标记识别访问日志的开启状态   
-
-3.1 打开Dubbo Admin控制台  
-3.2 点击左侧导航栏选择**服务治理 -> 动态配置**  
-3.3 点击创建,输入应用名`shop-user`并勾选开启访问日志  
-
-4.再次登陆页面,查看任意一台User实例机器(物理机器),可以看到如下格式的访问日志  
-```shell
-[2022-12-30 12:36:31.15900] -> [2022-12-30 12:36:31.16000] 192.168.0.103:60943 -> 192.168.0.103:20884 - org.apache.dubbo.samples.UserService login(java.lang.String,java.lang.String) ["test",""], dubbo version: 3.2.0-beta.4-SNAPSHOT, current host: 192.168.0.103
-[2022-12-30 12:36:33.95900] -> [2022-12-30 12:36:33.95900] 192.168.0.103:60943 -> 192.168.0.103:20884 - org.apache.dubbo.samples.UserService getInfo(java.lang.String) ["test"], dubbo version: 3.2.0-beta.4-SNAPSHOT, current host: 192.168.0.103
-[2022-12-30 12:36:31.93500] -> [2022-12-30 12:36:34.93600] 192.168.0.103:60943 -> 192.168.0.103:20884 - org.apache.dubbo.samples.UserService getInfo(java.lang.String) ["test"], dubbo version: 3.2.0-beta.4-SNAPSHOT, current host: 192.168.0.103
-```  
-
-5.规则详解  
-规则key:`shop-user`(表明为所有shop-user应用开启)  
-规则体:  
-```yml
-configVersion: v3.0
-enabled: true
-configs:
-  - side: provider
-    parameters:
-      accesslog: true
-```
-
-accesslog的有效值如下:
-* `true`或`default`时,访问日志将随业务logger一同输出,此时可以在应用内提前配置 `dubbo.accesslog`appender调整日志的输出位置和格式
-* 具体的文件路径如`/home/admin/demo/dubbo-access.log`这样访问日志将打印到指定的文件内容
-
-在Admin界面,还可以单独指定开启某一台机器的访问日志,以方便精准排查问题,对应的后台规则如下  
-```yml
-configVersion: v3.0
-enabled: true
-configs:
-  - match
-     address:
-       oneof:
-        - wildcard: "{ip}:*"
-    side: provider
-    parameters:
-      accesslog: true
-```
-
-#### 1.3.5 同区域优先  
-1.实验背景  
-当应用部署在多个不同机房/区域的时候,<font color="#00FF00">应用之间相互调用就会出现跨区域的情况</font>,而跨区域调用会增加响应时间,影响用户体验.同机房/区域优先是指应用调用服务时,<font color="#00FF00">优先调用同机房/区域的服务提供者</font>,避免了跨区域带来的网络延时,从而减少了调用的响应时间.  
-
-2.任务详情  
-之前说过`Detail`和`Comment`这两个服务的V1和V2版本分别部署在不同的区域,假设Detail和Comment服务的V1版本都部署在Beijing,Detail和Comment服务都部署在Hangzhou,为了保证服务调用的响应速度,<font color="#FF00FF">我们需要增加同区域优先的调用规则</font>  
-只有当同区域内的服务出现故障不可用的时候才允许跨区域调用  
-![同区域调用](resources/dubbo/10.png)  
-
-3.1 登陆Dubbo Admin控制台  
-3.2 在左侧导航栏选择**服务治理->条件路由**  
-3.3 点击创建按钮,填入要启用同区域优先的服务如`org.apache.dubbo.samples.CommentService`与区域标识如`region`即可  
-
-4.规则详解  
-规则key:`org.apache.dubbo.samples.CommentService`  
-```yml
-configVersion: v3.0
-enabled: true
-force: false
-key: org.apache.dubbo.samples.CommentService
-conditions:
-  - '=> region = $region'
-```
-*提示:这里的表达式是条件路由表达式*  
-
-这里使用的是条件路由;`region`为我们示例中的区域标识,<font color="#00FF00">会自动的识别当前发起调用的一方所在的区域值</font>,假设请求到达hangzhou区域部署的Detail后,从Detail发出的请求自动筛选URL地址中带有region=hangzhou标识的Comment地址(`$region 代表引用当前服务的区域`),<font color="#00FF00">如果发现有可用的地址子集则将请求发出,如果没有匹配条件的地址,则随机发往任意可用区地址</font>
-
-*提示:`force: false`表示当同区域无有效地址时,可以跨区域调用*  
-
-
-#### 1.3.6 环境隔离  
-1.实验背景  
-无论是在日常开发测试环境还是在预发生产环境,我们经常会遇到流量隔离环境的需求.  
-利用dubbo提供的标签路由能力,可以非常灵活的实现流量隔离能力,可以单独为集群中某一个或多个应用划分隔离环境,也可以为整个微服务集群划分隔离环境,可以在部署静态的标记隔离环境,也可以在运行态通过规则动态的隔离出一部分机器环境  
-
-2.任务详情  
-为商城建立一套完整的线上灰度验证环境,灰度环境和线上环境<font color="#00FF00">共享一套物理集群</font>,需要我们通过dubbo标签路由从逻辑上完全隔离出一套环境,做到灰度流量和线上流量互不干扰  
-![任务](resources/dubbo/11.png)  
-
-3.1 登陆Dubbo Admin控制台  
-3.2 在左侧导航栏选择**服务治理->标签路由**  
-3.3 点击创建,输入`shop-detail`和流量隔离条件保存即可;同理为`shop-comment`、`shop-order`创建相同的隔离规则  
-
-4.规则详解  
-我们需要通过Admin为`shop-detail、shop-comment、shop-order、shop-user`四个应用分别设置标签归组规则,以`shop-detail`为例  
-规则key:`shop-detail`  
-规则体:  
-```yml
-configVersion: v3.0
-force: true
-enabled: true
-key: shop-detail
-tags:
-  - name: gray
-    match:
-      - key: env
-        value:
-          exact: gray
-```
-其中,`name`为灰度环境的流量匹配条件,只有请求上下文中带有`dubbo.tag=gray`的流量才会被转发到隔离环境地址子集.请求上下文可通过`RpcContext.getClientAttachment().setAttachment("dubbo.tag", "gray")`传递  
-`match`指定了地址子集筛选条件,示例中我们匹配了所有地址URL中带有env=gray标签的地址列表,也就是说`shop-detail`服务发起的请求匹配的<font color="#FF00FF">地址子集</font><font color="#FF00FF">地址子集</font>也只能是gray(商城示例中v2版本部署的实例都带已经被打上这个标签)
-
-*注意:这一套规则适用于集群中所有对应的微服务,这里的示例已经为集群中某些节点打上了gray标签,至于如何给某个具体的机器打标签,详情见:dubboBasis=>2.5 流量管理=>2.5.2 标签路由*  
-
-`force`指定了是否允许流量跳出灰度隔离环境,这决定了某个服务发现灰度隔离环境没有可用地址时的行为,默认值为false表示会fallback到不属于任何隔离环境(不带标签)的普通地址集.示例中设置`froce: true`表示当灰度环境地址子集为空时,服务调用失败(No provider exception)  
-
-#### 1.3.7 参数路由  
-1.实验背景  
-根据请求参数值转发流量,例如在微服务实践中,根据参数(如用户ID)路由流量,将一部分用户请求转发到最新发布的产品版本  
-
-2.任务详情  
-商城系统新增了VIP用户服务,现在商城有两类用户:普通用户和VIP用户,其中VIP用户可以看到比普通用户更低的商品价格  
-我们以VIP用户dubbo登陆系统,在部署的实例中只有`detail V2`版本才能识别VIP用户并提供特价服务,因此我们要确保`dubbo`用户始终访问`detail V2`从而享受低价的商品  
-![detail](resources/dubbo/12.png)  
-*提示:现在将要为`detail V2`微服务的`DetailService`添加参数路由规则,如果用户参数是`dubbo`就转发到V2版本的服务*  
-
-3.1 打开Dubbo Admin 控制台
-3.2 在左侧导航栏选择**服务治理->参数路由**  
-3.3 点击创建,输入如下内容
-规则key:`org.apache.dubbo.samples.DetailService`  
-规则体:  
-```yml
-configVersion: v3.0
-key: org.apache.dubbo.samples.DetailService
-scope: service
-force: false
-enabled: true
-priority: 1
-conditions:
-  - method=getItem & arguments[1]=dubbo => detailVersion=v2
-```
-
-3.4 解释  
-* `method=getItem & arguments[1]=dubbo`表示流量规则匹配`DetailService`接口的`getItem`方法调用的第二个参数,当参数值为dubbo时做进一步的地址子集筛选
-* `detailVersion=v2`将过滤出所有带有`detailVersion=v2`标识的URL地址子集(<font color="#00FF00">在示例部署中,我们所有detail v2的实例都已经打上了detailVersion=v2标签</font>)
-
-*提示:本质还是条件路由+标签*  
-*提示:`force: false`表示如果没有detailVersion=v2的地址,则随机访问所有可用地址*  
-条件路由支持很多匹配规则,详情见笔记dubboBasis=>2.dubbo笔记=>2.5流量管理=>2.5.3 条件路由 =>3.1 参数支持  
-
-
-#### 1.3.8 权重比例  
-1.实验背景  
-dubbo提供了基于权重的负载均衡算法,可以实现<font color="#FF00FF">按比例</font>的流量分布;以基于权重的流量调度算法为基础,通过规则动态调整单个或一组机器的权重,可以在运行态改变流量的分布  
-
-2.使用场景  
-* 当一组机器负载过高,通过动态调低权重可以有效减少新请求流入,改善整体成功率的同时给高负载机器提供喘息的机会  
-* 刚刚发布的新版本服务,先通过赋予新版本低权重控制少量比例的流量进入,待验证运行稳定后恢复正常权重,并完全替换老版本
-* 服务多区域部署或者非对等部署时,通过高、低权重的设置,控制不同区域的流量比例
-
-3.任务详情  
-商城系统的`Order`订单服务发布了V2版本,在V2版本中优化了下单体验  
-现在订单服务的V1和V2版本总体上是50%概率接收到流量,说明两者具有相同的默认权重.接下来我们需要引导20%流量到V2版本,80%流量依然访问V1版本  
-![任务详情](resources/dubbo/13.png)  
-
-4.dubbo流量权重规则  
-在调整权重之前,需要知道dubbo实例的权重(weight)都是绝对值,每个实例的默认权重(weight)是100.举个例子,如果一个服务部署有两个实例,实例A权重值为100,实例B权重值为200,则A和B收到的流量分布为1:2  
-
-5.1 打开dubbo Admin控制台  
-5.2 在左侧导航栏选择**服务治理->动态配置**  
-5.3 点击创建,输入如下内容  
-规则key:`org.apache.dubbo.samples.UserService`  
-规则体:  
-```yml
-configVersion: v3.0
-scope: service
-key: org.apache.dubbo.samples.OrderService
-configs:
-  - side: provider
-    match:
-      param:
-        - key: orderVersion
-          value:
-            exact: v2
-    parameters:
-      weight: 25
-```
-
-5.4 解释  
-* side:表明当前规则针对所有提供者生效
-* match:用于进一步匹配某个微服务
-  这里是匹配带有orderVersion=v2标签的微服务实例
-* weight:权重
-  因为v1版本默认的权重是100,这样v2和v1接收到的流量就变成了25:100即1:4比例
-
-
-#### 1.3.9 服务降级  
-1.实验背景  
-服务降级的核心目标是针对<font color="#00FF00">弱依赖</font>服务,在弱依赖不可用或调用失败时,通过返回降级结果尽可能维持功能完整性  
-关于弱依赖和强依赖微服务可以看SpringCloud笔记5.服务降级=>5.1 服务降级基本环境搭建=>4.常见的容错机制  
-服务降级一般针对的都是弱依赖服务  
-
-2.任务详情  
-商城系统的`Detail`商品详情服务会调用`Comment`评论服务展示用户对商品的评论记录,然而评论信息的确实在很多时候并不会影响用户浏览和购买物品,因此<font color="#00FF00">评论服务属于商品详情页面的弱依赖.</font>接下来我们就模拟在大促前夕常用的一个策略,通过服务降级提前关闭商品详情页对于评论服务的调用(返回一些本地预先准备好的历史评论数据),来降低集群整体负载水位并提高响应速度  
-![服务降级](resources/dubbo/14.png)  
-
-3.1 打开Dubbo Admin
-3.2 在左侧导航栏选择**流量管理->服务降级**  
-3.3 点击创建,输入如下内容  
-规则key:`org.apache.dubbo.samples.CommentService`  
-规则体:  
-```yml
-configVersion: v3.0
-enabled: true
-configs:
-  - side: consumer
-    parameters:
-      mock: force:return Mock Comment
-```
-
-等待降级规则推送完成后,刷新商品详情服务`Detail`,发现商品评论信息已经变为我们预先设置"Mock Comment"因为商品详情页的Comment服务调用已经在本地短路,并没有真正的发送到后端服务提供者机器上  
-
-4.其它使用场景  
-由于微服务分布式的特点,不同的服务或应用之间都有相互依赖关系,因此一个服务或应用很难不依赖其他服务而独立部署工作;<font color="#00FF00">但测试环境下并不是所有服务都是随时就绪的状态</font>,这对于微服务强调的服务独立演进是一个很大的障碍,通过服务降级这个功能,我们可以模拟或短路应用对其他服务的依赖,<font color="#FF00FF">从而可以让应用按照自己预期的行为Mock外部服务调用的返回结果</font>  
-关于服务Mock详情见1.5 观测服务=>1.5.1 Admin=>3.服务Mock  
-
-
-#### 1.3.10 固定机器导流  
-1.实验背景  
-由于负载均衡机制,我们无法预测某一次请求具体会落到哪一台机器上,但有时如果能控制请求固定的发往某一台机器在一些场景下会非常有用处,比如当开发者在测试甚至线上环境排查一些复杂问题时,如果能在某一台机器上稳定复现问题,对于最终的问题排查会带来很大的帮助.  
-
-2.任务详情  
-本任务我们将以`User`服务作为示例,将商城中`Frontend`应用对用户详情方法的调用`UserService#getInfo`全部导流到一台固定实例上去  
-![固定导流](resources/dubbo/15.png)  
-
-3.1 打开Dubbo Admin
-3.2 在左侧导航栏选择**服务治理->条件路由**  
-3.3 点击创建,输入如下内容  
-规则key:`org.apache.dubbo.samples.UserService`  
-规则体:  
-```yml
-configVersion: v3.0
-enabled: true
-force: false
-conditions:
-  - 'method=getInfo => host = {your ip address}'
-```
-
-*提示:替换{your ip address}为User实际部署的地址*  
-
-等待规则推送后,多次访问`Frontend`应用,触发用户详情服务调用,可以看到只有规则中指定的实例在持续刷新如下日志:  
-```shell
-Received getInfo request......
-```  
-
-
-### 1.4 微服务生态  
-**目录:**  
-1.4.1 事务管理  
-1.4.2 HTTP网关  
-
-
-#### 1.4.1 事务管理  
-*提示:本节的示例可以参考dubbo-sample->2-advanced->dubbo-samples-seata*  
-
-1.本章就是讲解seata组件  
-关于seata组件详情可以看springcloud笔记=>6.分布式事务  
-
-
-#### 1.4.2 HTTP网关  
-1.背景  
-Apache Dubbo一般会作为后端系统间RPC调用的实现框架,当需要提供HTTP接口给到前端时,会通过一个<font color="#00FF00">胶水层</font>将Dubbo Service包装成HTTP接口,再交付到前端系统  
-
-得益于Apache Dubbo的应用场景优势,Apache APISIX(Apache APISIX是一个开源网关)基于开源项目tengine/mod_dubbo模块为Apache Dubbo服务配备了HTTP网关能力.通过dubbo-proxy插件,可以轻松地将Dubbo Service发布为HTTP服务  
-![网关](resources/dubbo/16.png)  
-*提示:也就是说如果要将Dubbo Service作为流量的入口可以使用`dubbo-proxy`,但实际上并不会这么做,dubbo只要做好它RPC调用的事情就行了,你会把OpenFeign定义的服务生产接口对接到网关吗?实际上不会,只是内部使用而已*  
-
-### 1.5 观测服务  
-**目录:**  
-1.5.1 Admin  
-1.5.2 链路追踪  
-1.5.3 Grafana  
-1.5.4 Prometheus  
-
-
-#### 1.5.1 Admin  
-1.背景  
-首先需要安装Dubbo Admin控制台,安装教程详情见:  //todo  
-
-
-2.功能介绍  
-Admin控制台提供了从开发、测试到流量治理等不同层面的丰富功能,功能总体上可分为以下几类:  
-* 服务状态与依赖关系查询
-* 服务在线测试与文档管理
-* 集群状态监控
-* 实例诊断
-* 流量管控
-
-3.服务Mock  
-服务Mock通过无代码嵌入的方式将Consumer对Provider的请求进行拦截,动态的对Consumer的请求进行放行或返回用户自定义的Mock数据.从而解决在前期开发过程中,Consumer所依赖的Provider未准备就绪时,造成Consumer开发方的阻塞问题  
-
-3.1 在Consumer引入依赖  
-Consumer应用引入服务Mock依赖,添加JVM启动参数`-Denable.dubbo.admin.mock=true`开启服务Mock功能  
-```xml
-<denpendency>
-  <groupId>org.apache.dubbo.extensions</groupId>
-  <artifactId>dubbo-mock-admin</artifactId>
-  <version>${version}</version>
-</denpendency>
-```
-
-3.2 在Dubbo Admin中配置对应的Mock数据  
-![配置Mock数据](resources/dubbo/17.png)  
-*提示:上述配置的服务名肯定是配置的服务提供者*  
-
-4.服务文档管理  
-相当于swagger对于RESTful风格的Web服务的作用,使用该功能可以有效的管理Dubbo接口文档(这个没什么用)  
-![服务文档管理](resources/dubbo/18.png)  
-
-5.流量管理  
-Admin提供了四种路由规则的可视化管理支持,分别是条件路由规则、标签路由规则、动态配置规则、脚本路由规则  
-这部分的内容详情见1.3流量管理这一章  
-
-
-#### 1.5.2 链路追踪  
-1.说明  
-目前Dubbo内置了Micrometer(Micrometer为最流行的可观察性系统在检测客户端上提供了一个统一的门面,相当于日志领域的SLF4J,SpringBoot3内置的可观测门面组件)  
-
-2.Tracing相关概念  
-* Span:基本工作单元.例如,发送RPC是一个新的span,发送对RPC的响应也是如此.Span还有其他数据,例如description、带时间戳的事件、键值注释(标签)、导致它们的跨度的ID和进程ID(通常是IP地址).跨度可以启动和停止,并且它们会跟踪它们的时间信息.创建跨度后,您必须在将来的某个时间点停止它  
-* Trace:一组形成树状结构的跨度.例如,如果您运行分布式大数据存储,则可能会通过请求形成跟踪PUT
-* Annotation/Event:用于及时记录一个事件的存在
-* Tracing context:为了使分布式跟踪工作,跟踪上下文(跟踪标识符、跨度标识符等)必须通过进程(例如通过线程)和网络传播
-* Log correlation:部分跟踪上下文(例如跟踪标识符、跨度标识符)可以填充到给定应用程序的日志中.然后可以将所有日志收集到一个存储中,并通过跟踪ID对它们进行分组.这样就可以从所有按时间顺序排列的服务中获取单个业务操作(跟踪)的所有日志
-* Latency analysis tools:一种收集导出跨度并可视化整个跟踪的工具.允许轻松进行延迟分析
-* Tracer:处理span生命周期的库(Dubbo目前支持OpenTelemetry和Brave)它可以通过Exporter创建、启动、停止和报告Spans到外部系统(如Zipkin、Jagger等)
-* Exporter:将产生的Trace信息通过http等接口上报到外部系统,比如上报到Zipkin
-
-3.将Dubbo接入skywalking全链路监控体系  
-*提示:本节示例来自dubbo-sample=>4-governance=>dubbo-samples-spring-boot-tracing-skywalking*  
-
-3.1 添加依赖  
-```xml
-<!-- 为了能够将Micrometer及相关Metrics依赖添加到classpath;需要添加icrometer Observation的相关以来 -->
-<dependency>
-    <groupId>org.apache.dubbo</groupId>
-    <artifactId>dubbo-metrics-api</artifactId>
-</dependency>
-<!-- 为了将Dubbo Micrometer tracing数据集成到Skywalking,需要添加如下依赖 -->
-<dependency>
-    <groupId>org.apache.skywalking</groupId>
-    <artifactId>apm-toolkit-micrometer-1.10</artifactId>
-</dependency>
-```
-
-3.2 配置ObservationRegistry  
-```java
-@Configuration
-public class ObservationConfiguration {
-    @Bean
-    ApplicationModel applicationModel(ObservationRegistry observationRegistry) {
-        ApplicationModel applicationModel = ApplicationModel.defaultModel();
-        observationRegistry.observationConfig()
-                .observationHandler(new ObservationHandler.FirstMatchingCompositeObservationHandler(
-                        new SkywalkingSenderTracingHandler(), new SkywalkingReceiverTracingHandler(),
-                        new SkywalkingDefaultTracingHandler()
-                ));
-        applicationModel.getBeanFactory().registerBean(observationRegistry);
-        return applicationModel;
-    }
-}
-```
-
-3.3 启动Skywalking OAP  
-就是启动Skywalking  
-
-3.4 启动demo  
-启动Provider和Consumer并确保skywalking-agent参数被正确设置,skywalking-agent确保数据可以被正确的上报到后台系统.  
-* 考虑到skywalking-agent本身也有内置的Dubbo拦截器,为了确保示例能使用Dubbo自带的Micrometer集成,我么你需要删除skywalking-agent自带的拦截器,直接将plugins目录删除即可  
-  个人感觉官网这里的描述可能不太恰当,因为agent有很多的plugins,可以考虑单独删除dubbo相关的plugin
-* 配置Skywalking OAP服务器地址(这一步是教你怎么配置Skywalking Agent,和dubbo本身没什么关系)
-  配置agent.config文件中的collector.backend_service为Skywalking OAP的服务器地址
-
-启动生产者和消费者  
-```shell
-java -javaagent:/path/to/skywalking-agent/skywalking-agent.jar -jar dubbo-samples-spring-boot-tracing-skwalking-provider-1.0-SNAPSHOT.jar
-java -javaagent:/path/to/skywalking-agent/skywalking-agent.jar -jar dubbo-samples-spring-boot-tracing-skwalking-consumer-1.0-SNAPSHOT.jar
-```
-
-3.5 访问Skywalking-UI  
-此时就应该能看到服务的情况了  
-
-### 1.6 通信协议
-1.6.1 开发Dubbo2服务  
-1.6.2 开发gRPC服务  
-1.6.3 开发Triple服务  
-1.6.4 开发WEB应用  
-1.6.5 调用SpringCloud  
-1.6.6 单端口多协议  
-
-#### 1.6.6 单端口多协议  
-
-
-
-### 1.7 限流降级  
-**目录:**  
-1.7.1 Sentinel限流  
-
-
-#### 1.7.1 Sentinel限流  
-1.示例架构说明  
-*提示:本节示例来自dubbo-sample=>4-governance=>dubbo-samples-sentinel*  
-
-2.使用教程  
-没什么特别的,就是介绍sentinel怎么用于dubbo,还不是dubbo控制台  
-
-### 1.8 自定义扩展  
-**目录:**  
-1.8.1 自定义扩展介绍  
-1.8.2 Filter  
-1.8.3 Protocol  
-1.8.4 Registry  
-1.8.5 Router  
-
-#### 1.8.1 自定义扩展介绍  
-1.dubbo扩展设计理念  
-* 平等对待第三方的实现,在Dubbo中,所有内部实现和第三方实现都是平等的,<font color="#00FF00">用户可以基于自身业务需求,替换Dubbo提供的原生实现</font>
-* 每个扩展点只封装一个变化因子,最大化复用.每个扩展点的实现者,往往都<font color="#00FF00">只是关心一件事</font>.如果用户有需求需要进行扩展,那么只需要对其关注的扩展点进行扩展就好,极大的减少用户的工作量
-
-2.基于Java SPI的扩展能力设计  
-*提示:SPI(service provider interface),详情可以参靠:[Java SPI概念](https://blog.csdn.net/qq_52423918/article/details/130968307)*  
-Dubbo中的扩展能力是从JDK标准的SPI扩展点发现机制加强而来,它改进了JDK标准的SPI以下问题:  
-* JDK标准的SPI会一次性实例化扩展点所有实现(饿汉加载)
-* 如果扩展点加载失败,连扩展点的名称都拿不到了.比如:JDK标准的ScriptEngine,通过 getName()获取脚本类型的名称,但如果RubyScriptEngine因为所依赖的jruby.jar不存在,导致RubyScriptEngine类加载失败,这个失败原因被吃掉了,和ruby对应不起来,当用户执行ruby脚本时,会报不支持ruby,而不是真正失败的原因
-
-用户能够基于Dubbo提供的扩展能力,很方便基于自身需求扩展<font color="#00FF00">其他协议、过滤器、路由</font>等  
-* 按需加载:Dubbo是懒汉式加载扩展类
-* 增加扩展类的IOC能力:Dubbo的扩展能力并不仅仅只是发现扩展服务实现类,而是在此基础上更进一步,如果该扩展类的属性依赖其他对象,则Dubbo会自动的完成该<font color="#00FF00">依赖对象的注入功能</font>
-* 增加扩展类的AOP能力:Dubbo扩展能力会自动的发现扩展类的包装类,完成包装类的构造,增强扩展类的功能
-* 具备动态选择扩展实现的能力:Dubbo扩展会基于参数,在运行时动态选择对应的扩展类,提高了Dubbo的扩展能力
-* 可以对扩展实现进行排序:能够基于用户需求,指定扩展实现的执行顺序
-* 提供扩展点的Adaptive能力:该能力可以使的一些扩展类在consumer端生效,一些扩展类在provider端生效
-
-3.扩展点加载流程  
-![扩展点加载流程](resources/dubbo/19.png)  
-
-#### 1.8.2 Filter  
-通过自定义过滤器,可以对返回的结果进行统一的处理、验证等,减少对开发人员的打扰  
-*提示:本节的示例可以参考dubbo-sample->10-task->dubbo-samples-extensibility->dubbo-samples-extensibility-filter-\*(一共有三个模块)*  
-
-1.配置修改  
-修改`dubbo-samples-extensibility-filter-provider`模块的application.properties的nacos地址为本机的nacos地址  
-同理修改`dubbo-samples-extensibility-filter-consumer`模块的nacos地址为本机  
-
-2.任务详情  
-对所有调用Provider的服务请求在返回的结果后面统一添加`'s customized AppendedFilter`这段话  
-
-3.实现方式  
-在Provider中自定义一个Filter,在Filter中修改返回结果,文件结构如下:  
-```shell
-src
- |-main
-    |-java
-        |-org
-            |-apache
-                |-dubbo
-                    |-samples
-                        |-extensibility
-                            |-filter
-                                |-provider
-                                    |-AppendedFilter.java (实现Filter接口)
-    |-resources
-        |-META-INF
-            |-application.properties (Dubbo Provider配置文件)
-            |-dubbo
-                |-org.apache.dubbo.rpc.Filter (纯文本文件)
-```
-**注意:** 这里在resource目录下的`org.apache.dubbo.rpc.Filter`文件很关键,之前说过dubbo采用类似SPI的机制加载,所以把动态扩展的类的全限定名放入这个文件夹里面.
-`org.apache.dubbo.rpc.Filter`文件的内容如下:  
-```shell
-appended=org.apache.dubbo.samples.extensibility.filter.provider.AppendedFilter
-```
-
-4.AppendedFilter类  
-```java
-public class AppendedFilter implements Filter {
-
-    @Override
-    public Result invoke(Invoker<?> invoker, Invocation invocation) throws RpcException {
-        Result result= invoker.invoke(invocation);
-        // Obtain the returned value
-        Result appResponse = ((AsyncRpcResult) result).getAppResponse();
-        // Appended value
-        appResponse.setValue(appResponse.getValue()+"'s customized AppendedFilter");
-        return result;
-    }
-}
-```
-
-5.修改application.properties内容  
-添加如下配置,表示启用key=appended对应的扩展类,也就是在`org.apache.dubbo.rpc.Filter`文件中指定的是一个KV键值对,key代表扩展类的名称,value代表扩展类的全限定名,<font color="#00FF00">要启用一个扩展类还必须在这里配置上对应的key</font>  
-```properties
-# Apply AppendedFilter
-dubbo.provider.filter=appended
-```
-
-6.测试运行  
-![filter](resources/dubbo/20.jpg)  
-
-
-#### 1.8.3 Protocol  
-*提示:本节的示例可以参考dubbo-sample->10-task->dubbo-samples-extensibility->dubbo-samples-extensibility-protocol-\*(一共有四个模块)*  
-Dubbo通过协议扩展实现了很多内置的功能,同时也支持很多常用的协议;所有的自定义协议在`org.apache.dubbo.rpc.Protocol`文件中可以看到,以Dubbo3为例具体如下  
-```shell
-# Dubbo通过协议扩展实现的内置功能
-filter=org.apache.dubbo.rpc.cluster.filter.ProtocolFilterWrapper
-qos=org.apache.dubbo.qos.protocol.QosProtocolWrapper
-registry=org.apache.dubbo.registry.integration.InterfaceCompatibleRegistryProtocol
-service-discovery-registry=org.apache.dubbo.registry.integration.RegistryProtocol
-listener=org.apache.dubbo.rpc.protocol.ProtocolListenerWrapper
-mock=org.apache.dubbo.rpc.support.MockProtocol
-serializationwrapper=org.apache.dubbo.rpc.protocol.ProtocolSerializationWrapper
-securitywrapper=org.apache.dubbo.rpc.protocol.ProtocolSecurityWrapper
-
-# Dubbo对外支持的常用协议
-dubbo=org.apache.dubbo.rpc.protocol.dubbo.DubboProtocol
-injvm=org.apache.dubbo.rpc.protocol.injvm.InjvmProtocol
-rest=org.apache.dubbo.rpc.protocol.rest.RestProtocol
-grpc=org.apache.dubbo.rpc.protocol.grpc.GrpcProtocol
-tri=org.apache.dubbo.rpc.protocol.tri.TripleProtocol
-```
-
-*提示:这个文件可以在org.apache.dubbo:dubbo的META-INF/internal目录下找到*
-![dubbo协议](resources/dubbo/21.png)  
-可以看到,在Dubbo中通过协议扩展的能力实现了过滤、监控数据采集、服务发现、监听器、mock、序列化、安全等一系列能力,同时对外提供了dubbo(一个协议)、injvm、rest、grpc和tri协议  
-
-自定义的协议实现有两种方式:
-* 对原有协议进行包装改造,添加特定的业务逻辑;这种方式实现起来比较简单,dubbo中的`ProtocolFilterWrapper`、`QosProtocolWrapper`、`ProtocolListenerWrapper`就是采用这种方式实现的
-* 完全自定义一套协议,这种实现方式比较复杂,一般常见的协议dubbo都实现了,并且通过了大量生产实践
-
-1.配置修改  
-修改`dubbo-samples-extensibility-protocol-provider`模块的application.properties的nacos地址为本机的nacos地址  
-同理修改`dubbo-samples-extensibility-protocol-consumer`模块的nacos地址为本机  
-
-2.任务详情  
-基于现有的`dubbo`协议来实现自定义协议`edubbo`  
-
-3.目录结构  
-3.1 在`dubbo-samples-extensibility-protocol-common`模块下添加`EnhancedProtocol`类  
-
-3.2 在`dubbo-samples-extensibility-protocol-provider`模块下添加如下内容  
-```shell
-src
- |-main
-    |-java
-        |-org
-            |-apache
-                |-dubbo
-                    |-samples
-                        |-extensibility
-                            |-protocol
-                                |-provider
-                                    |-ExtensibilityProtocolProviderApplication.java
-                                    |-ExtensibilityProtocolServiceImpl.java
-    |-resources
-        |-META-INF
-            |-application.properties (Dubbo Provider配置文件)
-            |-dubbo
-                |-org.apache.dubbo.rpc.Protocol (纯文本文件)
-```
-
-3.3 在`dubbo-samples-extensibility-protocol-consumer`模块下添加如下内容  
-```shell
-src
- |-main
-    |-java
-        |-org
-            |-apache
-                |-dubbo
-                    |-samples
-                        |-extensibility
-                            |-protocol
-                                |-consumer
-                                    |-ExtensibilityProtocolConsumerApplication.java
-                                    |-ExtensibilityProtocolConsumerTask.java
-    |-resources
-        |-META-INF
-            |-application.properties (Dubbo Consumer配置文件)
-            |-dubbo
-                |-org.apache.dubbo.rpc.Protocol (纯文本文件)
-```
-
-*提示:这里的两个类和3.2步提到的两个类就是生产者和消费者类,本身并没有什么特别的,也就是这里会启动一个定时任务,让consumer去调用provider*  
-
-4.代码详情  
-4.1 EnhancedProtocol类  
-```java
-public class EnhancedProtocol implements Protocol {
-
-    public EnhancedProtocol(FrameworkModel frameworkModel) {
-        this.protocol = new DubboProtocol(frameworkModel);
-    }
-
-    private final Protocol protocol;
-
-    @Override
-    public int getDefaultPort() {
-        return this.protocol.getDefaultPort();
-    }
-
-    @Override
-    public <T> Exporter<T> export(Invoker<T> invoker) throws RpcException {
-        // do something
-        return this.protocol.export(invoker);
-    }
-
-    @Override
-    public <T> Invoker<T> refer(Class<T> type, URL url) throws RpcException {
-        // do something
-        return this.protocol.refer(type, url);
-    }
-
-    @Override
-    public void destroy() {
-        this.protocol.destroy();
-    }
-
-    @Override
-    public List<ProtocolServer> getServers() {
-        return protocol.getServers();
-    }
-}
-```
-
-4.2 `dubbo-samples-extensibility-protocol-provider`模块的SPI配置  
-在`resources/META-INF/dubbo/org.apache.dubbo.rpc.Protocol`文件中添加如下配置  
-```shell
-edubbo=org.apache.dubbo.samples.extensibility.protocol.common.EnhancedProtocol
-```
-
-4.3 `dubbo-samples-extensibility-protocol-consumer`模块的SPI配置  
-在`resources/META-INF/dubbo/org.apache.dubbo.rpc.Protocol`文件中添加如下配置  
-```shell
-edubbo=org.apache.dubbo.samples.extensibility.protocol.common.EnhancedProtocol
-```
-
-5.修改配置文件  
-和之前1.8.2 Filter=>5.修改application.properties内容一节中的效果一致,<font color="#00FF00">现在要启用edubbo对应的EnhancedProtocol这个扩展类</font>,需要在consumer和provider模块的application.properties配置文件中添加如下内容  
-```properties
-dubbo.consumer.protocol=edubbo
-```
-
-6.测试运行  
-启动成功之后应该能在控制台看到edubbo协议的字样  
-
-#### 1.8.4 Registry  
-
-#### 1.8.5 Router  
-通过自定义路由,可以根据业务场景的特点来实现特定的路由方式  
-*提示:本节的示例可以参考dubbo-sample->10-task->dubbo-samples-extensibility->dubbo-samples-extensibility-router-\*(一共有三个模块)*  
-
-1.配置修改  
-修改`dubbo-samples-extensibility-router-provider`模块的application.properties的nacos地址为本机的nacos地址  
-同理修改`dubbo-samples-extensibility-router-consumer`模块的nacos地址为本机  
-
-2.任务详情  
-对所有的请求都使用第一提供服务的Provider,如果该Provider下线,则从新选择一个新的Provider  
-
-3.目录结构  
-在Consumer中自定义一个Router,在Router中将<font color="#00FF00">第一次调用的Provider</font>保存下来,如果后续有请求调用且Provider列表中<font color="#00FF00">包含第一次调用时使用的Provider</font>(因为有一种情况是第一次调用的Provider宕机了),则继续使用第一次调用时使用的Provider,否则重新选去一个Provider  
-3.1 在`dubbo-samples-extensibility-router-consumer`模块下添加如下内容  
-```shell
-src
- |-main
-    |-java
-        |-org
-            |-apache
-                |-dubbo
-                    |-samples
-                        |-extensibility
-                            |-router
-                                |-consumer
-                                    |-router
-                                        |-StickFirstStateRouter.java (实现StateRouter接口)
-                                        |-StickFirstStateRouterFactory.java (实现StateRouterFactory接口)
-    |-resources
-        |-META-INF
-            |-application.properties (Dubbo Consumer配置文件)
-            |-dubbo
-                |-org.apache.dubbo.rpc.cluster.router.state.StateRouterFactory (纯文本文件)
-```
-
-4.代码实现  
-4.1 StickFirstStateRouter类  
-```java
-public class StickFirstStateRouter<T> extends AbstractStateRouter<T> implements ConfigurationListener {
-    public StickFirstStateRouter(URL url) {
-        super(url);
-    }
-
-    public static final String NAME = "STICK_FIRST_ROUTER";
-    private static final ErrorTypeAwareLogger logger = LoggerFactory.getErrorTypeAwareLogger(StickFirstStateRouter.class);
-    private volatile BitList<Invoker<T>> firstInvokers;
-
-    @Override
-    protected BitList<Invoker<T>> doRoute(BitList<Invoker<T>> invokers, URL url, Invocation invocation, boolean needToPrintMessage, Holder<RouterSnapshotNode<T>> routerSnapshotNodeHolder, Holder<String> messageHolder) throws RpcException {
-        if (CollectionUtils.isEmpty(invokers)) {
-            if (needToPrintMessage) {
-                messageHolder.set("Directly Return. Reason: Invokers from previous router is empty.");
-            }
-            return invokers;
-        }
-        BitList<Invoker<T>> copy = invokers.clone();
-        if (CollectionUtils.isEmpty(copy)) {
-            this.firstInvokers = new BitList<>(BitList.emptyList());
-            this.firstInvokers.add(copy.get(0));
-        } else {
-            this.firstInvokers = copy.and(invokers);
-            if(CollectionUtils.isEmpty(this.firstInvokers)){
-                this.firstInvokers.add(copy.get(0));
-            }
-        }
-        return this.firstInvokers;
-    }
-
-    @Override
-    public void process(ConfigChangedEvent event) {
-        if (logger.isDebugEnabled()) {
-            logger.debug("Notification of tag rule, change type is: " + event.getChangeType() + ", raw rule is:\n " +
-                    event.getContent());
-        }
-        // Reset
-        if (event.getChangeType().equals(ConfigChangeType.DELETED)) {
-            this.firstInvokers = null;
-        }
-    }
-
-    @Override
-    public void stop() {
-        super.stop();
-        this.firstInvokers = null;
-    }
-}
-```
-
-4.2 StickFirstStateRouterFactory类  
-```java
-public class StickFirstStateRouterFactory implements StateRouterFactory {
-    @Override
-    public <T> StateRouter<T> getRouter(Class<T> interfaceClass, URL url) {
-        return new StickFirstStateRouter<>(url);
-    }
-}
-```
-
-4.3 修改`resources/META-INF/dubbo/org.apache.dubbo.rpc.cluster.router.state.StateRouterFactory`中的文件内容  
-```shell
-stickfirst=org.apache.dubbo.samples.extensibility.router.consumer.router.StickFirstStateRouterFactory
-```
-
-5.修改application.yml配置文件的内容  
-添加如下配置  
-```properties
-dubbo.consumer.router=stickfirst
-```
-
-6.测试运行  
-![router](resources/dubbo/22.png)  
-
-
-## 2.SDK手册  
-**目录:**  
-2.1 快速入门  
-2.2 高级特性和用法  
-2.3 参考手册  
-2.4 升级和兼容  
-2.5 错误码  
-
-### 2.1 快速入门  
-**目录:**  
-2.1.1 快速部署一个微服务应用  
-2.1.2 基于Dubbo API开发微服务应用  
-2.1.3 基于Spring Boot Starter开发微服务应用  
-2.1.4 基于Spring XML开发微服务应用  
-2.1.5 IDL定义跨语言服务  
-
-
-#### 2.1.1 快速部署一个微服务应用  
+1.1 快速部署一个微服务应用  
+1.2 基于Dubbo API开发微服务应用  
+1.3 基于Spring Boot Starter开发微服务应用  
+1.4 基于Spring XML开发微服务应用  
+1.5 IDL定义跨语言服务  
+
+### 1.1 快速部署一个微服务应用  
 *提示:详情见dubboBasis笔记=>1.dubbo入门=>1.2体会dubbo的第一个示例*  
 
-#### 2.1.2 基于Dubbo API开发微服务应用  
+### 1.2 基于Dubbo API开发微服务应用  
 *提示:详情见dubboBasis笔记=>1.dubbo入门=>1.2体会dubbo的第一个示例*  
 
-#### 2.1.3 基于Spring Boot Starter开发微服务应用  
+### 1.3 基于Spring Boot Starter开发微服务应用  
 *提示:详情见ubboBasis笔记=>1.dubbo入门=>使用dubbo开发微服务项目*  
 
-#### 2.1.4 基于Spring XML开发微服务应用  
+### 1.4 基于Spring XML开发微服务应用  
 略过,如有兴趣可以参照官网  
 
-#### 2.1.5 IDL定义跨语言服务  
+### 1.5 IDL定义跨语言服务  
 *提示:如有兴趣可以参见官网,本笔记对在1.1开发任务=>1.1.6 IDL开发服务中有对IDL进行介绍*  
 
 
-### 2.2 高级特性和用法  
+## 2.高级特性和用法  
 **目录:**  
-2.2.1 框架与服务  
-2.2.2 可观测性  
-2.2.3 诊断与调优  
-2.2.4 提升安全性  
-2.2.5 其它  
-2.2.6 Triple协议  
+2.1 框架与服务  
+2.2 可观测性  
+2.3 诊断与调优  
+2.4 提升安全性  
+2.5 其它  
+2.6 Triple协议  
 
-#### 2.2.1 框架与服务  
+### 2.1 框架与服务  
 **目录:**  
-2.2.1.1 端口协议复用  
-2.2.1.2 分布式事务  
-2.2.1.3 分组聚合  
-2.2.1.4 服务分版本  
-2.2.1.5 启动时检查  
-2.2.1.6 响应式编程  
-2.2.1.7 参数校验  
-2.2.1.8 服务分组  
-2.2.1.9 集群容错  
-2.2.1.10 服务降级  
-2.2.1.11 异步调用  
-2.2.1.12 流式调用  
-2.2.1.13 线程池隔离  
-2.2.1.14 调用链路传递隐式参数  
-2.2.1.15 动态指定IP调用  
-2.2.1.16 RPC调用上下文  
-2.2.1.17 服务接口Json兼容性检测  
-2.2.1.18 一致性哈希选址  
-2.2.1.19 只订阅  
-2.2.1.20 调用触发事件通知  
-2.2.1.21 多协议  
-2.2.1.22 服务端回调客户端  
-2.2.1.23 本地伪装  
-2.2.1.24 多注册中心  
-2.2.1.25 本地存根  
-2.2.1.26 回声测试  
-2.2.1.27 调用信息记录  
-2.2.1.28 泛化调用(客户端泛化)  
-2.2.1.29 泛化调用(服务端泛化)  
-2.2.1.30 本地调用  
-2.2.1.31 延迟暴露  
+2.1.1 端口协议复用  
+2.1.2 分布式事务  
+2.1.3 分组聚合  
+2.1.4 服务分版本  
+2.1.5 启动时检查  
+2.1.6 响应式编程  
+2.1.7 参数校验  
+2.1.8 服务分组  
+2.1.9 集群容错  
+2.1.10 服务降级  
+2.1.11 异步调用  
+2.1.12 流式调用  
+2.1.13 线程池隔离  
+2.1.14 调用链路传递隐式参数  
+2.1.15 动态指定IP调用  
+2.1.16 RPC调用上下文  
+2.1.17 服务接口Json兼容性检测  
+2.1.18 一致性哈希选址  
+2.1.19 只订阅  
+2.1.20 调用触发事件通知  
+2.1.21 多协议  
+2.1.22 服务端回调客户端  
+2.1.23 本地伪装  
+2.1.24 多注册中心  
+2.1.25 本地存根  
+2.1.26 回声测试  
+2.1.27 调用信息记录  
+2.1.28 泛化调用(客户端泛化)  
+2.1.29 泛化调用(服务端泛化)  
+2.1.30 本地调用  
+2.1.31 延迟暴露  
 
 
-##### 2.2.1.1 端口协议复用
+#### 2.1.1 端口协议复用
 *提示:详情见1.6 通信协议=>1.6.6单端口多协议*  
 
-##### 2.2.1.2 分布式事务  
+#### 2.1.2 分布式事务  
 *提示:详情见1.4 微服务生态=>1.4.1 事务管理*  
 
-##### 2.2.1.3 分组聚合  
+#### 2.1.3 分组聚合  
 1.特性说明  
 通过分组对结果进行聚合并返回聚合后的结果,比如菜单服务,用group区分同一接口的多种实现,现在消费方需从每种group中调用一次并返回结果,<font color="#00FF00">对结果进行合并之后返回</font>,这样就可以实现聚合菜单项  
 *提示:本节的示例来自dubbo-sample->2-advanced->dubbo-samples-merge*  
@@ -1647,11 +138,11 @@ dubbo.consumer.router=stickfirst
 ```
 *提示:指定合并方法,将调用返回结果的指定方法进行合并,合并方法的参数类型必须是返回结果类型本身;实际上这也相当于是一种合并策略,就是说将分组调用的结果传入到`addAll()`方法里面,最终由`addAll()`处理并将结果返回,并且addAll方法的入参类型必须与分组调用返回的类型匹配*  
 
-##### 2.2.1.4 服务分版本  
+#### 2.1.4 服务分版本  
 *提示:在dubbo中接口并不能唯一确定一个服务,<font color="#00FF00">只有接口+分组+版本号才能唯一确定一个服务</font>*  
 本节可以参考:1.任务=>1.1开发任务=>1.1.3 版本与分组  
 
-##### 2.2.1.5 启动时检查 
+#### 2.1.5 启动时检查 
 1.特性说明  
 Dubbo默认会在启动时检查依赖的服务是否可用,如果不可用会抛出异常阻止Spring初始化完成,从而尽早的发现错误,默认`check="true"`  
 可以通过`check="false"`关闭检查;比如测试时有些服务不关心或者出现了循环依赖,必须有一方先启动  
@@ -1687,7 +178,7 @@ dubbo.consumer.check=false
 dubbo.registry.check=false
 ```
 
-##### 2.2.1.6 响应式编程  
+#### 2.1.6 响应式编程  
 1.特性说明  
 此特性基于Triple协议和Project Reactor实现,3.1.0版本以上支持,用户仅需编写IDL文件,并指定protobuf插件的相应Generator,即可生成并使用支持响应式编程API的stub代码  
 有四种调用模式,分别是OneToOne、OneToMany、ManyToOne、ManyToMany,分别对应 Unary调用、服务端流、客户端流、双向流.在Reactor的实现中,One对应Mono,Many对应Flux  
@@ -1862,7 +353,7 @@ public class ReactorConsumer {
 7.代码测试  
 分别启动生产者和服务消费者  
 
-##### 2.2.1.7 参数校验  
+#### 2.1.7 参数校验  
 1.特征说明  
 参数验证功能是基于JSR303实现的,<font color="#00FF00">用户只需标识JSR303标准的验证annotation</font>,并通过声明filter来实现验证  
 
@@ -1972,10 +463,10 @@ public class ValidationConsumer {
 ```
 *提示:参数验证失败后会抛出一个RpcException异常,里面嵌套了Hibernate的ConstraintViolationException异常*  
 
-##### 2.2.1.8 服务分组  
+#### 2.1.8 服务分组  
 服务分组说的比较多了,详情见:1.1.3版本与分组、2.2.1.4服务分版本、2.2.1.3分组聚合  
 
-##### 2.2.1.9 集群容错  
+#### 2.1.9 集群容错  
 1.特性说明  
 当集群调用失败时,Dubbo提供了多种容错方案,缺省为failover重试  
 ![重试](resources/dubbo/23.png)  
@@ -2072,7 +563,7 @@ broadcast.fail.percent<font color="#00FF00">取值在0～100范围内</font>;默
 ```
 
 
-##### 2.2.1.10 服务降级  
+#### 2.1.10 服务降级  
 *提示:本章可以参考1.7.1 Sentinel限流*  
 
 1.Mock使用方式1  
@@ -2106,7 +597,7 @@ broadcast.fail.percent<font color="#00FF00">取值在0～100范围内</font>;默
 4.配置dubbo-admin使用  
 详情见1.5.1 Admin=>3.服务Mock
 
-##### 2.2.1.11 异步调用  
+#### 2.1.11 异步调用  
 1.背景  
 从dubbo2.7开始,dubbo的所有异步编程接口开始以CompletableFuture为基础  
 基于<font color="#FF00FF">NIO</font>的非阻塞实现并行调用,<font color="#00FF00">客户端不需要启动多线程即可完成并行调用多个远程服务,相对多线程开销较小</font>  
@@ -2119,9 +610,9 @@ broadcast.fail.percent<font color="#00FF00">取值在0～100范围内</font>;默
 3.使用  
 详情见1.1.2 异步调用  
 
-##### 2.2.1.12 流式调用  
+#### 2.1.12 流式调用  
 
-##### 2.2.1.13 线程池隔离  
+#### 2.1.13 线程池隔离  
 1.特性说明  
 一种新的线程池管理方式,使得提供者应用内各个服务的线程池隔离开来,互相独立;<font color="#00FF00">某个服务的线程池资源耗尽不会影响其他正常服务</font>  
 
@@ -2343,7 +834,7 @@ public class HelloServiceImplV3 implements HelloService {
 }
 ```
 
-##### 2.2.1.14 调用链路传递隐式参数  
+#### 2.1.14 调用链路传递隐式参数  
 1.特性说明  
 可以通过`RpcContext`上的`setAttachment`和`getAttachment`在服务消费方和提供方之间进行参数的隐式传递  
 *提示:这点知识在1.1.4 上下文参数传递中有讲到过*   
@@ -2420,7 +911,7 @@ public interface PenetrateAttachmentSelector {
 }
 ```
 
-##### 2.2.1.15 动态指定IP调用  
+#### 2.1.15 动态指定IP调用  
 1.特性说明  
 说用dubbo扩展,实现指定IP调用  
 
@@ -2483,14 +974,14 @@ public class Address implements Serializable {
 
 > 必须每次都设置,而且设置后必须马上发起调用,如果出现拦截器报错(Dubbo框架内remove此值是在选址过程进行的)建议设置null以避免ThreadLocal内存泄漏导致影响后续调用
 
-##### 2.2.1.16 RPC调用上下文  
+#### 2.1.16 RPC调用上下文  
 1.特性说明  
 <font color="#00FF00">上下文中存放的是当前调用过程中所需的环境信息</font>,所有配置信息都将转换为URL的参数,详情[schema配置参考手册](https://cn.dubbo.apache.org/zh-cn/overview/mannual/java-sdk/reference-manual/config/properties/)中的对应URL参数一列  
 
 2.使用方式  
 本章的内容可以参考2.2.1.14 调用链路传递隐式参数节的内容  
 
-##### 2.2.1.17 服务接口Json兼容性检测  
+#### 2.1.17 服务接口Json兼容性检测  
 1.特性说明  
 `Dubbo`目前支持`Rest`协议进行服务调用,`Rest`协议默认会使用`JSON`作为序列化方式,但`JSON`并不支持`Java`的一些特殊用法,如`接口`和`抽象类`等  
 `Dubbo 3.3`版本在服务发布流程中增加了`服务接口JSON兼容性检测`功能,可以确保服务接口传输对象是否可以被JSON序列化,进一步提升Rest服务接口的正确性  
@@ -2529,7 +1020,7 @@ public class Address implements Serializable {
 </beans>
 ```
 
-##### 2.2.1.18 一致性哈希选址
+#### 2.1.18 一致性哈希选址
 1.特性说明  
 在分布式系统中跨多个节点均匀分布请求的方法,使用哈希算法创建请求的哈希并根据哈希值确定哪个节点应该处理请求,算法确保每个节点处理的请求数量大致相等.如果一个节点发生故障,其他节点可以快速接管请求,保持系统高可用性,即使一个节点出现故障,系统的数据映射到系统中有限数量节点的哈希算法,在系统中添加或删除节点时,只需更改有限数量的映射,确保数据均匀分布在系统中的所有节点上提高系统的性能  
 
@@ -2569,7 +1060,7 @@ referenceConfig.setLoadBalance("consistenthash");
 referenceConfig.get();
 ```
 
-##### 2.2.1.19 只订阅  
+#### 2.1.19 只订阅  
 1.特性说明  
 为方便开发测试,经常会在线下共用一个所有服务可用的注册中心,这时如果一个正在开发中的服务提供者注册,可能会影响消费者不能正常运行.  
 可以让服务提供者开发方,<font color="#00FF00">只订阅服务</font>(开发的服务可能依赖其它服务),而不注册正在开发的服务,通过直连测试正在开发的服务  
@@ -2590,7 +1081,7 @@ referenceConfig.get();
 <dubbo:registry address="10.20.153.10:9090?register=false" />
 ```
 
-##### 2.2.1.20 调用触发事件通知  
+#### 2.1.20 调用触发事件通知  
 1.特性说明  
 在调用之前、调用之后、出现异常时,会触发`oninvoke`、`onreturn`、`onthrow`三个事件.可以配置当事件发生时,通知(<font color="#00FF00">回调</font>)哪个类的哪个方法  
 
@@ -2684,7 +1175,7 @@ for (int i = 0; i < 10; i++) {
 Assert.assertEquals(requestId, notify.ret.get(requestId).getId());
 ```
 
-##### 2.2.1.21 多协议  
+#### 2.1.21 多协议  
 1.特性说明  
 Dubbo允许配置多协议,在<font color="#FF00FF">不同服务上支持不同协议或者同一服务上同时支持多种协议</font>  
 
@@ -2733,7 +1224,7 @@ Dubbo允许配置多协议,在<font color="#FF00FF">不同服务上支持不同�
 ```
 *提示:上述配置是应用对外暴露多个端口,每个端口使用不同的协议,同一个服务能够使用多个不同的协议/端口*  
 
-##### 2.2.1.22 服务端回调客户端  
+#### 2.1.22 服务端回调客户端  
 1.特性说明  
 参数回调方式与调用本地callback或listener相同,只需要在Spring的配置文件中声明哪个参数是callback类型即可.Dubbo将基于长连接生成反向代理,<font color="#00FF00">这样就可以从服务器端调用客户端</font>  
 *提示:本节的示例可以参考dubbo-sample->2-advanced->dubbo-samples-callback*  
@@ -2825,7 +1316,7 @@ callbackService.addListener("foo.bar", new CallbackListener(){
 });
 ```
 
-##### 2.2.1.23 本地伪装  
+#### 2.1.23 本地伪装  
 本章可以参考2.2.1.10 服务降级  
 1.特性说明  
 在Dubbo3中有一种机制可以实现<font color="#00FF00">轻量级的服务降级</font>,也就是本地伪装  
@@ -2924,7 +1415,7 @@ Mock可以在方法级别上指定,假定`com.foo.BarService`上有好几个方�
 </dubbo:reference>
 ```
 
-##### 2.2.1.24 多注册中心  
+#### 2.1.24 多注册中心  
 1.特性说明  
 Dubbo支持<font color="#00FF00">同一服务向多注册中心同时注册</font>,或者不同服务分别注册到不同的注册中心上去,甚至可以同时引用注册在不同注册中心上的同名服务.另外,注册中心是支持自定义扩展的  
 
@@ -3011,7 +1502,7 @@ Dubbo支持<font color="#00FF00">同一服务向多注册中心同时注册</fon
 </beans>
 ```
 
-##### 2.2.1.25 本地存根  
+#### 2.1.25 本地存根  
 1.特性说明  
 使用远程服务调用后,客户端通常只剩下接口,而实现全在服务器端,<font color="#00FF00">但提供方有些时候想在客户端也执行部分逻辑</font>  
 ![本地存根](resources/dubbo/27.png)  
@@ -3056,7 +1547,7 @@ public class BarServiceStub implements BarService {
 }
 ```
 
-##### 2.2.1.26 回声测试  
+#### 2.1.26 回声测试  
 1.特性说明  
 <font color="#00FF00">回声测试用于检测服务是否可用</font>,回声测试按照正常请求流程执行,能够测试整个调用是否通畅,可用于监控.执行回声测试,客户端发送一个包含特定值(如字符串)的请求.<font color="#00FF00">服务器应使用相同的值进行响应</font>,从而验证请求是否已成功接收和处理.如果响应与请求不匹配,则表示服务运行不正常.  
 要求Dubbo服务器正在运行,并且服务器和客户端之间具有网络连接.在客户端,必须配置Dubbo客户端以连接到服务器,客户端将向服务器发送请求,然后服务器应返回与请求相同的响应  
@@ -3085,7 +1576,7 @@ String status = echoService.$echo("OK");
 assert(status.equals("OK"));
 ```
 
-##### 2.2.1.27 调用信息记录  
+#### 2.1.27 调用信息记录  
 1.特性说明  
 dubbo3中日志分为`日志适配`和`访问日志`,如果想记录每一次请求信息,可开启访问日志,类似于Apache的访问日志  
 
@@ -3105,10 +1596,10 @@ dubbo3中日志分为`日志适配`和`访问日志`,如果想记录每一次请
 ```
 
 
-##### 2.2.1.28 泛化调用(客户端泛化)  
+#### 2.1.28 泛化调用(客户端泛化)  
 *提示:本节的知识可以参考1.任务=>1.1 开发任务=>1.1.5泛化调用*  
 
-##### 2.2.1.29 泛化调用(服务端泛化)  
+#### 2.1.29 泛化调用(服务端泛化)  
 1.特性说明  
 服务端泛化<font color="#00FF00">主要用于服务器端没有API接口及模型类元的情况</font>,参数及返回值的所有POJO均用Map表示,通常用于框架集成,比如:实现一个通用的远程服务Mock框架,可通过实现`GenericService`接口处理所有服务请求  
 
@@ -3160,7 +1651,7 @@ service.setRef(xxxService);
 service.export();
 ```
 
-##### 2.2.1.30 本地调用  
+#### 2.1.30 本地调用  
 1.特性说明  
 本地调用使用了`injvm`协议,是一个伪协议,它不开启端口,<font color="#00FF00">不发起远程调用</font>,只在JVM内直接关联,但执行Dubbo的Filter链  
 *提示:它除了不真实发送远程调用,别的该执行的都执行了*  
@@ -3205,7 +1696,7 @@ RpcContext.getServiceContext().setLocalInvoke(false);
 RpcContext.getServiceContext().setLocalInvoker(true);
 ```
 
-##### 2.2.1.31 延迟暴露  
+#### 2.1.31 延迟暴露  
 1.特性说明  
 如果你的服务需要预热时间,比如初始化缓存、等待相关资源就位,可以使用`delay`进行延迟暴露;<font color="#00FF00">延迟的时间是从Spring初始化完成后开始计算</font>  
 
@@ -3236,21 +1727,21 @@ RpcContext.getServiceContext().setLocalInvoker(true);
 5.4 如果大量使用`getBean()`,相当于已经把Spring退化为工厂模式在用,可以将Dubbo的服务隔离单独的Spring容器  
 5.5 基于Spring的`ContextRefreshedEvent`事件触发暴露  
 
-#### 2.2.2 可观测性  
+### 2.2 可观测性  
 **目录:**  
-2.2.2.1 可观测性介绍  
-2.2.2.2 Metrics  
-2.2.2.3 链路追踪  
-2.2.2.4 日志管理  
+2.2.1 可观测性介绍  
+2.2.2 Metrics  
+2.2.3 链路追踪  
+2.2.4 日志管理  
 
-##### 2.2.2.1 可观测性介绍
+#### 2.2.1 可观测性介绍
 1.什么是可观测性  
 可观测性是从外部观察正在运行的系统的内部状态的能力.它由日志记录、指标和跟踪三大支柱组成  
 
 2.Dubbo可观测性  
 为了深入观察Dubbo内部的运行状,Dubbo可观测性包括许多附加功能,帮助您在将应用程序推向生产时监视和管理应用程序.您可以选择使用HTTP端点或JMX来管理和监视应用程序.审计、运行状况和度量收集也可以自动应用于应用程序
 
-##### 2.2.2.2 Metrics  
+#### 2.2.2 Metrics  
 1.概述  
 之前在K8S、skywalking等笔记中也有提到过Metrics,它就是一种度量/监控相关的概念  
 Dubbo Metrics的总体设计请参考 3.其他=>提案=>指标埋点  
@@ -3286,7 +1777,7 @@ public interface MetricsService {
 
 //todo 看不懂
 
-##### 2.2.2.3 链路追踪  
+#### 2.2.3 链路追踪  
 1.概述  
 Dubbo内置了全链路追踪能力,可以通过引入`spring-boot-starter`或者相关依赖开启链路跟踪能力,并且可以将追踪得到的数据导入Zipkin、Skywalking等系统实现数据的可视化与分析  
 Dubbo借助`Micrometer Observation`完成`Tracing`的所有埋点工作,依赖`Micrometer`提供的各种`Bridge`适配,可以将追踪数据导入各种后端系统(如Zipkin、Skywalking),具体工作原理如下:  
@@ -3309,7 +1800,7 @@ Dubbo Tracing还实现了与日志系统的自动关联,即将tracing-id、span-
 *提示:具体示例可以参考dubbo-sample->4-governance->dubbo-samples-tracing*  
 
 
-##### 2.2.2.4 日志管理  
+#### 2.2.4 日志管理  
 1.基本介绍  
 在Dubbo框架内<font color="#00FF00">所有的日志输出</font>都是通过LoggerFactory这个静态工厂类来获得Logger的对象实体,并且抽离了一个LoggerAdapter用于对接第三方日志框架,所以就有了JDKLoggerAdapter、Log4jLoggerAdapter、SLF4JLoggerAdapter等一些实现子类,分别对接了不同Log第三方实现.这些日志框架在Dubbo中的优先级如下表所示(这里的优先级指未配置logger提供方的情况下,有Dubbo框架自已选择使用的日志框架优先级):  
 |第三方日志框架|优先级|
@@ -3385,13 +1876,18 @@ Dubbo也可以将日志信息保存或记录在文件中
 ```
 
 
-#### 2.2.3 诊断与调优  
+### 2.3 诊断与调优  
 **目录:**  
-2.2.3.1 请求耗时采样  
-2.2.3.2 服务端线程模型  
+2.3.1 请求耗时采样  
+2.3.2 服务端线程模型  
+2.3.3 消费端线程模型  
+2.3.4 服务引用配置对象缓存  
+2.3.5 路由状态采集  
+2.3.6 负载均衡  
+2.3.7 注册信息简化  
 
 
-##### 2.2.3.1 请求耗时采样  
+#### 2.3.1 请求耗时采样  
 1.功能说明  
 性能采样功能可以对Dubbo处理链路上的各处耗时进行检测,在出现超时的时候`(usageTime / timeout > profilerWarnPercent * 100)`通过日志记录调用的耗时  
 此功能分为`simple profiler`和`detail profiler`两个模式,其中`simple profiler`模式默认开启,`detail profiler`模式默认关闭.`detail profiler`相较`simple profiler`模式多采集了每个`filter`的处理耗时、协议上的具体耗时等.在`simple profiler`模式下如果发现`Dubbo`框架内部存在耗时长的情况,<font color="#00FF00">可以开启detail profiler模式,以便更好地排查问题</font>  
@@ -3527,7 +2023,7 @@ Start time: 285965612316294
                                 +-[ Offset: 1.558545ms; Usage: 804.276436ms, 99% ] Receive request. Server biz impl invoke begin., dubbo version: 3.0.10-SNAPSHOT, current host: xx.xx.xx.xx
 ```
 
-##### 2.2.3.2 服务端线程模型  
+#### 2.3.2 服务端线程模型  
 1.功能说明  
 <font color="#00FF00">Dubbo协议的和Triple协议目前的线程模型还并没有对齐</font>,本节分开介绍Triple协议和Dubbo协议的线程模型  
 
@@ -3564,8 +2060,37 @@ Dubbo框架的线程模型与以上这五种行为息息相关,Dubbo协议Provid
 * Dubbo线程没有执行任何操作
 
 2.3 ExecutionDispatcher  
+![ExecutionDispatcher](resources/dubbo/33.png)  
+* 在IO线程中执行的操作有
+  * `sent、connected、disconnected、caught`操作在IO线程上执行
+  * 序列化响应在IO线程上执行
+* 在Dubbo线程中执行的操作有
+  * `received`都是在Dubbo线程上执行的
+  * 反序列化请求的行为在Dubbo中做的
 
-3.线程模型配置方式  
+2.4 MessageOnlyDispatcher  
+在Provider端,`MessageOnlyDispatcher`和`ExecutionDispatcher`的线程模型是一致的,区别仅在Consumer端  
+* 在IO线程中执行的操作有
+  * `sent、connected、disconnected、caught`操作在IO线程上执行
+  * 序列化响应在IO线程上执行
+* 在Dubbo线程中执行的操作有
+  * `received`都是在Dubbo线程上执行的
+  * 反序列化请求的行为在Dubbo中做的
+
+2.5 ConnectionOrderedDispatcher  
+![ConnectionOrderedDispatcher](resources/dubbo/34.png)  
+* 在IO线程中执行的操作有
+  * `sent`操作在IO线程上执行
+  * 序列化响应在IO线程上执行
+* 在Dubbo线程中执行的操作有
+  * `received、connected、disconnected、caught`都是在Dubbo线程上执行的.但是connected和disconnected两个行为是与其他两个行为通过线程池隔离开的.并且在Dubbo connected thread pool中提供了链接限制、告警灯能力
+  * 反序列化请求的行为在Dubbo中做的
+
+
+3.使用场景  
+异步处理,连接管理,资源管理,负载均衡,容错等  
+
+4.线程模型配置方式  
 拿yaml的配置方式举例:在protocol下配置`dispatcher: all`,<font color="#00FF00">即可把dubbo协议的线程模型调整为AllDispatcher</font>  
 ```yml
 dubbo:
@@ -3584,14 +2109,205 @@ dubbo:
     address: zookeeper://127.0.0.1:2181
 ```
 
-
-4.Triple协议—Provider端线程模型  
+5.Triple协议—Provider端线程模型  
 ![Triple协议—Provider端线程模型](resources/dubbo/30.png)  
 Triple协议Provider线程模型目前还比较简单,目前<font color="#00FF00">序列化和反序列化</font>操作都在Dubbo线程上工作,而IO线程并没有承载这些工作  
 
+#### 2.3.3 消费端线程模型  
+1.功能说明  
+2.7.5引入了Servicerepository的概念,在服务注册阶段提前生成`ServiceDescriptor`和`MethodDescriptor`,以减少RPC调用阶段计算Service原信息带来的资源消耗  
+
+2.使用场景  
+并发请求,负载均衡,连接管理,超时处理,容错等  
+
+3.历史包袱  
+对2.7.5版本之前的Dubbo应用,尤其是一些消费端应用,当面临需要消费大量服务且并发数比较大的大流量场景时(典型如网关类场景),经常会出现消费端线程数分配过多的问题,改进后的消费端线程池模型,<font color="#00FF00">通过复用业务端被阻塞的线程</font>,很好地解决了该问题  
+
+4.新版本2.7.5的线程池模型  
+![新版本线程池模型](resources/dubbo/35.png)  
+4.1 业务线程发出请求,拿到一个Future实例  
+4.2 在调用`future.get()`之前,先调用`ThreadlessExecutor.wait()`,wait会使业务线程在一个阻塞队列上等待,直到队列中被加入元素  
+4.3 当业务数据返回后,生成一个Runnable Task并放入ThreadlessExecutor队列  
+4.4 业务线程将Task取出并在本线程中执行:反序列化业务数据并set到Future  
+4.5 业务线程拿到结果直接返回  
+
+这样,相比于老的线程池模型,由业务线程自己负责监测并解析返回结果,免去了额外的消费端线程池开销  
+关于性能优化,在后续版本会从以下两个方面入手:  
+* RPC调用链路.目前能看到的点包括:进一步减少执行链路的内存分配、在保证协议兼容性的前提下提高协议传输效率、提高<font color="#FF00FF">Filter、Router</font>等计算效率
+* 服务治理链路;进一步减少地址推送、服务治理规则推送等造成的内存、cpu资源消耗
 
 
+#### 2.3.4 服务引用配置对象缓存  
+1.功能说明  
+`ReferenceConfig`实例很重(ReferenceConfig实例看上面的内容),封装了与注册中心的连接以及与提供者的连接,需要缓存.否则重复生成`ReferenceConfig`可能造成性能问题并且会有<font color="#00FF00">内存和连接泄漏</font>.在API方式编程时,容易忽略此问题  
+因此自`2.4.0`版本开始,dubbo提供了简单的工具类`ReferenceConfigCache`用于缓存`ReferenceConfig`实例  
 
+2.使用场景  
+网关等存在动态创建订阅的场景,由于ReferenceConfig本身很重,会创建特别多的中间对象,而proxy本身是可以复用的,所以通过ReferenceConfigCache可以缓存这部分的属性  
 
+3.使用方式  
+3.1 清除并销毁  
+消除Cache中的`ReferenceConfig`将销毁`ReferenceConfig`并释放对应的资源  
+```java
+ReferenceConfig<XxxService> reference = new ReferenceConfig<XxxService>();  
+reference.setInterface(XxxService.class);  
+reference.setVersion("1.0.0");  
+ReferenceConfigCache cache = ReferenceConfigCache.getCache();  
+// cache.get方法中会缓存 Reference对象，并且调用ReferenceConfig.get方法启动ReferenceConfig  
+XxxService xxxService = cache.get(reference);  
+// 注意！ Cache会持有ReferenceConfig，不要在外部再调用ReferenceConfig的destroy方法，导致Cache内的ReferenceConfig失效！  
+// 使用xxxService对象  
+xxxService.sayHello();  
+```
+**销毁**
+```java
+ReferenceConfigCache cache = ReferenceConfigCache.getCache();  
+cache.destroy(reference);  
+```
+默认`ReferenceConfigCache`把相同服务Group、接口、版本的`ReferenceConfig`认为是相同的,缓存一份,即以服务Group、接口、版本为缓存的key  
 
-## 3.其他  
+3.2 修改策略  
+可以修改这个策略,在`ReferenceConfigCache.getCache`时,传一个`KeyGenerator`,详情见`ReferenceConfigCache`类的方法  
+```java
+KeyGenerator keyGenerator = new ...  
+ReferenceConfigCache cache = ReferenceConfigCache.getCache(keyGenerator);
+```
+
+#### 2.3.5 路由状态采集  
+1.功能说明  
+路由状态收集功能可<font color="#00FF00">用于识别可能影响服务性能的任何潜在问题</font>,用户在尝试访问服务时不会遇到任何问题,允许用户检查路由的状态是启用还是禁用,确保仅使用授权的服务,并且访问仅限于具有适当授权的人员  
+
+2.使用场景  
+Dubbo的很多流量治理能力是基于<font color="#FF00FF">Router</font>进行实现的,在生产环境中,如果出现流量结果不符合预期的情况,可以通过路由状态命令来查看路由的状态,以此来定位可能存在的问题  
+*提示:Router详情见1.8 自定义扩展=>1.8.5 Router*  
+
+3.使用方式  
+3.1 查看路由缓存状态  
+Dubbo在收到地址变更的时候,会将地址信息推送给所有的`Router`,这些Router可以在此阶段<font color="#00FF00">提前计算路由的分组</font>,缓存起来,以避免在调用时需要遍历所有的提供者计算分组参数.在Dubbo3中引入的`StateRouter`提供了通过`qos`命令工具实时获取每个路由的状态的能力  
+**注：此功能仅支持`StateRoute`,且StateRouter需要基于AbstractStateRouter实现doBuildSnapshot接口**  
+
+3.2 查看实际请求的路由计算结果  
+Dubbo 3中默认在路由筛选后为空的时候打印路由计算的节点状态.运维人员可以通过日志判断每个路由的计算结果是否符合预期  
+```shell
+No provider available after route for the service 服务 from registry 注册中心地址 on the consumer 消费端IP using the dubbo version 3.0.7. Router snapshot is below: 
+[ Parent (Input: 当前节点输入地址数) (Current Node Output: 当前节点计算结果数) (Chain Node Output: 当前节点和后级节点交集结果数) ] Input: 输入的地址示例（显示最多 5 个） -> Chain Node Output: 当前节点输出的地址示例（显示最多 5 个）
+  [ 路由名称 (Input: 当前节点输入地址数) (Current Node Output: 当前节点计算结果数) (Chain Node Output: 当前节点和后级节点交集结果数) Router message: 路由日志 ] Current Node Output: 当前节点输出的地址示例（显示最多 5 个）
+    [ 路由名称 (Input: 当前节点输入地址数) (Current Node Output: 当前节点计算结果数) (Chain Node Output: 当前节点和后级节点交集结果数) Router message: 路由日志 ] Current Node Output: 当前输入的地址示例（显示最多 5 个）
+```
+
+**注意:**  
+* 路由日志需要依赖路由实现判断`needToPrintMessage`参数,并在需要时写入`messageHolder`路由日志  
+* 由于多级路由结果是结果取交集的,<font color="#00FF00">所以当前节点计算结果数可能和后级取交后为空</font>
+
+3.3 开启路由全采样  
+在一些特殊情况下,请求可能调用到错误的服务端,但是因为选址非空,所以无法看到路由的过程信息,此时可以<font color="#00FF00">通过qos开启路由全采样</font>,通过qos的`getRecentRouterSnapshot`命令可以远程获取最近的路由快照  
+
+#### 2.3.6 负载均衡  
+1.功能说明  
+* dubbo的负载均衡详情见:dubboBasis=>2.dubbo功能=>2.3 负载均衡  
+* 如果要扩展更多负载均衡策略,详情见:2.SDK手册=>2.3 参考手册=>负载均衡扩展 //todo
+
+2.使用场景  
+* 高可用性:部署服务的多个实例以确保即使一个或多个实例失败服务仍然可用,负载均衡功能可用于在这些实例之间<font color="#00FF00">分配传入的请求确保以负载均衡方式使用每个实例的方式</font>,还能最大限度地降低服务停机的风险
+* 流量管理:限制指向特定服务实例的流量,以防止过载或确保公平的资源分配,负载均衡特性提供了`Round Robin、Weighted Round Robin、Random、Least Active Load Balancing`等多种负载均衡策略,可以用来实现流量控制
+* 服务划分:将一个服务划分成多个逻辑组件,<font color="#00FF00">每个逻辑组件可以部署在不同的实例上</font>,使用负载均衡以确保每个分区以平衡的方式在这些实例之间分配请求,同时在实例发生故障的情况下提供故障转移功能
+* 性能优化:负载均衡可用于优化服务的性能,通过跨多个实例分发请求可以<font color="#00FF00">利用可用的计算资源来缩短响应时间</font>并减少延迟
+
+3.使用方式  
+> 只需要调整loadbalance相应取值即可,每种负载均衡策略取值请参见文档最上方表格
+
+```xml
+<!-- 服务端设置服务级别的负载均衡 -->
+<dubbo:service interface="..." loadbalance="roundrobin" />
+<!-- 客户端设置服务级别的负载均衡 -->
+<dubbo:reference interface="..." loadbalance="roundrobin" />
+<!-- 服务端设置方法级别的负载均衡 -->
+<dubbo:service interface="...">
+    <dubbo:method name="..." loadbalance="roundrobin"/>
+</dubbo:service>
+<!-- 客户端设置方法级别的负载均衡 -->
+<dubbo:reference interface="...">
+    <dubbo:method name="..." loadbalance="roundrobin"/>
+</dubbo:reference>
+```
+
+#### 2.3.7 注册信息简化  
+1.功能说明  
+Dubbo Provider中的服务配置项(即`<dubbo:service xxx>`)有接近30个配置项,排除注册中心服务治理需要之外,很大一部分配置项是Provider自已使用,<font color="#00FF00">不需要透传给消费者</font>,<font color="#FF00FF">这部分数据不需要进入注册中心</font>,而只需要以key-value的形式持久化存储.  
+Dubbo Consumer中的配置项也有近20个,服务消费者列表中只需要关注`application,version,group,ip,dubbo `版本等少量配置,其他配置也可以以key-value形式持久化存储  
+这些数据是以服务为维度注册进入注册中心,导致了数据量的膨胀,进而引发注册中心(如zookeeper)的网络开销增大,性能降低  
+
+> 设计目标和宗旨
+> 1.期望<font color="#FF00FF">简化</font>进入注册中心的provider和consumer配置数量
+> 2.期望将部分配置项以其他形式存储;这些配置项需要满足:不在服务调用链路上,同时这些配置项不在注册中心的核心链路上(服务查询,服务列表)
+
+*提示:dubbo中的所有配置项可以参考[配置项手册](https://cn.dubbo.apache.org/zh-cn/overview/mannual/java-sdk/reference-manual/config/properties/)*  
+
+**注意:简化注册中心的配置,只在2.7之后的版本中进行支持,开启简化配置后会减少进入注册中心中的配置,<font color="#FF00FF">dubbo官方提到本版本还是保留了部分配置,后续会逐渐删除所有的配置项</font>,因为<font color="#00FF00">dubbo3的配置项不再从注册中心获取了,而是直接从目标服务获取</font>**  
+
+2.使用场景  
+数据量大导致注册中心的网络开销增大,性能降低  
+
+3.使用方式  
+3.1 默认使用方式  
+*提示:本节的示例可以参考dubbo-sample->3-extensions->registry->dubbo-samples-simplified-registry->dubbo-samples-simplified-registry-nosimple*  
+
+启动之后查看zookpeer或者nacos发现有很多不需要的配置都进入了注册中心,同理consumer也有这个问题  
+
+3.2 dubbo.properties  
+*提示:本节的示例可以参考dubbo-sample->3-extensions->registry->dubbo-samples-simplified-registry->dubbo-samples-simplified-registry-properties*  
+在该示例中有一个dubbo.properties配置文件,内容如下:  
+```properties
+# 开启简化配置
+dubbo.registry.simplified=true
+# 添加额外key
+dubbo.registry.extra-keys=retries,owner
+```
+provide端的xml配置如下:  
+```xml
+<beans xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xmlns:dubbo="http://dubbo.apache.org/schema/dubbo"
+       xmlns="http://www.springframework.org/schema/beans"
+       xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-4.3.xsd
+       http://dubbo.apache.org/schema/dubbo http://dubbo.apache.org/schema/dubbo/dubbo.xsd">
+    <!-- optional -->
+    <dubbo:application name="simplified-registry-xml-provider"/>
+    <dubbo:registry address="zookeeper://127.0.0.1:2181"/>
+    <bean id="demoService" class="org.apache.dubbo.samples.simplified.registry.nosimple.impl.DemoServiceImpl"/>
+    <dubbo:service async="true" interface="org.apache.dubbo.samples.simplified.registry.nosimple.api.DemoService" version="1.2.3" group="dubbo-simple"
+                   ref="demoService" executes="4500" retries="7" owner="vict" timeout="5300"/>
+
+</beans>
+```
+**结果**  
+由于本示例的配置开启了配置简化功能,所以会大幅减少配置,但默认必须保留的配置是不会减少的,必须保留的配置详情见[必须保留的配置](https://cn.dubbo.apache.org/zh-cn/overview/mannual/java-sdk/advanced-features-and-usage/performance/simplify-registry-data/),并且由于这里使用了`extra-keys`参数指定了额外的配置`retries,owner`所以即使这两个配置不是必须配置,最终依旧会添加到注册中心  
+
+3.3 注解方式  
+*提示:本节的示例可以参考dubbo-sample->3-extensions->registry->dubbo-samples-simplified-registry->dubbo-samples-simplified-registry-annotation*  
+*提示:最终的结果和第3.2步中的结果一致*  
+<font color="#00FF00">注解的方式应该是不常用的,真实生产一般是把dubbo.properties放到nacos配置中心中去</font>  
+
+privider端bean配置:  
+```java
+// 等同于dubbo.properties配置，用@Bean形式进行配置
+@Bean
+public RegistryConfig registryConfig() {
+    RegistryConfig registryConfig = new RegistryConfig();
+    registryConfig.setAddress("zookeeper://127.0.0.1:2181");
+    registryConfig.setSimplified(true);
+    registryConfig.setExtraKeys("retries,owner");
+    return registryConfig;
+}
+```
+```java
+// 暴露服务
+@DubboService(version = "1.1.8", group = "d-test", executes = 4500, retries = 7, owner = "victanno", timeout = 5300)
+public class AnnotationServiceImpl implements AnnotationService {
+    @Override
+    public String sayHello(String name) {
+        System.out.println("async provider received: " + name);
+        return "annotation: hello, " + name;
+    }
+}
+```
+
