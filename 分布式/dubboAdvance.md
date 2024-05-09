@@ -1885,6 +1885,15 @@ Dubbo也可以将日志信息保存或记录在文件中
 2.3.5 路由状态采集  
 2.3.6 负载均衡  
 2.3.7 注册信息简化  
+2.3.8 调用结果缓存  
+2.3.9 并发控制  
+2.3.10 自适应限流  
+2.3.11 连接控制  
+2.3.12 延迟连接  
+2.3.13 粘滞连接  
+2.3.14 支持Graal VM  
+2.3.15 导出线程堆栈  
+2.3.16 Kryo和FST序列化  
 
 
 #### 2.3.1 请求耗时采样  
@@ -2310,4 +2319,374 @@ public class AnnotationServiceImpl implements AnnotationService {
     }
 }
 ```
+
+#### 2.3.8 调用结果缓存  
+1.功能说明  
+Dubbo支持了<font color="#00FF00">服务端结果缓存和客户端结果缓存</font>  
+
+2.缓存类型  
+Dubbo3支持以下几种内置的缓存策略:  
+* `lru`基于最近最少使用原则删除多余缓存,保持最热的数据被缓存
+* `lfu`基于淘汰使用频次最低的原则来实现缓存策略 
+* `expiring`基于过期时间原则来实现缓存策略
+* `threadlocal`当前线程缓存,比如一个页面渲染,用到很多portal(门户网站),每个portal(门户网站)都要去查用户信息,通过线程缓存,可以减少这种多余访问
+* `jcache`与JSR107集成,可以桥接各种缓存实现
+
+缓存类型可扩展,详情见dubboManual=>参考手册=>SPI扩展使用手册=>dubbo SPI扩展使用手册=>缓存扩展  
+
+*提示:本节的示例可以参考dubbo-sample->2-advance->dubbo-sample-cache*  
+
+3.使用场景  
+结果缓存,<font color="#00FF00">用于加速热门数据的访问速度</font>,Dubbo提供声明式缓存,以减少用户加缓存的工作量  
+
+4.使用方式  
+Dubbo中对RPC调用结果缓存支持<font color="#00FF00">接口粒度</font>和<font color="#00FF00">方法粒度</font>的配置控制  
+**客户端缓存:**  
+4.1 客户端缓存-接口粒度  
+```xml
+<!-- xml配置方式 -->
+<dubbo:reference interface="com.foo.DemoService" cache="lru" />
+```
+
+```java
+// 注解配置方式
+@DubboReference(cache = "lru")
+private DemoService demoService;
+```
+
+4.2 客户端缓存-方法粒度  
+```xml
+<!-- 方法粒度 -->
+<dubbo:reference interface="com.foo.DemoService">
+    <dubbo:method name="sayHello" cache="lru" />
+</dubbo:reference>
+```
+
+```java
+// 注解配置方式
+@DubboReference(methods = {@Method(name="sayHello",cache = "lru")})
+private DemoService demoService;
+```
+
+4.3 服务端缓存-接口粒度
+```xml
+<!-- xml配置 -->
+<bean id="demoService" class="org.apache.dubbo.demo.provider.DemoServiceImpl"/>
+<dubbo:service interface="com.foo.DemoService" ref="demoService" cache="lru" />
+```
+
+```java
+// 注解配置方式
+@DubboService(cache = "lru")
+public class DemoServiceImpl implements DemoService {
+
+    private static final Logger logger = LoggerFactory.getLogger(DemoServiceImpl.class);
+    @Override
+    public String sayHello(String name) {
+        logger.info("Hello " + name + ", request from consumer: " + RpcContext.getContext().getRemoteAddress());
+        return "Hello " + name;
+
+    }
+
+}
+```
+
+4.4 服务端缓存-方法粒度  
+```xml
+<!-- xml配置方式 -->
+<bean id="demoService" class="org.apache.dubbo.demo.provider.DemoServiceImpl"/>
+<dubbo:service interface="com.foo.DemoService" ref="demoService" cache="lru" />
+    <dubbo:method name="sayHello" cache="lru" />
+</dubbo:service>
+```
+
+```java
+// 注解配置方式
+@DubboService(methods = {@Method(name="sayHello",cache = "lru")})
+public class DemoServiceImpl implements DemoService {
+
+    private static final Logger logger = LoggerFactory.getLogger(DemoServiceImpl.class);
+    @Override
+    public String sayHello(String name) {
+        logger.info("Hello " + name + ", request from consumer: " + RpcContext.getContext().getRemoteAddress());
+        return "Hello " + name;
+
+    }
+
+}
+```
+
+#### 2.3.9 并发控制  
+1.功能说明  
+多种并发控制功能,帮助用户管理其应用程序和服务  
+
+2.使用场景  
+限制<font color="#00FF00">从同一客户端到同一服务的并发请求数</font>,防止恶意请求使服务器过载,确保服务的稳定性,并防止使用过多资源,<font color="#00FF00">控制某些服务的最大并发请求数</font>,确保其他服务的资源可用性;系统过载和确保系统稳定性;Dubbo还提供了自适应限流,*详情见2.3 诊断与调优=>2.3.10 自适应限流*  
+
+3.使用方式  
+3.1 服务端-接口粒度  
+限制`com.foo.BarService`服务端并发执行不能超过十个(针对服务端而言)  
+```xml
+<dubbo:service interface="com.foo.BarService" executes="10" />
+```
+
+3.2 服务端-方法粒度  
+限制`com.foo.BarService`的`sayHello`方法,服务端并发执行不能超过十个  
+```xml
+<dubbo:service interface="com.foo.BarService">
+    <dubbo:method name="sayHello" executes="10" />
+</dubbo:service>
+```
+
+3.3 客户端-接口粒度  
+限制`com.foo.BarService`的每个方法,客户端并发执行不能超过十个(针对客户端而言)  
+```xml
+<dubbo:service interface="com.foo.BarService" actives="10" />
+<!-- 或者 -->
+<dubbo:reference interface="com.foo.BarService" actives="10" />
+```
+*提示:`executes`是针对服务端而言的,`actives`是针对客户端而言的;actives既可以配置在service又可以配置在reference*  
+
+3.4 客户端-方法粒度  
+```xml
+<dubbo:service interface="com.foo.BarService">
+    <dubbo:method name="sayHello" actives="10" />
+</dubbo:service>
+<!-- 或者 -->
+<dubbo:reference interface="com.foo.BarService">
+    <dubbo:method name="sayHello" actives="10" />
+</dubbo:service>
+```
+如果`<dubbo:service>`和`<dubbo:reference>`都配置了actives,<font color="#00FF00">&lt;dubbo:reference&gt;优先</font>  
+
+4.Load Balance负载均衡  
+配置`loadbalance`属性为`leastactive`,服务调用者会调用并发数最小的Provider  
+```xml
+<dubbo:reference interface="com.foo.BarService" loadbalance="leastactive" />
+<!-- 或者 -->
+<dubbo:service interface="com.foo.BarService" loadbalance="leastactive" />
+```
+
+
+#### 2.3.10 自适应限流  
+1.功能说明  
+自适应限流的设计与实现思路请参考[自适应负载均衡与限流](https://cn.dubbo.apache.org/zh-cn/overview/reference/proposals/heuristic-flow-control/),<font color="#00FF00">自适应限流能够确保分布式系统稳定性和可靠性</font>  
+
+2.使用场景  
+* 服务降级预防:当服务提供者因资源耗尽而性能下降时,使用<font color="#00FF00">自适应限流暂时减少其接受的请求数直至恢复正常</font>
+* 峰值流量处理:当服务流量突然激增时,自适应流量限制可以通过<font color="#00FF00">动态减少接受的请求数量</font>来帮助防止服务过载
+* 不可预测流量处理:服务提供商可能会遇到不可预测的流量,第三方应用程序使用服务时可能会偶尔产生流量,自适应流量限制可以根据当前系统负载调整允许的最大并发请求数并防止过载
+
+3.使用方式  
+设置方法与静态的<font color="#00FF00">最大并发值</font>设置类似,只需在服务端设置`flowcontrol`参数即可,可选值有以下两种:  
+* `heuristicSmoothingFlowControl`
+  当服务端收到一个请求时,首先<font color="#00FF00">判断CPU的使用率是否超过50%</font>;如果没有超过50%,则接受这个请求进行处理.如果超过50%,说明当前的负载较高,便从`HeuristicSmoothingFlowControl`算法中获得当前的`maxConcurrency`值,如果当前正在处理的请求数量超过了`maxConcurrency`,则拒绝该请求
+* autoConcurrencyLimiter
+  与`HeuristicSmoothingFlowControl`的最大区别是,`AutoConcurrencyLimiter`是基于窗口的,每当窗口内积累了一定量的采样数据时,才利用窗口内的数据来更新得到`maxConcurrency`,其次;利用exploreRatio来对剩余的容量进行探索
+
+> 在确保服务端存在多个节点,并且消费端开启重试策略的前提下,限流功能才能更好的发挥作用
+
+3.1 使用`heuristicSmoothingFlowControl`自适应限流算法  
+```properties
+# properties配置
+dubbo.provider.flowcontrol=heuristicSmoothingFlowControl
+```
+```xml
+<!-- xml配置 -->
+<dubbo:provider flowcontrol="heuristicSmoothingFlowControl" />
+```
+
+3.2 使用`autoConcurrencyLimiter`自适应限流算法
+```properties
+dubbo.provider.flowcontrol=autoConcurrencyLimiter
+```
+```xml
+<dubbo:provider flowcontrol="autoConcurrencyLimiter" />
+```
+
+3.3 使用<font color="#00FF00">接口粒度</font>`heuristicSmoothingFlowControl`自适应限流算法  
+```xml
+<dubbo:service interface="com.foo.BarService" flowcontrol="heuristicSmoothingFlowControl" />
+```
+
+#### 2.3.11 连接控制  
+1.功能说明  
+连接控制功能可以使用户能够控制和管理进出服务器连接数,<font color="#00FF00">限制连接数并设置超时</font>,以确保Dubbo系统的稳定性和性能,还允许用户根据IP地址、端口和协议配置不同级别的访问控制,保护系统免受恶意流量的影响,并降低服务中断的风险,此外提供了一种监视当前流量和连接状态的方法  
+
+2.使用场景  
+* 服务器过载时减少连接数:当服务器过载时,通过设置Dubbo最大连接限制来减少连接数减少服务器上的负载并防止其崩溃
+* 减少服务器受到攻击时的连接数:Dubbo可以限制服务器的连接数,以防止恶意连接充斥服务器并导致服务器崩溃
+* 限制特定服务的连接数:Dubbo可以限制特定服务连接数防止服务过载过多的请求并确保及时响应所有请求
+* 限制来自单个IP地址的连接数:Dubbo可以限制来自单个地址的连接数降低来自单个IP地址的恶意活动的风险
+
+3.使用方式  
+3.1 服务端连接控制  
+```xml
+<!-- 限制服务端的连接不能超过十个 -->
+<dubbo:provider protocol="dubbo" accepts="10" />
+<!-- 或者 -->
+<dubbo:protocol name="dubbo" accepts="10" />
+```
+
+3.2 客户端连接控制  
+```xml
+<!-- 限制客户端服务使用连接不能超过10个 -->
+<dubbo:reference interface="com.foo.BarService" connections="10" />
+<!-- 或者 -->
+<dubbo:service interface="com.foo.BarService" connections="10" />
+```
+
+如果`<dubbo:service>`和`<dubbo:reference>`都配置了`connections`属性,则`<dubbo:reference>`优先级较高  
+
+
+#### 2.3.12 延迟连接  
+1.功能说明  
+当消费者真正请求目标服务时才建立真正的连接,避免创建不必要的连接来减少延迟并提高系统稳定性  
+
+2.使用场景  
+延迟连接用于<font color="#00FF00">减少长连接数</font>,当有调用发起时,再创建长连接  
+
+3.使用方式  
+```xml
+<!-- 该配置只对长连接生效 -->
+<dubbo:protocol name="dubbo" lazy="true" />
+```
+
+#### 2.3.13 粘滞连接  
+1.功能说明  
+允许消费者在提供者接收请求之前向提供者发送请求,消费者等待提供者准备就绪,<font color="#00FF00">相当于发送一个预检请求,询问服务器是否准备好</font>,然后将发送消费者者的请求,当消费者需要连接到提供者,提供者尚未准备好接受请求时,<font color="#00FF00">确保在正确的时间发送请求,防止消费者被速度慢或不可用程序阻止</font>  
+
+2.使用场景  
+粘滞连接用于有状态服务,<font color="#00FF00">确保在正确的时间发送请求,防止消费者被速度慢或不可用的提供程序阻止</font>,除非该提供者挂了,再连另一台,粘滞连接将自动开启延迟连接(*详情见2.3 诊断与调优=>2.3.13 粘滞连接*),以减少连接数  
+
+3.使用方式  
+```xml
+<dubbo:reference id="xxxService" interface="com.xxx.XxxService" sticky="true" />
+<!-- Dubbo支持方法级别的粘滞连接,如果你想进行更细粒度的控制,还可以这样配置 -->
+<dubbo:reference id="xxxService" interface="com.xxx.XxxService">
+    <dubbo:method name="sayHello" sticky="true" />
+</dubbo:reference>
+```
+
+#### 2.3.14 支持Graal VM
+*提示:说白了就是Dubbo支持Graal VM,详情可以参考官网的内容*  
+
+
+#### 2.3.15 导出线程堆栈  
+1.功能说明  
+dubbo通过jstack自动导出线程堆栈来保留现场,方便排查问题  
+默认策略:  
+* 导出路径:`user.home`标识的用户主目录
+* 导出间隔:最短间隔允许每隔10分钟导出一次
+* 导出开关:默认打开
+
+2.使用场景  
+当业务线程池满时,我们需要知道<font color="#00FF00">线程都在等待哪些资源、条件</font>,以找到系统的瓶颈点或异常点  
+
+3.使用方式  
+3.1 导出开关控制(一共有如下三种配置方式)  
+```properties
+dubbo.application.dump.enable=true
+```
+```xml
+<dubbo:application name="demo-provider" dump-enable="false"/>
+```
+```yml
+dubbo:
+  application:
+    name: dubbo-springboot-demo-provider
+    dump-enable: false
+```
+
+3.2 指定导出路径  
+```properties
+dubbo.application.dump.directory=/tmp
+```
+```xml
+<dubbo:application name="demo-provider" dump-directory="/tmp"/>
+```
+```yml
+dubbo:
+  application:
+    name: dubbo-springboot-demo-provider
+    dump-directory: /tmp
+```
+
+#### 2.3.16 Kryo和FST序列化  
+1.dubbo RPC  
+dubbo RPC是dubbo体系中最核心的一种高性能、高吞吐量的<font color="#00FF00">远程调用方式</font>,我喜欢称之为<font color="#FF00FF">多路复用的TCP长连接调用</font>;主要用于两个dubbo系统之间作远程调用,特别适合高并发、小数据的互联网场景  
+**长连接:** 避免了每次调用新建TCP连接,提高了调用的响应速度  
+**多路复用:** <font color="#00FF00">单个TCP连接可交替传输多个请求和响应的消息</font>,降低了连接的等待闲置时间,从而减少了同样并发数下的网络连接数,提高了系统吞吐量  
+
+2.序列化协议  
+<font color="#00FF00">序列化</font>对于远程调用的响应速度、吞吐量、网络带宽消耗等同样也起着至关重要的作用,是我们提升分布式系统性能的最关键因素之一  
+在dubbo RPC中,同时支持多种序列化方式:  
+* dubbo序列化:阿里尚未开发成熟的高效<font color="#00FF00">java序列化</font>实现,阿里不建议在生产环境使用它
+* hessian2序列化(默认序列化协议):`hessian`是一种跨语言的高效二进制序列化方式;但这里实际不是原生的序列化,而是阿里修改过的`hessian lite`,它是dubbo RPC默认启用的序列化方式
+* json序列化:目前有两种实现,一种是采用的阿里的fastjson库,另一种是采用dubbo中自己实现的简单json库,<font color="#00FF00">但其实现都不是特别成熟,而且json这种文本序列化性能一般不如上面两种二进制序列化</font>
+* Java序列化:主要是采用JDK自带的Java序列化实现,性能很不理想  
+
+所以说白了,目前能被正常使用的序列化协议只有<font color="#FF00FF">hessian2</font>.不过近几年各种新的高效序列化方式层出不穷,例如:  
+* 专门针对Java语言的:Kryo、FST
+* 跨语言的:Protostuff、ProtoBuf、Thrift、Avro、MsgPack
+
+这些序列化协议性能<font color="#00FF00">多数都优于hessian2</font>,所以dubbo通过引入<font color="#00FF00">Kryo和FST这两种高效Java序列化实现</font>,来逐渐取代hessian2协议  
+由于Kryo协议已经在多个开源项目中被广泛使用,所以生产环境推荐使用Kryo  
+
+3.使用方式  
+3.1 启用Kryo和FST  
+```xml
+<!-- 添加相应的依赖 -->
+<dependency>
+   <groupId>org.apache.dubbo.extensions</groupId>
+   <artifactId>dubbo-serialization-kryo</artifactId>
+   <version>1.0.0</version>
+</dependency>
+<dependency>
+   <groupId>org.apache.dubbo.extensions</groupId>
+   <artifactId>dubbo-serialization-fst</artifactId>
+   <version>1.0.0</version>
+</dependency>
+```
+
+在dubbo RPC的xml配置中添加属性即可  
+```xml
+<dubbo:protocol name="dubbo" serialization="kryo"/>
+<dubbo:protocol name="dubbo" serialization="fst"/>
+```
+
+3.2 注册被序列化类
+<font color="#00FF00">要让Kryo和FST完全发挥出高性能,最好将那些需要被序列化的类注册到dubbo系统中</font>,所以一般对于我们的项目就是要将微服交互的对象进行注册,注册方式如下,通过一个回调接口来实现:  
+```java
+public class SerializationOptimizerImpl implements SerializationOptimizer {
+
+    public Collection<Class> getSerializableClasses() {
+        List<Class> classes = new LinkedList<Class>();
+        // 在这里面添加所以需要在远程调用时序列化的类  
+        classes.add(BidRequest.class);
+        classes.add(BidResponse.class);
+        classes.add(Device.class);
+        classes.add(Geo.class);
+        classes.add(Impression.class);
+        classes.add(SeatBid.class);
+        return classes;
+    }
+}
+```
+在xml中添加如下配置  
+```xml
+<dubbo:protocol name="dubbo" serialization="kryo" optimizer="org.apache.dubbo.demo.SerializationOptimizerImpl"/>
+```
+在注册这些类之后,序列化的性能将被大量提升,并且dubbo自身也默认对JDK中的常用类进行了注册,另外计算你没有注册这些类,<font color="#00FF00">使用kryo和FST的性能依然普遍优于hessian和dubbo序列化</font>  
+如果觉得一个个注册比较麻烦,可以使用扫描类路径,自动发现<font color="#00FF00">实现Serializable接口</font>并将它们自动注册  
+
+3.3 无参构造函数和Serializable接口  
+如果被序列化的类中不包含无参的构造函数,<font color="#00FF00">则在Kryo的序列化中,性能将会大打折扣</font>,因为此时我们在底层将用Java的序列化来透明的取代Kryo序列化.所以,<font color="#FF00FF">尽可能为每一个被序列化的类添加无参构造函数</font>(当然一个java类如果不自定义构造函数,默认就有无参构造函数)
+另外,Kryo和FST本来都不需要被序列化的类实现Serializable接口,但我们还是<font color="#FF00FF">建议每个被序列化类都去实现Serializable接口</font>,<font color="#00FF00">因为这样可以保持和Java序列化以及dubbo序列化的兼容性,另外也使我们未来采用上述某些自动注册机制带来可能</font>  
+
+
+### 2.4 提升安全性  
+**目录:**  
+2.4.1 TLS支持  
+
 
