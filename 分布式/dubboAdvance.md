@@ -3223,6 +3223,9 @@ spring-boot支持用starter的方式引入log4j2依赖，但是注意spring-boot
 #### 2.6.3 Streaming通信模式  
 *提示:本节的示例可以参考dubbo-sample=>3-extensions=>protocol=>dubbo-samples-triple=>pojo*  
 
+在一些大文件传输、直播等应用场景中,<font color="#00FF00">consumer或provider需要跟对端进行大量数据的传输,由于这些情况下的数据量是非常大的</font>,因此是没有办法可以在一个RPC的数据包中进行传输,<font color="#00FF00">因此对于这些数据包我们需要对数据包进行分片之后,通过多次RPC调用进行传输</font>,如果我们对这些已经拆分了的RPC数据包进行并行传输,那么到对端后相关的数据包是<font color="#FF00FF">无序的</font>,需要对接收到的数据进行排序拼接,相关的逻辑会非常复杂.但如果我们对拆分了的RPC数据包进行串行传输,那么对应的网络传输RTT与数据处理的时延会是非常大的  
+为了解决以上的问题,<font color="#00FF00">并且为了大量数据的传输以流水线方式在consumer与provider之间传输,因此Streaming RPC的模型应运而生</font>
+
 1.Stream(流)  
 Stream是`Dubbo3`新提供的一种调用类型,在以下场景时建议使用流的方式:  
 * <font color="#00FF00">接口需要发送大量数据</font>,这些数据无法被放在一个RPC的请求或响应中,需要分批发送,但应用层如果按照传统的多次RPC方式无法解决顺序和性能的问题,如果需要保证有序,则只能串行发送
