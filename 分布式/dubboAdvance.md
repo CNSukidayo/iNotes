@@ -1803,12 +1803,12 @@ Dubbo Tracing还实现了与日志系统的自动关联,即将tracing-id、span-
 #### 2.2.4 日志管理  
 1.基本介绍  
 在Dubbo框架内<font color="#00FF00">所有的日志输出</font>都是通过LoggerFactory这个静态工厂类来获得Logger的对象实体,并且抽离了一个LoggerAdapter用于对接第三方日志框架,所以就有了JDKLoggerAdapter、Log4jLoggerAdapter、SLF4JLoggerAdapter等一些实现子类,分别对接了不同Log第三方实现.这些日志框架在Dubbo中的优先级如下表所示(这里的优先级指未配置logger提供方的情况下,有Dubbo框架自已选择使用的日志框架优先级):  
-|第三方日志框架|优先级|
-|:-:|:-:|
-|Log4j|最高(默认就用这个)|
-|SLF4J|次高(上面没有采用这个)|
-|Common Logging|次低|
-|JDK log|最低|
+| 第三方日志框架 |         优先级         |
+|:--------------:|:----------------------:|
+|     Log4j      |   最高(默认就用这个)   |
+|     SLF4J      | 次高(上面没有采用这个) |
+| Common Logging |          次低          |
+|    JDK log     |          最低          |
 
 Dubbo日志的调用方式,针对不同的日志打印系统,<font color="#00FF00">采用统一的API调用及输出</font>,如:  
 ```java
@@ -2688,5 +2688,712 @@ public class SerializationOptimizerImpl implements SerializationOptimizer {
 ### 2.4 提升安全性  
 **目录:**  
 2.4.1 TLS支持  
+2.4.2 类检查机制  
+2.4.3 权限控制  
+2.4.4 服务鉴权  
+
+
+#### 2.4.1 TLS支持  
+1.特性说明  
+内置的<font color="#00FF00">Dubbo Netty Server</font>和新引入的<font color="#00FF00">gRPC协议</font>都提供了<font color="#FF00FF">基于TLS的安全链路传输机制</font>  
+
+2.使用场景  
+对<font color="#00FF00">全链路有加密需求</font>的用户可以使用TLS  
+*提示:本节的示例可以参考dubbo-sample->4-governance->dubbo-samples-ssl*  
+
+3.使用方式  
+**Provider端**  
+```java
+SslConfig sslConfig = new SslConfig();
+sslConfig.setServerKeyCertChainPath("path to cert");
+sslConfig.setServerPrivateKeyPath(args[1]);
+// 如果开启双向 cert 认证
+if (mutualTls) {
+  sslConfig.setServerTrustCertCollectionPath(args[2]);
+}
+
+ProtocolConfig protocolConfig = new ProtocolConfig("dubbo/grpc");
+protocolConfig.setSslEnabled(true);
+```
+
+如果要使用的是gRPC协议,在开启TLS时会使用到协议协商机制,因此必须使用支持ALPN机制的Provider,推荐使用的是netty-tcnative,具体可参见[gRPC Java社区](https://github.com/grpc/grpc-java/blob/master/SECURITY.md)  
+
+**Consumer端**  
+```java
+if (!mutualTls) {}
+    sslConfig.setClientTrustCertCollectionPath(args[0]);
+} else {
+    sslConfig.setClientTrustCertCollectionPath(args[0]);
+    sslConfig.setClientKeyCertChainPath(args[1]);
+    sslConfig.setClientPrivateKeyPath(args[2]);
+}
+```
+为尽可能保证应用启动的灵活性,TLS Cert(证书)的指定<font color="#00FF00">还能通过-D参数或环境变量等方式来在启动阶段根据部署环境动态指定</font>  
+
+#### 2.4.2 类检查机制  
+1.特性说明  
+该机制保证服务提供方和服务消费方类之间的兼容性和安全  
+
+2.使用场景  
+防止由于类版本不匹配、方法签名不兼容或缺少类而可能发生的潜在问题,实际上版本不匹配说的就是序列化类时的版本不匹配  
+
+3.使用方式  
+目前支持<font color="#00FF00">Hessian2、Fastjson2序列化协议以及泛化调用</font>  
+
+4.检查模式  
+检查模式分为三个级别:`STRICT`严格检查、`WARN`告警、`DISABLE`禁用  
+* `STRICT`(默认):禁止反序列化所有不在允许序列化列表(白名单)中的类
+* `WARN`:仅禁止序列化所有在不允许序列化列表中(黑名单)的类,同时在反序列化时,不允许序列化列表(白名单)类的时候通过日志进行告警
+* `DISABLE`:不进行任何检查
+
+5.配置使用  
+5.1 使用ApplicationConfig配置  
+```java
+ApplicationConfig applicationConfig = new ApplicationConfig();
+applicationConfig.setSerializeCheckStatus("STRICT");
+```
+
+5.2 使用Spring XML配置  
+```xml
+<dubbo:application name="demo-provider" serialize-check-status="STRICT"/>
+```
+
+5.3 使用dubbo.properties配置  
+```properties
+dubbo.application.serialize-check-status=STRICT
+```
+
+5.4 使用System Property配置  
+```properties
+-Ddubbo.application.serialize-check-status=STRICT
+```
+
+配置成功后会输出如下日志信息  
+```shell
+INFO utils.SerializeSecurityManager:  [DUBBO] Serialize check level: STRICT
+```
+
+6.Serializable接口检查  
+Serializable接口检查模式分为两个级别:`true`开启,`false`关闭;开启检查后会拒绝反序列化所有未实现Serializable接口的类;Dubbo默认配置为`true`开启  
+*提示:个人觉得这里是否真有比较开启这个检查,毕竟根据Effective Java中的观点,如果类实现了序列化接口,则是需要维护好改实现类的*  
+6.1 使用ApplicationConfig配置  
+```java
+ApplicationConfig applicationConfig = new ApplicationConfig();
+applicationConfig.setCheckSerializable(true);
+```
+
+6.2 使用Spring XML配置  
+```xml
+<dubbo:application name="demo-provider" check-serializable="true"/>
+```
+
+6.3 使用dubbo.properties配置  
+```xml
+dubbo.application.check-serializable=true
+```
+
+6.4 使用System Property配置  
+```xml
+-Ddubbo.application.check-serializable=true
+```
+
+6.5 配置成功后会看到如下提示  
+```shell
+INFO utils.SerializeSecurityManager:  [DUBBO] Serialize check serializable: true
+```
+
+7.自动扫描相关配置  
+Dubbo类自动扫描机制共有两个配置项:`AutoTrustSerializeClass`(是否启用自动扫描)和`TrustSerializeClassLevel`(类信任层级)  
+在开启类自动扫描之后,Dubbo会通过`ReferenceConfig`和`ServiceConfig`<font color="#00FF00">自动扫描接口所有可能会用到的相关类</font>,并且递归信任其所在的<font color="#00FF00">package</font>.`TrustSerializeClassLevel`类信任层级可以用来限制最终信任的package层级;如io.dubbo.test.pojo.User在TrustSerializeClassLevel配置为3的时候,最终会信任io.dubbo.test这个package下所有的类  
+Dubbo中默认配置`AutoTrustSerializeClass`为`true`,`TrustSerializeClassLevel`为3  
+7.1 使用ApplicationConfig配置  
+```java
+ApplicationConfig applicationConfig = new ApplicationConfig();
+applicationConfig.setAutoTrustSerializeClass(true);
+applicationConfig.setTrustSerializeClassLevel(3);
+```
+
+7.2 使用Spring XML配置  
+```xml
+<dubbo:application name="demo-provider" auto-trust-serialize-class="true" trust-serialize-class-level="3"/>
+```
+
+7.3 使用dubbo.properties配置  
+```properties
+dubbo.application.auto-trust-serialize-class=true
+dubbo.application.trust-serialize-class-level=3
+```
+
+7.4 使用System Property配置  
+```properties
+-Ddubbo.application.auto-trust-serialize-class=true
+-Ddubbo.application.trust-serialize-class-level=3
+```
+
+*提示:配置成功后可以通过<font color="#00FF00">QoS命令</font>检查当前已经加载的可信类结果是否符合预期*  
+
+8.可信/不可信类自定义配置  
+除了Dubbo自动扫描类之外,也支持<font color="#00FF00">通过资源文件的方式配置可信/不可信类列表</font>  
+在资源目录(resource)下定义以下文件来进行列表的配置  
+```shell
+# security/serialize.allowlist
+io.dubbo.test
+# security/serialize.blockedlist
+io.dubbo.block
+```
+
+*提示:注意要在resource目录下创建security文件夹*  
+
+配置优先级为:<font color="#00FF00">用户自定义可信类 = 框架内置可信类 > 用户自定义不可信类 = 框架内置不可信类 > 自动类扫描可信类</font>  
+
+9.审计方式  
+可以通过`QoS`命令实时查看当前的配置信息以及可信/不可信类列表(QoS命令在dubboBasis文档中讲到过),也可以通过HTTP请求的方式来得知系统列表的情况  
+通过http请求json格式结果:  
+```shell
+# 查看serializeCheckStatus检查状态
+> curl http://127.0.0.1:22222/serializeCheckStatus
+# 查看序列化列表
+> curl http://127.0.0.1:22222/serializeWarnedClasses
+```
+
+#### 2.4.3 权限控制
+1.特性说明  
+通过令牌验证注册中心控制权限,<font color="#00FF00">以决定要不要下发令牌给消费者</font>,<font color="#FF00FF">可以防止消费者绕过注册中心访问提供者</font>,另外通过注册中心可灵活改变授权方式,而不需修改或升级Provider  
+![权限控制](resources/dubbo/36.png)  
+
+2.使用场景  
+在一<font color="#00FF00">定程度上实现客户端和服务端的可信鉴权</font>,避免任意客户端都可以访问,降低出现安全问题的风险  
+
+3.使用方式  
+```xml
+<!--随机token令牌,使用UUID生成-->
+<dubbo:provider token="true" />
+<!--固定token令牌,相当于密码-->
+<dubbo:provider token="123456" />
+<!--使用UUID生成-服务级别设置-->
+<dubbo:service interface="com.foo.BarService" token="true" />
+<!--固定token令牌-服务级别设置-->
+<dubbo:service interface="com.foo.BarService" token="123456" />
+```
+
+#### 2.4.4 服务鉴权  
+1.特性说明  
+<font color="#00FF00">类似支付</font>之类的对安全性敏感的业务可能会有限制匿名调用的需求;在加固安全性方面引入了基于AK/SK机制的认证鉴权机制,并且引入了鉴权服务中心,主要原理是<font color="#00FF00">消费端在请求需要鉴权的服务时,会通过SK、请求元数据、时间戳、参数等信息来生成对应的请求签名,通过Dubbo的Attahcment机制携带到对端进行验签,验签通过才进行业务逻辑处理</font>,如下图所示:  
+![服务鉴权](resources/dubbo/37.png)  
+
+2.使用场景  
+部署新服务时,使用身份验证来确保只部署正确的服务,如果部署了未经授权的服务,则使用身份验证来拒绝访问并防止使用未经授权服务  
+
+3.使用方式  
+3.1 使用者需要在微服务站点上填写自己的应用信息,并为该应用生成唯一的证书凭证  
+3.2 之后在管理站点上提交工单,申请某个敏感业务服务的使用权限,并由对应业务管理者进行审批,审批通过之后,会生成对应的AK/SK到鉴权服务中心  
+3.3 导入该证书到对应的应用下,并且进行配置.配置方式也十分简单,以注解方式为例  
+3.4 服务提供端  
+```java
+// 只需要设置service.auth为true,表示该服务的调用需要鉴权认证通过;param.sign为true表示需要对参数也进行校验
+@DubboService(parameters = {"service.auth","true","param.sign","true"})
+public class AuthDemoServiceImpl implements AuthService {
+}
+```
+3.5 服务消费端  
+只需要配置好对应的证书等信息即可,之后会自动地在对这些需要认证的接口发起调用前进行签名操作,通过与鉴权服务的交互,用户无需在代码中配置AK/SK这些敏感信息,并且在不重启应用的情况下刷新AK/SK,达到权限动态下发的目的  
+
+
+### 2.5 其它  
+**目录:**  
+2.5.1 自定义服务容器  
+2.5.2 优雅停机  
+2.5.3 主机地址自定义暴露  
+2.5.4 日志框架适配及运行时管理  
+2.5.5 Kubernetes生命周期探针  
+2.5.6 Dubbo部署Docker环境  
+2.5.7 日志框架配置与使用  
+2.5.8 Triple协议  
+
+
+#### 2.5.1 自定义服务容器  
+1.特性说明  
+Dubbo的服务容器是一个`standalone`(单机)的启动程序,因为后台服务<font color="#00FF00">不需要Tomcat或JBoss等Web容器的功能</font>,如果硬要用Web容器去加载服务提供方,增加复杂性,也浪费资源;所以服务通常不需要Tomcat/JBoss等Web容器的特性,没必要用Web容器去加载服务  
+<font color="#FF00FF">Dubbo服务容器只是一个简单的Main方法,并加载一个简单的Spring容器,用于暴露服务</font>  
+服务容器的加载内容可以扩展,内置了spring、jetty、log4j等扩展内容(默认的内容),可通过容器扩展点(//todo)进行扩展;<font color="#00FF00">配置配在java命令的-D参数或者dubbo.properties 中</font>  
+
+2.使用场景  
+<font color="#00FF00">web容器主要是用来响应http请求以及静态页面的</font>,Dubbo服务提供方只是对外提供dubbo服务,用web容器不太适合;<font color="#00FF00">单独作为dubbo服务提供方,只需要通过一个main方法加载一个简单的spring容器将服务暴露</font>  
+
+3.使用方式  
+3.1 Spring Container  
+* 自动加载`META-INF/spring`目录下的所有Spring配置
+* 自定义配置`spring`配置加载位置
+  ```properties
+  dubbo.spring.config=classpath*:META-INF/spring/*.xml
+  ```
+
+3.2 Jetty Container  
+* 启动一个内嵌Jetty,用于汇报状态
+* 配置:
+  * `dubbo.jetty.port=8080`:配置jetty启动端口
+  * `dubbo.jetty.directory=/foo/bar`:配置可通过jetty直接访问的目录,用于存放静态文件
+  * `dubbo.jetty.page=log,status,system`:配置显示的页面,缺省加载所有页面
+
+3.3 Log4j Container  
+自动配置log4j的配置,在多进程启动时,自动给日志文件按进程分目录  
+* 配置:
+  * `dubbo.log4j.file=/foo/bar.log`:配置日志文件路径
+  * `dubbo.log4j.level=WARN`:配置日志级别
+  * `dubbo.log4j.subdirectory=20880`配置日志子目录,用于多进程启动,避免冲突
+
+4.容器加载说明  
+```shell
+# 默认只加载Spring,用Java命令运行Dubbo进程
+java org.apache.dubbo.container.Main
+# 通过main函数传入要加载的容器
+java org.apache.dubbo.container.Main spring jetty log4j
+# 通过classpath下的dubbo.properties配置传入要加载的容器
+dubbo.container=spring,jetty,log4j
+```
+
+#### 2.5.2 优雅停机  
+1.特性说明  
+优雅停机是指服务实例<font color="#00FF00">能安全平稳的停止,对进行中的业务不产生影响</font>;一个Dubbo服务可能<font color="#00FF00">既作为服务提供者,又是服务消费者</font>,当服务停止时:  
+* 消费者不会再请求已停止的服务实例
+* 该服务实例正在处理的请求能正常处理完成
+
+2.使用场景  
+* 通过`kill PID`停止服务
+* 通过SpringBoot Actuator的`/shutdown`停止服务
+
+3.使用方式  
+设置优雅停机超时时间,默认时间是10秒,可以在dubbo.properties中修改改值,如果超时则强制关闭  
+```properties
+# 停止服务等待时间,单位:毫秒
+dubbo.service.shutdown.wait=30000
+```
+
+4.注意事项  
+* Dubbo是通过JDK的ShutdownHook来完成优雅停机的,所以如果用户使用`kill -9 PID`等强制关闭指令,是不会执行优雅停机的,只有通过`kill PID`时,才会优雅停机  
+* 验证Dubbo是否真正优雅停机了,可以在日志文件中查找关键字`Run shutdown hook now`来判断
+* 使用Spring5以上的版本
+* 如果使用了SpringBoot,Dubbo的ShutdownHook会在SpringBoot的ShutdownHook<font color="#00FF00">之前执行</font>,如果使用SpringBoot2.3及以上版本,可以配合SpringBoot的优雅停机使用,在配置文件`application.yml`中添加如下配置:
+  ```yml
+  server:
+    shutdown: graceful
+  ```
+* 如果ShutdownHook不能生效,可根据具体场景进行调用
+  ```java
+  ApplicationModel.defaultModel().destroy(); 
+  ```
+
+#### 2.5.3 主机地址自定义暴露  
+1.特性说明  
+在Dubbo中,Provider启动时主要做两个事情  
+* 一是启动server
+* 二是向注册中心注册服务,启动server时需要绑定socket,向注册中心注册服务时也需要发送socket唯一标识服务地址
+
+**问题:**  
+* dubbo中不设置`host`时默认`host`是什么?
+* 那在dubbo中如何指定服务的`host`,我们是否可以用`hostname`或`domain`代替`IP`地址作为`host`?
+* 在使用docker时,有时需要设置端口映射,此时,<font color="#00FF00">启动server时绑定的socket和向注册中心注册的socket使用不同的端口号</font>,此时又该如何设置?
+
+2.使用场景  
+* 应用程序包含多个服务,每个服务定制地址,外部客户端通过定制的地址访问服务
+* 应用程序同一服务的多个版本每个版本的服务定制地址,外部客户端通过定制的地址访问响应版本的服务
+* 应用程序多个地区部署服务每个地区定制地址,外部客户端通过定制的地址访问相应地区的相应服务
+
+3.使用方式  
+3.1 不设置host时默认host  
+一般的dubbo协议配置如下:  
+```xml
+<dubbo:protocol name="dubbo" port="20890" />
+```
+可以看到,只配置了端口号,没有配置host;查看代码发现,在`org.apache.dubbo.config.ServiceConfig#findConfigedHosts()`中,通过`InetAddress.getLocalHost().getHostAddress()`获取默认host,其返回值如下:  
+* 未联网时,返回127.0.0.1
+* 在阿里云服务器中,返回私有地址如:172.18.46.234
+* 在本机测试时,返回共有地址如:30.5.10.11
+
+
+3.2 指定服务的socket  
+通过在xml文件中,使用`dubbo.protocol`或`dubbo.provider`的`host`属性对`host`进行配置,支持IP地址和域名,如下:  
+```xml
+<dubbo:protocol name="dubbo" port="20890" host="www.example.com"/>
+```
+
+3.3 socket使用不同的端口号  
+*提示:本步骤可以参考dubbo-samples->2-advanced->dubbo-samples-docker*  
+有些部署场景需要动态指定服务注册的地址,如docker bridge网络模式下要指定<font color="#00FF00">宿主机注册ip</font>以实现外网通信;dubbo提供了两对启动阶段的系统属性,用于设置对外通信的ip、port地址  
+* `DUBBO_IP_TO_REGISTRY`:注册到注册中心的IP地址
+* `DUBBO_PORT_TO_REGISTRY`:注册到注册中心的port端口
+* `DUBBO_IP_TO_BIND`:监听IP地址
+* `DUBBO_PORT_TO_BIND`:监听port端口
+
+以上四个配置项均为可选项,如不配置dubbo会自动获取ip与端口,<font color="#00FF00">请根据具体的部署场景灵活选择配置</font>dubbo支持多协议,如果一个应用同时暴露多个不同协议服务,<font color="#00FF00">且需要为每个服务单独指定ip或port</font>,<font color="#FF00FF">请分别在以上属性前加协议前缀</font>如:  
+* `HESSIAN_DUBBO_PORT_TO_BIND`:hessian协议绑定的port
+* `DUBBO_DUBBO_PORT_TO_BIND`:dubbo协议绑定的port
+* `HESSIAN_DUBBO_IP_TO_REGISTRY`:hessian协议注册的ip
+* `DUBBO_DUBBO_IP_TO_REGISTRY`:dubbo协议注册的ip
+
+PORT_TO_REGISTRY或IP_TO_REGISTRY不会用作默认PORT_TO_BIND或IP_TO_BIND,但是反过来是成立的如:  
+* 设置`PORT_TO_REGISTRY=20881`和`IP_TO_REGISTRY=30.5.97.6`则`PORT_TO_BIND`和`IP_TO_BIND`不受影响
+* 设置`PORT_TO_BIND=20881`和`IP_TO_BIND=30.5.97.6`则`PORT_TO_REGISTRY=20881`且`IP_TO_REGISTRY=30.5.97.6`
+
+
+#### 2.5.4 日志框架适配及运行时管理  
+1.特性说明  
+日志框架适配,自`2.2.1`开始,dubbo开始内置log4j、slf4j、jcl、jdk这些日志框架的适配  
+日志框架运行时管理,自`3.0.10`开始,dubbo-qos运行时管控支持查询日志配置以及动态修改使用的日志框架和日志级别  
+> 通过dubbo-qos修改的日志配置不进行持久化存储,在应用重启后将会失效
+
+2.使用场景  
+应用程序日志:收集和存储分布式服务的应用程序日志,支持多种日志格式,包括文本、JSON、XML和二进制,提供了过滤、聚合和分析日志数据,用于解决分布式应用程序的问题;监控服务的性能  
+
+3.使用方式  
+3.1 日志框架适配  
+```shell
+# 通过以下方式配置日志输出策略
+# 命令行方式
+java -Ddubbo.application.logger=log4j
+# dubbo.properties
+dubbo.application.logger=log4j
+# dubbo.xml中配置
+<dubbo:application logger="log4j" />
+```
+
+*提示:自定义扩展详情见参考手册=>SPI扩展使用手册=>Dubbo SPI扩展实现说明=>日志适配扩展*  
+
+3.2 日志框架运行时管理  
+**查询日志配置命令**  
+```shell
+# 注意这是dubbo的telnet功能
+telnet 127.0.0.1 22222
+# 使用loggerInfo命令
+loggerInfo
+```
+
+**修改日志级别**  
+```shell
+telnet 127.0.0.1 22222
+# 使用switchLogLevel命令
+switchLogLevel WARN
+```
+日志等级分为:`ALL`、`TRACE`、`DEBUG`、`INFO`、`WARN`、`ERROR`、`OFF`
+
+**修改日志输出框架命令**  
+```shell
+telnet 127.0.0.1 22222
+# 使用switchLogger命令
+switchLogger slf4j
+```
+支持的日志框架:`slf4j`、`jcl`、`log4j`、`jdk`、`log4j2`
+
+
+#### 2.5.5 Kubernetes生命周期探针
+1.特性说明  
+Pod的生命周期与服务调用息息相关,通过对Kubernetes官方探针的实现,在Pod的整个生命周期中,影响到Pod的就只有健康检查这一部分,我们可以通过配置`liveness probe`(存活探针)和`readiness probe`(可读性探针)来影响容器的生命周期;探针的知识详情见K8S笔记  
+通过Dubbo3的<font color="#FF00FF">SPI机制</font>,在内部实现多种<font color="#00FF00">探针</font>,基于Dubbo3 QOS运维模块的HTTP服务,使容器探针能够获取到应用内对应探针的状态;另外,SPI0的实现机制也利于用户自行拓展内部<font color="#00FF00">探针</font>,使整个应用的生命周期更有效的进行管控  
+
+**三种探针对应的SPI接口:**  
+* livenessProbe:`org.apache.dubbo.qos.probe.LivenessProbe`
+* readinessProbe:`org.apache.dubbo.qos.probe.ReadinessProbe`
+* startupProbe:`org.apache.dubbo.qos.probe.StartupProbe`
+
+接口将自动获取当前应用所有SPI的实现,对应接口的SPI实现均成功就绪则接口返回成功;更对SPI的知识详情见参考手册=>SPI扩展使用手册  
+
+2.使用场景  
+* `liveness probe`来确定你的应用程序是否正常运行,查看是否存活
+* `readiness probe`来确定容器是否已经就绪并且可以接受外部流量
+* `startup probe`来确定容器内的应用程序是否已启动,如果<font color="#FF00FF">提供了启动探测</font>则禁用所有其他探测,直到它成功为止,如果启动探测失败则杀死容器,容器将服从其重启策略;如果容器没有提供启动探测，则默认状态为成功
+
+3.使用方式  
+3.1 存活检测(livenessProbe)  
+对于livenessProbe存活检测,由于Dubbo3框架本身无法获取到应用的存活状态,因此本接口无默认实现,且默认返回成功;开发者可以根据SPI定义对此SPI接口进行拓展,从应用层次对是否存活进行判断  
+
+3.2 就绪探针(readinessProbe)  
+对于readinessProbe就绪检测,目前Dubbo3默认提供了两个检测维度,<font color="#00FF00">一是对Dubbo3服务自身是否启停做判断,另外是对所有服务是否存在已注册接口</font>,如果所有服务均已从注册中心下线(可以通过QOS运维进行操作)将返回未就绪的状态  
+
+3.3 启动检测(startupProbe)  
+对于startupProbe启动检测,目前Dubbo3默认提供了一个检测维度,即是在所有启动流程(接口暴露、注册中心写入等)均结束后返回已就绪状态  
+
+*提示:对于所有探针的使用用例,详情见参考手册=>SPI扩展使用手册=>存活探针、就绪探针、启动探针*  
+
+QOS当计算节点检测到内存压力时,kuberentes会<font color="#00FF00">BestEffort->Burstable->Guaranteed依次驱逐Pod</font>  
+驱逐Pod的知识可以见凤凰架构笔记  
+
+目前三种探针均有对应的接口,路径为QOS中的命令,端口信息请根据QOS配置进行对应修改(默认端口为22222)  
+
+
+#### 2.5.6 Dubbo部署Docker环境
+*提示:本节的内容详情见2.5.3 主机地址自定义暴露*  
+
+
+#### 2.5.7 日志框架配置与使用  
+1.特性说明  
+在dubbo3.3之后,统一将日志框架升级为log4j2,配置上更加简洁,避免引入过多的日志框架造成冲突报错  
+
+2.使用方法  
+* 请使用log4j2做为日志框架,<font color="#00FF00">禁止使用log4j和logback</font>;除部分遗留场景,统一使用<font color="#00FF00">一种日志框架</font>可以降低使用成本,避免冲突
+* 避免日志框架依赖被传递到上游,可以通过在maven设置scope为`test`、`provider`或设置`<optional>true</optional>`的方式解决;dubbo作为一个服务框架应该尽量避免传递非必选依赖,将日志框架选择权交给用户
+
+3.普通模块  
+3.1 引入Maven依赖  
+```xml
+<!-- 普通的dubbo项目引入该依赖即可 -->
+    <dependency>
+      <groupId>org.apache.logging.log4j</groupId>
+      <artifactId>log4j-slf4j-impl</artifactId>
+      <scope>test</scope>
+    </dependency>
+```
+
+3.2 添加log4j2日志配置  
+```xml
+<!-- 该配置文件放入src/test/resources/log4j2-test.xml目录下 -->
+<?xml version="1.0" encoding="UTF-8"?>
+<Configuration status="WARN">
+    <Appenders>
+        <Console name="Console" target="SYSTEM_OUT" follow="true">
+            <PatternLayout pattern="%d{HH:mm:ss.SSS} |-%highlight{%-5p} [%t] %40.40c:%-3L -| %m%n%rEx{filters(jdk.internal.reflect,java.lang.reflect,sun.reflect,org.junit,org.mockito)}" charset="UTF-8"/>
+        </Console>
+    </Appenders>
+    <Loggers>
+        <Root level="info">
+            <AppenderRef ref="Console"/>
+        </Root>
+    </Loggers>
+</Configuration>
+```
+
+4.非SpringBoot模块(不做过多介绍)  
+
+5.SpringBoot模块  
+5.1 排除spring-boot-starter-logging
+spring-boot支持用starter的方式引入log4j2依赖，但是注意spring-boot默认使用logback，因此需要在&lt;dependencyManagement&gt;中排除  
+```xml
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-dependencies</artifactId>
+        <version>${spring-boot.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter</artifactId>
+        <version>${spring-boot.version}</version>
+        <exclusions>
+          <exclusion>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-logging</artifactId>
+          </exclusion>
+        </exclusions>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+```
+
+5.2 引入Maven依赖  
+```xml
+<dependency>
+  <groupId>org.springframework.boot</groupId>
+  <artifactId>spring-boot-starter-log4j2</artifactId>
+</dependency>
+```
+
+*提示:其它的日志框架问题,详情见官网即可*  
+
+### 2.6 Triple协议  
+**目录:**  
+2.6.1 使用IDL+Protobuf跨语言定义服务  
+2.6.2 Pojo序列化兼容协议  
+2.6.3 Streaming通信模式  
+
+
+#### 2.6.1 使用IDL+Protobuf跨语言定义服务
+*提示:详情见1.快速入门=>1.5 IDL定义跨语言服务*  
+
+
+#### 2.6.2 Pojo序列化兼容协议  
+1.介绍  
+这篇教程会通过从零构建一个简单的工程来演示如何基于POJO方式使用`Dubbo Triple`,在应用不改变已有接口定义的同时升级到`Triple`协议,<font color="#FF00FF">此模式下Triple使用方式与Dubbo协议一样</font>  
+*提示:本节的示例可以参考dubbo-sample=>3-extensions=>protocol=>dubbo-samples-triple=>pojo*  
+
+**<font color="#FF00FF">旧版本的Dubbo通讯协议升级到Triple会有此问题,新版本就不考虑此问题了</font>**
+
+
+#### 2.6.3 Streaming通信模式  
+*提示:本节的示例可以参考dubbo-sample=>3-extensions=>protocol=>dubbo-samples-triple=>pojo*  
+
+1.Stream(流)  
+Stream是`Dubbo3`新提供的一种调用类型,在以下场景时建议使用流的方式:  
+* <font color="#00FF00">接口需要发送大量数据</font>,这些数据无法被放在一个RPC的请求或响应中,需要分批发送,但应用层如果按照传统的多次RPC方式无法解决顺序和性能的问题,如果需要保证有序,则只能串行发送
+* 流式场景,数据需要按照发送顺序处理,数据本身是没有确定边界的(<font color="#00FF00">多次调用/响应的顺序可能错乱</font>)
+* 推送类场景,<font color="#00FF00">多个消息在同一个调用的上下文中被发送和处理</font>(说白了也是发送大量消息)
+
+2.Stream分为以下三种  
+* SERVER_STREAM(服务端流):服务端一次响应大批量数据,客户端只请求一次
+* CLIENT_STREAM(客户端流):客户端一次请求大批量数据,服务端只响应一次
+* BIDIRECTIONAL_STREAM(双向流):客户端一次请求大批量数据,服务端一次响应大批量数据
+
+> 由于`java`语言的限制,BIDIRECTIONAL_STREAM和CLIENT_STREAM的实现是一样的
+> 在dubbo3中,流式接口以`SteamObserver`声明和使用,用户可以通过使用和实现这个接口来发送和处理流的数据、异常和结束
+
+3.流的语义保证  
+* 提供消息边界,可以方便地对消息单独处理
+* 严格有序,<font color="#00FF00">发送端的顺序和接收端顺序一致</font>
+  注意发送端即可以指客户端也可以指服务端,接收端同理
+* 全双工,发送不需要等待
+* 支持取消和超时
+
+4.非PB序列化的流  
+```java
+public interface IWrapperGreeter {
+    StreamObserver<String> sayHelloStream(StreamObserver<String> response);
+    void sayHelloServerStream(String request, StreamObserver<String> response);
+}
+```
+Stream方法的方法入参和返回值是严格约定的,为防止写错而导致问题,Dubbo3框架侧做了对参数的检查,如果出错则会抛出异常;对于`双向流(BIDIRECTIONAL_STREAM)`,需要注意<font color="#00FF00">参数中的StreamObserver是响应流,返回参数中的StreamObserver为请求流</font>(这句话是针对调用者来说的)  
+
+5.使用Protobuf序列化的流  
+对于`Protobuf`序列化方式,推荐编写`IDL`使用`compiler`插件进行编译生成.生成的代码大致如下:  
+```java
+public interface PbGreeter {
+    static final String JAVA_SERVICE_NAME = "org.apache.dubbo.sample.tri.PbGreeter";
+    static final String SERVICE_NAME = "org.apache.dubbo.sample.tri.PbGreeter";
+    static final boolean inited = PbGreeterDubbo.init();
+    
+    //...
+
+    void greetServerStream(org.apache.dubbo.sample.tri.GreeterRequest request, org.apache.dubbo.common.stream.StreamObserver<org.apache.dubbo.sample.tri.GreeterReply> responseObserver);
+
+    org.apache.dubbo.common.stream.StreamObserver<org.apache.dubbo.sample.tri.GreeterRequest> greetStream(org.apache.dubbo.common.stream.StreamObserver<org.apache.dubbo.sample.tri.GreeterReply> responseObserver);
+}
+```
+
+6.完整接口  
+6.1 编写Java接口  
+```java
+public interface IGreeter {
+    StreamObserver<HelloRequest> sayHello(StreamObserver<HelloReply> replyObserver);
+}
+```
+
+6.2 编写实现类  
+```java
+public class IStreamGreeterImpl implements IStreamGreeter {
+
+    @Override
+    public StreamObserver<HelloRequest> sayHello(StreamObserver<HelloReply> replyObserver) {
+
+        return new StreamObserver<HelloRequest>() {
+            private List<HelloReply> replyList = new ArrayList<>();
+
+            @Override
+            public void onNext(HelloRequest helloRequest) {
+                System.out.println("onNext receive request name:" + helloRequest.getName());
+                replyList.add(HelloReply.newBuilder()
+                    .setMessage("receive name:" + helloRequest.getName())
+                    .build());
+            }
+
+            @Override
+            public void onError(Throwable cause) {
+                System.out.println("onError");
+                replyObserver.onError(cause);
+            }
+
+            @Override
+            public void onCompleted() {
+                System.out.println("onComplete receive request size:" + replyList.size());
+                for (HelloReply reply : replyList) {
+                    replyObserver.onNext(reply);
+                }
+                replyObserver.onCompleted();
+            }
+        };
+    }
+}
+```
+
+6.3 启动Provider  
+```java
+public class StreamProvider {
+    public static void main(String[] args) throws InterruptedException {
+        ServiceConfig<IStreamGreeter> service = new ServiceConfig<>();
+        service.setInterface(IStreamGreeter.class);
+        service.setRef(new IStreamGreeterImpl());
+        service.setProtocol(new ProtocolConfig(CommonConstants.TRIPLE, 50051));
+        service.setApplication(new ApplicationConfig("stream-provider"));
+        service.setRegistry(new RegistryConfig("zookeeper://127.0.0.1:2181"));
+        service.export();
+        System.out.println("dubbo service started");
+        new CountDownLatch(1).await();
+    }
+}
+```
+
+6.4 创建Consumer  
+```java
+public class StreamConsumer {
+    public static void main(String[] args) throws InterruptedException, IOException {
+        ReferenceConfig<IStreamGreeter> ref = new ReferenceConfig<>();
+        ref.setInterface(IStreamGreeter.class);
+        ref.setCheck(false);
+        ref.setProtocol(CommonConstants.TRIPLE);
+        ref.setLazy(true);
+        ref.setTimeout(100000);
+        ref.setApplication(new ApplicationConfig("stream-consumer"));
+        ref.setRegistry(new RegistryConfig("zookeeper://mse-6e9fda00-p.zk.mse.aliyuncs.com:2181"));
+        final IStreamGreeter iStreamGreeter = ref.get();
+
+        System.out.println("dubbo ref started");
+        try {
+
+            StreamObserver<HelloRequest> streamObserver = iStreamGreeter.sayHello(new StreamObserver<HelloReply>() {
+                @Override
+                public void onNext(HelloReply reply) {
+                    System.out.println("onNext");
+                    System.out.println(reply.getMessage());
+                }
+
+                @Override
+                public void onError(Throwable throwable) {
+                    System.out.println("onError:" + throwable.getMessage());
+                }
+
+                @Override
+                public void onCompleted() {
+                    System.out.println("onCompleted");
+                }
+            });
+
+            streamObserver.onNext(HelloRequest.newBuilder()
+                .setName("tony")
+                .build());
+
+            streamObserver.onNext(HelloRequest.newBuilder()
+                .setName("nick")
+                .build());
+
+            streamObserver.onCompleted();
+        } catch (Throwable t) {
+            t.printStackTrace();
+        }
+        System.in.read();
+    }
+}
+```
+
+6.5 最终输出  
+```shell
+onNext
+receive name:tony
+onNext
+receive name:nick
+onCompleted
+```
+
+7.总结  
+远程调用时消费者这一端,调用目标接口<font color="#FF00FF">传入的参数是响应流,返回的内容是请求流</font>,客户端拿到请求流后调用`onNext`和`onCompleted`方法实际上就是调用目标服务的接口了,<font color="#00FF00">服务端从入参(响应流)拿到客户端传来的响应流后,调用该响应流接口就等于客户端接受到响应.</font>  
+
 
 
