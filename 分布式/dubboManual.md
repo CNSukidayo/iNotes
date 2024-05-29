@@ -6,10 +6,8 @@
 5.配置中心  
 6.元数据中心  
 7.注册中心  
-8.Mesh手册  
-9.性能参考手册  
-10.SPI扩展使用手册  
-11.序列化  
+8.SPI扩展使用手册  
+9.序列化  
 
 
 
@@ -1009,11 +1007,439 @@ dubbo:
 ## 6.元数据中心
 **目录:**  
 6.1 元数据中心概述  
+6.2 Nacos  
 
 
 ### 6.1 元数据中心概述  
+1.基本介绍  
+元数据中心为dubbo中的两类元数据提供了存取能力  
+* 地址发现元数据
+* 服务运维元数据
+
+2.地址发现元数据  
+Dubbo3中引入<font color="#FF00FF">应用级服务发现机制</font>(见笔记dubboBasis)用来解决异构微服务体系互通与大规模集群实践的性能问题,应用级服务发现将全面取代2.x时代的接口级服务发现;同时为了保持Dubbo面向服务/接口的易用性、服务治理的灵活性,Dubbo围绕应用级服务发现构建了一套元数据机制,即`接口-应用映射关系`与`接口配置元数据`  
+
+2.1 接口-应用映射关系  
+Dubbo一直以来都能做到精确的地址发现,即<font color="#00FF00">只订阅Consumer声明要关心的服务及相关的地址列表</font>,相比于拉取/订阅全量地址列表,这样做有很好的性能优势;在应用级服务发现模型中,想做到精确地址订阅并不容易,因为Dubbo Consumer只声明了<font color="#00FF00">要消费的接口列表</font>,Consumer需要能够将接口转换为Provider应用名才能进行精准服务订阅,为此Dubbo需要在元数据中心<font color="#FF00FF">维护着一份接口名->应用名的对应关系</font>,Dubbo3中通过provider启动的时候主动向元数据中心上报实现;接口(service name)->应用(Provider application name)的映射关系可以是一对多的,即一个service name可能会对应多个不同的application name;<font color="#FF00FF">因为一个接口可能有多个服务能够提供支持</font>  
+
+以zookeeper为例,映射关系保存在以下位置:  
+```shell
+$ ./zkCli.sh
+$ get /dubbo/mapping/org.apache.dubbo.demo.DemoService
+$ demo-provider,two-demo-provider,dubbo-demo-annotation-provider
+```
+* 节点路径是`/dubbo/mapping/{interface name}`
+* 多个应用名使用英文逗号`,`隔开
+  表明这里的DemoService分别对应`demo-provider,two-demo-provider,dubbo-demo-annotation-provider`这些服务
+
+2.2 配置接口元数据  
+`接口级配置元数据`是作为地址发现的补充,相比于Spring Cloud等地址发现模型只能同步ip、port信息,<font color="#00FF00">Dubbo的服务发现机制可以同步接口列表、接口定义、接口级参数配置等信息</font>;这部分内容根据当前应用的自身信息、以及接口信息计算而来,并且从性能角度出发,还根据元数据生成`revision`,以实现不同机器实例间的元数据聚合  
+以zookpeer为例,<font color="#00FF00">接口配置元数据保存在以下位置</font>,如果多个实例生成的revision相同,则最终会共享同一份元数据配置  
+```shell
+get /dubbo/metadata/demo-provider/da3be833baa2088c5f6776fb7ab1a436
+```
+
+3.服务运维元数据  
+Dubbo上报的服务运维元数据通常为各种运维系统所用,如服务测试、网关数据映射、服务静态依赖关系分析等;各种第三方系统可直接读取并使用这部分数据,具体对接方式可参见本章提及的几个第三方系统  
+
+4.元数据上报机制  
+<font color="#00FF00">元数据上报默认是一个异步的过程</font>,为了更好的控制异步行为,元数据配置组件(metadata-report)开放了两个配置项:  
+* 失败重试
+* 每天定时重试刷新
+
+4.1 retrytimes失败重试  
+失败重试可以通过`retrytimes`(重试次数,默认100),`retryperiod`(重试周期;默认3000ms)进行设置  
+
+4.2 定时刷新  
+默认开启,可以通过设置`cycleReport=false`进行关闭  
+
+4.3 完整配置项  
+```properties
+dubbo.metadata-report.address=zookeeper://127.0.0.1:2181
+dubbo.metadata-report.username=xxx         ##非必须
+dubbo.metadata-report.password=xxx         ##非必须
+dubbo.metadata-report.retry-times=30       ##非必须,default值100
+dubbo.metadata-report.retry-period=5000    ##非必须,default值3000
+dubbo.metadata-report.cycle-report=false   ##非必须,default值true
+dubbo.metadata-report.sync.report=false    ##非必须,default值为false
+```
+*提示:如果元数据地址(dubbo.metadata-report.address)未进行配置,会判断注册中心的协议是否支持元数据中心,如果支持会<font color="#00FF00">使用注册中心的地址来用作元数据中心</font>*  
 
 
+### 6.2 Nacos  
+1.使用说明  
+Dubbo融合nacos成为元数据中心的操作步骤非常简单,大致分为`增加Maven依赖`以及`配置元数据中心`两步  
 
+2.增加Maven依赖  
+```xml
+<dependencies>
+    <dependency>
+        <groupId>org.apache.dubbo</groupId>
+        <artifactId>dubbo</artifactId>
+        <version>3.0.9</version>
+    </dependency>
+    <dependency>
+      <groupId>com.alibaba.nacos</groupId>
+      <artifactId>nacos-client</artifactId>
+      <version>2.1.0</version>
+    </dependency>
+     <!-- Introduce Dubbo Nacos extension, or you can add Nacos dependency directly as shown above-->
+     <!--
+        <dependency>
+            <groupId>org.apache.dubbo</groupId>
+            <artifactId>dubbo-registry-nacos</artifactId>
+            <version>3.0.9</version>
+        </dependency>
+     -->
+</dependencies>
+```
+
+
+3.启动nacos配置中心  
+```shell
+# xml方式指定
+<dubbo:config-center address="nacos://127.0.0.1:8848"/>
+# yml方式指定
+dubbo
+  config-center
+    address: nacos://127.0.0.1:8848
+# properties方式指定
+dubbo.config-center.address=nacos://127.0.0.1:8848
+# Api方式指定
+ConfigCenterConfig configCenter = new ConfigCenterConfig();
+configCenter.setAddress("nacos://127.0.0.1:8848");
+```
+
+4.高级配置  
+*详情见:1.6 配置项手册*
+
+
+5.工作原理  
+5.1 服务运维元数据(dubbo)  
+在Nacos的控制台上可看到服务提供者、消费者注册的服务运维相关的元数据信息(例如流控规则就配置在该分组下)  
+*注意:运维数据要和5.配置中心区分下来*  
+![元数据](resources/dubbo/45.png)  
+在Nacos中,本身就存在配置中心这个概念,正好用于元数据存储;在配置中心的场景下,存在命名空间(namespace)的概念,在namespace之下,还存在group概念;<font color="#00FF00">即通过namespace和group以及dataId去定位一个配置项</font>,在不指定namespace的情况下,默认使用public作为默认的命名空间  
+**注意:** <font color="#FF00FF">观察上述配置,group一共分为三类,分别是dubbo、mapping、md5</font>
+
+```shell
+# 格式类似如下格式,group的值为dubbo
+Provider: namespace: 'public', dataId: '{service name}:{version}:{group}:provider:{application name}', group: 'dubbo'
+Consumer: namespace: 'public', dataId: '{service name}:{version}:{group}:consumer:{application name}', group: 'dubbo'
+# 当version或者group不存在时,依旧保留冒号":"  
+Provider: namespace: 'public', dataId: '{service name}:::provider:{application name}', group: 'dubbo'
+Consumer: namespace: 'public', dataId: '{service name}:::consumer:{application name}', group: 'dubbo'
+```
+
+Providers接口元数据详情(通过`report-definition=true`(dubbo.properties配置)控制此部分数据是否需要上报)  
+![是否上报](resources/dubbo/46.png)  
+Consumers接口元信息详情(通过`report-consumer-definition=true`(dubbo配置)控制是否上报,默认false)  
+![是否上报](resources/dubbo/47.png)  
+
+5.2 地址发现 接口->应用映射(mapping)  
+在上面提到,<font color="#00FF00">service name和application name可能是一对多的</font>,<font color="#FF00FF">在nacos中使用单个key-value进行保存,多个application name通过英文逗号","隔开.</font>由于是单个key-value去保存数据,在多客户端的情况下可能会存在并发覆盖的问题.因此,我们使用nacos中`publishConfigCas`的能力去解决该问题.在nacos中,使用`publishConfigCas`会让用户传递一个参数casMd5,该值的含义是之前配置内容的md5 值.不同客户端在更新之前,先去查一次nacos的content的值,计算出md5值,当作本地凭证.在更新时,把凭证md5传到服务端比对md5值,如果不一致说明在此期间被其他客户端修改过,重新获取凭证再进行重试(CAS);目前如果重试6次都失败的话,放弃本次更新映射行为  
+映射信息格式为:<font color="#00FF00">namespace: ‘public’, dataId: ‘{service name}’, group: ‘mapping’</font>  
+![接口映射](resources/dubbo/49.png)  
+
+
+5.3 地址发现 接口配置元数据(md5)  
+要开启远程<font color="#00FF00">接口配置元数据注册</font>,需在应用中增加以下配置,<font color="#FF00FF">因为默认情况下Dubbo3应用级服务发现会启用服务自省模式,并不会注册数据到元数据中心</font>(服务间对等获取元数据信息,不走配置中心)  
+```properties
+dubbo.application.metadata-type=remote
+# 或者,在自省模式下仍开启中心化元数据注册
+dubbo.application.metadata-type=local
+dubbo.metadata-report.report-metadata=true
+```
+
+Nacos server中的元数据信息详情如下:  
+![server](resources/dubbo/48.png)  
+
+**注意:** <font color="#FF00FF">这里的group是md5值</font>,这类配置不一定会有,因为Dubbo3不推荐将配置中心作为元数据信息的服务器了,而是推荐消费者直接从提供者拿(*详情见dubboBasis笔记3.1 服务发现(补充)*)  
+
+
+## 7.注册中心  
+**目录:**  
+7.1 注册中心概述  
+7.2 Nacos  
+7.3 多注册中心  
+
+
+### 7.1 注册中心概述  
+1.概述  
+<font color="#FF00FF">注册中心是Dubbo服务治理的核心组件</font>,Dubbo依赖注册中心的协调实现服务(地址)发现,自动化的服务发现是微服务实现动态扩缩容、负载均衡、流量治理的基础;目前dubbo3的服务发现机制是基于应用粒度的发现  
+
+2.基本使用  
+开发应用时必须指定Dubbo注册中心(registry)组件(配置)，配置很简单，只需指定注册中心的集群地址即可  
+*提示:在dubbo中xxx组件就是xxx配置,详情可以参考1.2 API配置中列举的所有组件以及1.6 配置项手册*  
+以Spring Boot开发为例,在`application.yml`增加registry配置项目  
+```yml
+dubbo:
+ registry:
+  address: {protocol}://{cluster-address}
+```
+* `protocol`:选择的注册中心类型
+* `cluster-address`:为访问注册中心的集群地址
+
+示例:`address: nacos://localhost:8848`,如果需要集群地址可以使用backup参数`address: nacos://localhost:8848?backup=localshot:8846,localshot:8847`  
+
+3.配置中心与元数据中心  
+配置中心(存放dubbo.properties)、元数据中心(dubbo、mapping、md5)是实现Dubbo高阶服务治理能力的基础组件,<font color="#00FF00">相比于注册中心通常这两个组件的配置是可选的</font>  
+
+4.注册中心生态  
+Dubbo主干目前支持的主流注册中心实现,同时也支持<font color="#00FF00">Kubernetes、Mesh</font>体系的服务发现,另外Dubbo扩展生态还提供了Consul、Eureka、Etcd等注册中心扩展实现;也欢迎通过<font color="#00FF00">registry spi扩展</font>贡献更多的注册中心实现到Dubbo生态;dubbo还支持在一个应用中指定多个注册中心(*多注册中心详情见dubboAdvance=>2.1.24多注册中心和7.3 多注册中心*),并将服务根据注册中心分组,这样做使得服务分组管理或服务迁移变得更容易  
+
+### 7.2 Nacos  
+1.添加Maven依赖  
+```xml
+<dependencies>
+    <dependency>
+        <groupId>org.apache.dubbo</groupId>
+        <artifactId>dubbo</artifactId>
+        <version>3.0.9</version>
+    </dependency>
+    <dependency>
+      <groupId>com.alibaba.nacos</groupId>
+      <artifactId>nacos-client</artifactId>
+      <version>2.1.0</version>
+    </dependency>
+     <!-- Introduce Dubbo Nacos extension, or you can add Nacos dependency directly as shown above-->
+     <!--
+        <dependency>
+            <groupId>org.apache.dubbo</groupId>
+            <artifactId>dubbo-registry-nacos</artifactId>
+            <version>3.0.9</version>
+        </dependency>
+     -->
+</dependencies>
+```
+
+2.配置并启用nacos  
+```shell
+# yml配置
+dubbo
+ registry
+   address: nacos://localhost:8848
+# 或者->properties配置
+dubbo.registry.address=nacos://localhost:8848
+# 或者->xml配置
+<dubbo:registry address="nacos://localhost:8848" />
+```
+
+3.高级配置  
+3.1 认证  
+```shell
+# application.yml (Spring Boot)
+dubbo
+ registry
+   address: nacos://localhost:8848?username=nacos&password=nacos
+# 或者->dubbo.properties
+dubbo.registry.address: nacos://nacos:nacos@localhost:8848
+```
+
+3.2 自定义命名空间  
+```shell
+# application.yml (Spring Boot)
+dubbo:
+ registry:
+   address: nacos://localhost:8848?namespace=5cbb70a5-xxx-xxx-xxx-d43479ae0932
+# 或者->application.yml (Spring Boot)
+dubbo:
+ registry:
+   address: nacos://localhost:8848
+   parameters.namespace: 5cbb70a5-xxx-xxx-xxx-d43479ae0932
+```
+
+3.3 自定义分组  
+```shell
+# application.yml
+dubbo:
+ registry:
+   address: nacos://localhost:8848
+   group: dubbo
+```
+
+如果不配置的话,<font color="#00FF00">group是由Nacos默认指定</font>;group和namespace在Nacos中代表不同的隔离层次,通常来说namespace用来隔离不同的用户或环境,group用来对同一环境内的数据做进一步归组  
+
+3.4 注册接口级消费者  
+Dubbo3版本后,增加了注册消费者的参数,<font color="#00FF00">如果需要将消费者注册到注册中心上</font>,需要将参数(register-consumer-url)设置为true,默认是false  
+
+```shell
+# application.yml
+dubbo:
+  registry:
+    address: nacos://localhost:8848?register-consumer-url=true
+# 或者->application.yml
+dubbo:
+  registry:
+    address: nacos://localhost:8848
+    parameters.register-consumer-url: true
+```
+
+3.5 更多配置  
+*详情见官网SDK用户手册->Java SDK->参考手册->注册中心->nacos->5.更多配置*  
+
+4.工作原理  
+4.1 Dubbo2注册数据  
+随后,重启您的Dubbo应用,Dubbo的服务提供和消费信息在Nacos控制台中可以显示  
+![dubbo](resources/dubbo/50.png)  
+如图所示,服务名前缀为`providers:`的信息为服务提供者的元信息,`consumers:`则代表服务消费者的元信息;点击"详情"可查看服务状态详情  
+![dubbo](resources/dubbo/51.png)  
+
+4.2 Dubbo3注册数据  
+<font color="#00FF00">应用级服务发现的"服务名"为应用名</font>,Dubbo3默认采用<font color="#00FF00">应用级服务发现 + 接口级服务发现</font>的双注册模式,<font color="#FF00FF">因此会发现应用级服务(应用名)和接口级服务(接口名)同时出现在Nacos控制台</font>,可以通过配置`dubbo.registry.register-mode=instance/interface/all`来改变注册行为  
+
+### 7.3 多注册中心  
+1.关联服务与注册中心  
+1.1 全局默认注册中心  
+Dubbo注册中心和服务是独立配置的,通常<font color="#00FF00">开发者不用设置服务和注册中心组件之间的关联关系</font>,Dubbo框架会将自动执行以下动作  
+* 对于所有的Service服务,向所有<font color="#00FF00">全局默认注册中心</font>注册服务地址
+* 对于所有的Reference服务,从所有<font color="#00FF00">全局默认注册中心</font>订阅服务地址
+
+*提示:注册中心的配置见7.2 Nacos*  
+
+```yml
+# application.yml (Spring Boot)
+# 提示这里的registries可以见1.5 配置工作原理->配置项单复数对照表
+dubbo
+ registries
+  beijingRegistry
+   address: zookeeper://localhost:2181
+  shanghaiRegistry
+   address: zookeeper://localhost:2182
+```
+
+```java
+@DubboService
+public class DemoServiceImpl implements DemoService {}
+
+@DubboService
+public class HelloServiceImpl implements HelloService {}
+```
+以上以Spring Boot开发为例(XML、API方式类似)配置了两个全局默认注册中心beijingRegistry和shanghaiRegistry,服务DemoService与HelloService<font color="#00FF00">会分别注册到两个默认注册中心</font>  
+
+
+1.2 设置全局默认注册中心  
+```yml
+# application.yml (Spring Boot)
+dubbo
+ registries
+  beijingRegistry
+   address: zookeeper://localhost:2181
+   default: true
+  shanghaiRegistry
+   address: zookeeper://localhost:2182
+   default: false
+```
+`default`用来设置全局默认注册中心,默认值为`true`即被视作全局注册中心;未指定注册中心`id`的服务<font color="#00FF00">将自动注册或订阅全局默认注册中心</font>  
+
+1.3 显示关联服务与注册中心  
+通过Dubbo服务定义组件上增加registry配置,<font color="#00FF00">将服务与注册中心关联起来</font>  
+```java
+@DubboServiceregistry = {"beijingRegistry"}
+public class DemoServiceImpl implements DemoService {}
+
+@DubboServiceregistry = {"shanghaiRegistry"}
+public class HelloServiceImpl implements HelloService {}
+```
+增加以上配置后,DemoService将只注册到beijingRegistry,而HelloService将注册到shanghaiRegistry  
+
+2.多注册中心订阅  
+服务订阅由于涉及到地址聚合和路由选址,因此逻辑会更加复杂一些;从单个服务订阅的视角,如果存在多注册中心订阅的情况,则可以根据<font color="#00FF00">注册中心间的地址是否聚合</font>分为两种场景:多注册中心地址不聚合、多注册中心地址聚合  
+
+2.1 多注册中心地址不聚合  
+```xml
+<dubbo:registry id="hangzhouRegistry" address="10.20.141.150:9090" />
+<dubbo:registry id="qingdaoRegistry" address="10.20.141.151:9010" />
+```
+如以上所示独立配置的注册中心组件,<font color="#00FF00">地址列表在消费端默认是完全隔离的</font>,负载均衡选址要经过两步  
+* 注册中心集群间选址,选定一个集群(注册中心本身肯定是一个集群)
+* 注册中心集群内选址,在集群内进行地址筛选
+
+![多注册中心](resources/dubbo/52.png)  
+下面我们着重分析下如何控制<font color="#00FF00">注册中心集群间选址</font>,可选的策略有如下几种
+* **随机策略**  
+每次请求都随机的分配到一个注册中心集群,随机的过程中会有可用性检查,即每个集群要确保至少有一个地址可用才有可能被选到(即目标集群也不是随便瞎选的)  
+* **preferred优先**  
+  ```xml
+  <dubbo:registry id="hangzhouRegistry" address="10.20.141.150:9090" preferred="true"/>
+  <dubbo:registry id="qingdaoRegistry" address="10.20.141.151:9010" />
+  ```
+  如果有注册中心集群配置了`preferred="true"`,则所有流量都会被路由到这个集群
+* **weighted**
+  ```xml
+  <dubbo:registry id="hangzhouRegistry" address="10.20.141.150:9090" weight="100"/>
+  <dubbo:registry id="qingdaoRegistry" address="10.20.141.151:9010" weight="10" />
+  ```
+  基于权重的随机负载均衡,以上集群间会有大概10:1的流量分布
+* **同zone(区域)优先**
+  ```xml
+  <dubbo:registry id="hangzhouRegistry" address="10.20.141.150:9090" zone="hangzhou" />
+  <dubbo:registry id="qingdaoRegistry" address="10.20.141.151:9010" zone="qingdao" />
+  ```
+  ```java
+  RpcContext.getContext().setAttachment("registry_zone", "qingdao");
+  ```
+  根据Invocation中带的流量参数或者在当前节点通过context上下文设置的参数,流量会被精确的引导到对应的集群
+
+2.2 多注册中心地址聚合  
+```xml
+<dubbo:registry address="multiple://127.0.0.1:2181?separator=;&reference-registry=zookeeper://address11?backup=address12,address13;zookeeper://address21?backup=address22,address23" />
+```
+这里增加了一个特殊的`multiple`协议开头的注册中心,其中:  
+* `multiple://127.0.0.1:2181`并没有什么具体含义,只是一个特定格式的占位符,地址可以随意指定
+* `reference-registry`指定了<font color="#00FF00">要聚合的注册中心集群的列表</font>,示例中有两个集群,分别是`zookeeper://address11?backup=address12,address13`和`zookeeper://address21?backup=address22,address23`其中还特别指定了集群分隔符`separator=";"`
+
+如下图所示,不同注册中心集群的地址会被聚合到一个地址池后在<font color="#00FF00">消费端做负载均衡或路由选址</font>  
+![负载均衡](resources/dubbo/53.png)  
+在3.1.0版本及之后,还支持每个注册中心集群上设置特定的`attachments`属性,<font color="#00FF00">以实现对该注册中心集群下的地址做特定标记</font>,<font color="#FF00FF">后续配合Router组件扩展如TagRouter等就可以实现跨机房间的流量治理能力</font>  
+```xml
+<dubbo:registry address="multiple://127.0.0.1:2181?separator=;&reference-registry=zookeeper://address11?attachments=zone=hangzhou,tag=middleware;zookeeper://address21" />
+```
+增加`attachments=zone=hangzhou,tag=middleware`后,<font color="#00FF00">所有来自该注册中心的URL地址将自动携带zone和tag两个标识,方便消费端更灵活的做流量治理</font>  
+
+3.场景示例  
+3.1 场景一:跨区域注册服务  
+中文站有些服务来不及在青岛部署,只在杭州部署,而青岛的其它应用需要引用此服务,就可以将服务同时注册到两个注册中心;<font color="#FF00FF">即该服务同时注册在青岛的注册中心和杭州的注册中心</font>  
+```xml
+<dubbo:registry id="hangzhouRegistry" address="10.20.141.150:9090" />
+<dubbo:registry id="qingdaoRegistry" address="10.20.141.151:9010" default="false" />
+<!-- 向多个注册中心注册 -->
+<dubbo:service interface="com.alibaba.hello.api.HelloService" version="1.0.0" ref="helloService" registry="hangzhouRegistry,qingdaoRegistry" />
+```
+
+3.2 场景二:根据业务实现隔离  
+CRM有些服务是专门为国际站设计的,有些服务是专门为中文站设计的  
+```xml
+<!-- 多注册中心配置 -->
+<dubbo:registry id="chinaRegistry" address="10.20.141.150:9090" />
+<dubbo:registry id="intlRegistry" address="10.20.154.177:9010" default="false" />
+<!-- 向中文站注册中心注册 -->
+<dubbo:service interface="com.alibaba.hello.api.HelloService" version="1.0.0" ref="helloService" registry="chinaRegistry" />
+<!-- 向国际站注册中心注册 -->
+<dubbo:service interface="com.alibaba.hello.api.DemoService" version="1.0.0" ref="demoService" registry="intlRegistry" />
+```
+
+3.3 场景三:根据业务调用服务  
+CRM需同时调用中文站和国际站的PC2服务,PC2在中文站和国际站均有部署,接口及版本号都一样,但连的数据库不一样(<font color="#00FF00">即同一个应用从不同的注册中心获取服务</font>)  
+```xml
+<!-- 多注册中心配置 -->
+<dubbo:registry id="chinaRegistry" address="10.20.141.150:9090" />
+<dubbo:registry id="intlRegistry" address="10.20.154.177:9010" default="false" />
+<!-- 引用中文站服务 -->
+<dubbo:reference id="chinaHelloService" interface="com.alibaba.hello.api.HelloService" version="1.0.0" registry="chinaRegistry" />
+<!-- 引用国际站站服务 -->
+<dubbo:reference id="intlHelloService" interface="com.alibaba.hello.api.HelloService" version="1.0.0" registry="intlRegistry" />
+```
+如果只是测试环境<font color="#00FF00">临时需要连接两个不同注册中心</font>,使用竖号分隔多个不同注册中心地址  
+```xml
+<!-- 多注册中心配置，竖号分隔表示同时连接多个不同注册中心，同一注册中心的多个集群地址用逗号分隔 -->
+<dubbo:registry address="10.20.141.150:9090|10.20.154.177:9010" />
+<!-- 引用服务 -->
+<dubbo:reference id="helloService" interface="com.alibaba.hello.api.HelloService" version="1.0.0" />
+```
+*题外话:当然这里也没指出,helloService是如何使用这两个不同注册中心中的服务的*  
+
+
+## 8.SPI扩展使用手册  
 
 
