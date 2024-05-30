@@ -1441,5 +1441,78 @@ CRM需同时调用中文站和国际站的PC2服务,PC2在中文站和国际站�
 
 
 ## 8.SPI扩展使用手册  
+**目录:**  
+8.1 Dubbo SPI概述  
+8.2 协议扩展  
+
+### 8.1 Dubbo SPI概述
+1.扩展设计理念  
+可扩展性是任何一个系统所追求的,对于Dubbo来说是同样适用  
+
+2.扩展实现方式  
+一般来说,系统会采用<font color="#00FF00">Factory、IoC、OSGI</font>等方式管理扩展(插件)生命周期,考虑到dubbo的适用面d<font color="#00FF00">ubbo选择使用Factory的方式来管理扩展(插件)</font>,<font color="#FF00FF">在dubbo中,所有内部实现和第三方实现都是平等的</font>  
+
+3.Dubbo中的可扩展性  
+* <font color="#00FF00">平等对待第三方的实现</font>;在Dubbo中,所有内部实现和第三方实现都是平等的,用户可以基于自身业务需求,替换Dubbo提供的原生实现
+* 每个扩展点只封装一个变化因子,最大化复用;每个扩展点的实现者,往往都只是关心一件事.如果用户有需求需要进行扩展,那么只需要对其关注的扩展点进行扩展就好,极大的减少用户的工作量
+
+4.Dubbo扩展性的特性  
+Dubbo中的扩展能力是从JDK标准的SPI扩展点发现机制加强而来,它改进了JDK标准的SPI以下问题:  
+* <font color="#00FF00">JDK标准的SPI会一次性实例化扩展点所有实现</font>,如果有扩展实现初始化很耗时,但如果没用上也加载,会很浪费资源
+* 如果扩展点加载失败,连扩展点的名称都拿不到了;比如:JDK标准的ScriptEngine,通过 `getName()`获取脚本类型的名称,但如果RubyScriptEngine因为所依赖的jruby.jar不存在,导致RubyScriptEngine类加载失败,这个失败原因被吃掉了,和ruby对应不起来,当用户执行ruby脚本时,会报不支持ruby,而不是真正失败的原因;
+  这个原因真的是这样的,工作中确实遇到过这种情况
+
+用户能够基于Dubbo提供的扩展能力,很方便基于自身需求扩展其他协议、过滤器、路由等;下面介绍下Dubbo扩展能力的特性  
+* <font color="#00FF00">按需加载</font>,Dubbo的扩展能力不会一次性实例化所有实现,而是用扩展类实例化,减少资源浪费
+* 增加扩展类的IOC能力;Dubbo的扩展能力并不仅仅只是发现扩展服务实现类,而是在此基础上更进一步,如果该扩展类的属性依赖其他对象,则Dubbo会自动的完成该依赖对象的注入功能
+* 增加扩展类的AOP能力;Dubbo扩展能力会自动的发现扩展类的包装类,完成包装类的构造,增强扩展类的功能
+* 具备动态选择扩展实现的能力;Dubbo扩展会基于参数,在运行时动态选择对应的扩展类,提高了Dubbo的扩展能力
+* 可以对扩展实现进行排序;能够基于用户需求,指定扩展实现的执行顺序
+* 提供扩展点的Adaptive能力;该能力可以使的一些扩展类在consumer端生效,一些扩展类在provider端生效
+
+从Dubbo扩展的设计目标可以看出,Dubbo实现的一些例如动态选择扩展实现、IOC、AOP等特性,能够为用户提供非常灵活的扩展能力  
+
+*提示:dubbo的扩展性特性在dubboTask=>8.1 自定义扩展介绍中有介绍过*  
+*提示:在dubboTask笔记中曾介绍过通过扩展来实现自定义协议的能力,详情见dubboTask=>8.3 Protocol*  
+
+5.Dubbo扩展加载流程  
+Dubbo加载扩展的整个流程如下:  
+![扩展加载](resources/dubbo/54.png)  
+主要步骤为4个:  
+* 读取并解析配置文件(<font color="#00FF00">Dubbo扩展要放到一个配置文件中</font>)
+* 缓存所有扩展实现
+* 基于用户执行的扩展名,实例化对应的扩展实现
+* 进行扩展实例属性的IOC注入以及实例化扩展的包装类,实现AOP特性
+
+6.如何使用Dubbo扩展能力进行扩展  
+*提示:下面以扩展协议为例进行说明如何利用Dubbo提供的扩展能力扩展Triple协议*  
+6.1 放置配置文件  
+在协议的实现jar包内放置文本文件`META-INF/dubbo/org.apache.dubbo.remoting.api.WireProtocol`,在配置文件中填入以下内容  
+```properties
+tri=org.apache.dubbo.rpc.protocol.tri.TripleHttp2Protocol
+```
+
+6.2 实现类内容  
+```java
+@Activate
+public class TripleHttp2Protocol extends Http2WireProtocol {
+    // ...
+}
+```
+
+6.3 启用扩展  
+Dubbo配置模块中,<font color="#00FF00">扩展点均有对应配置属性或标签</font>,通过配置指定使用哪个扩展实现,例如  
+```xml
+<dubbo:protocol name="tri" />
+```
+
+7.Dubbo扩展应用  
+Dubbo的扩展能力非常灵活,在自身功能的实现上无处不在,Dubbo扩展能力使得Dubbo项目很方便的切分成一个一个的子模块,实现热插拔特性;<font color="#00FF00">用户完全可以基于自身需求,替换Dubbo原生实现</font>,来满足自身业务需求  
+![dubbo扩展](resources/dubbo/55.png)  
+
+### 8.2 协议扩展  
+
+
+
 
 
