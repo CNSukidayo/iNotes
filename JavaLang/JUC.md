@@ -13,6 +13,104 @@
 12.ReentrantLock、ReentrantReadWriteLock、StampedLock  
 
 
+## 1.CompletableFuture 
+**目录:**  
+1.1 Future接口理论知识复习  
+1.2 CompletableFuture的改进  
+
+
+### 1.1 Future接口理论知识复习  
+1.基本介绍  
+Future接口定义了操作<font color="#00FF00">异步任务执行</font>的一些方法,如获取异步任务的执行结果、取消任务的执行、判断任务是否被取消、判断任务执行是否完毕等.  
+
+2.接口方法  
+`cancel(boolean) return boolean` 取消一个任务  
+`get() return V` 获取Future执行的结果  
+`get(long,TimeUnit) return V` 一定时间内获取任务的结果  
+`isCancelled() return boolean` 任务是否被取消  
+`isDone() return boolean` 任务是否被完成  
+
+3.常见实现类  
+FutureTask是Future接口的常见实现类  
+
+4.异步接口规范  
+异步接口需要满足三个条件:多线程、返回值、异步任务  
+
+5.类层级结构  
+![类层次结构](resources/JUC/3.png)  
+FutureTask通过构造方法注入`Callable`接口来实现异步接口的规范  
+
+6.FutureTask代码演示  
+```java
+public class DaemonThread {
+    public static void main(String[] args) throws ExecutionException, InterruptedException {
+        // FutureTask需要传入一个Callable接口
+        // FutureTask自身是一个Runnable接口
+        FutureTask<String> futureTask = new FutureTask<>(new MyThread());
+        // Thread需要传入一个Thread接口
+        Thread t1 = new Thread(futureTask, "t1");
+        // 异步执行任务
+        t1.start();
+        // 获取异步执行任务的结果
+        System.out.println(futureTask.get());
+    }
+
+}
+
+class MyThread implements Callable<String> {
+
+    @Override
+    public String call() throws Exception {
+        System.out.println("come in...");
+        return "hello world";
+    }
+}
+```
+
+7.FutureTask优缺点分析  
+* 优点:
+  * Future+线程池异步多线程任务配合,能显著提高程序的执行效率
+* 缺点:
+  * `get`方法同步阻塞
+  * `isDone`方法造成CPU空转
+    ```java
+    // 不停轮询
+    while(true){
+        if(futureTask.isDone()){
+            System.out.println(futureTask.get());
+            break;
+        } else {
+            // do another things...
+            System.out.println("正在处理中...");
+        }
+    }
+    ```
+    可以通过`isDone`方法来优化`get`方法阻塞的问题,每隔一段时间调用`isDone`方法来判断异步任务是否处理结束,如果确认已经处理结束了再调用`get`方法获取返回值,而不是一直处于阻塞的状态,但是使用`isDone`方法可能会<font color="#00FF00">造成CPU空转消耗资源的问题</font>
+
+### 1.2 CompletableFuture的改进  
+1.异步回调  
+为了解决`get`和`isDone`方法的问题,CompletableFuture提供了一种观察者机制,当任务执行完毕之后直接通知监听的一方.  
+
+2.类层级结构  
+```mermaid
+graph BT;
+  CompletableFuture-->Future       
+  CompletableFuture-->CompletionStage
+```
+
+3.CompletionStage  
+该接口内部有很多方法,CompletionStage代表异步计算过程中的某一个阶段,<font color="#00FF00">一个阶段完成后可能会触发另外一个阶段</font>,一个阶段的执行可能由单个阶段的完成触发,也可能是由多个阶段一起触发  
+
+4.核心四个静态方法  
+*提示:不推荐使用new的方式来创建CompletableFuture类*  
+* `supplyAsync(Supplier<U>) return CompletableFuture<U>`
+* `supplyAsync(Supplier<U>,Executor) return CompletableFuture<U>`
+* `runAsync(Runnable) return CompletableFuture<Void>`
+* `runAsync(Runnable,Executor) return CompletableFuture<Void>`
+
+**解释:** 四个核心静态方法分为两组,supplyAsync方法有返回值;runAsync方法无返回值,每组方法又分为有线程池和无线程池的两个版本;<font color="#00FF00">如果没有指定线程池,则会默认使用ForkJoinPool.commonPool()线程池</font>  
+
+
 
 
 
@@ -32,7 +130,7 @@ B.线程基础知识
 
 
 
-### 1. 各种demo
+### 1.各种demo
 `demo1:`  
 ```java
 public class Demo1 {
@@ -192,10 +290,10 @@ public class Account {
 ```
 **代码结果分析:**  
 目前这里只对写入数据添加了同步锁,但没有对读取数据添加同步锁,根据上述知识可知同步方法和非同步方法可以同时执行.  
-| 提示  | 实际打印结果 | 理想的打印结果 |
-| :---: | :----------: | :------------: |
-|       |     0.0      |     100.0      |
-|       |    100.0     |     100.0      |
+| 提示 | 实际打印结果 | 理想的打印结果 |
+|:----:|:------------:|:--------------:|
+|      |     0.0      |     100.0      |
+|      |    100.0     |     100.0      |
 
 **出现错误结果的原因:脏读**  
 由于写和读是两个线程操控的,当我代码执行到this.name=name;的时候就有可能被另外一个线程打断,去执行读的方法,显然此时写数据还没写完就会读到0.这个0可以理解为读到了还没有提交的数据(过时的数据),也就是脏读.  
@@ -741,8 +839,8 @@ public class Demo16 {
 }
 ```
 **输出结果:**  
-| 线程开头 |   1   |   2   |   3   |   4   |   5   |   6   |   7   |   8   |   9   |  10   | 数量5 |
-| :------: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| 线程开头 |  1  |  2  |  3  |  4  |  5  |  6  |  7  |  8  |  9  | 10  | 数量5 |
+|:--------:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:-----:|
 
 **原因:**  
 当数量达到5的时候,线程一虽然被唤醒了,但是需要重新获得这把锁.由于notify方法不会释放锁,所以需要等待线程二方法执行完毕线程一才可以获得锁.
@@ -798,8 +896,8 @@ public class Demo16 {
 ```
 
 **输出结果:**  
-| 线程开头 |   1   |   2   |   3   |   4   |   5   | 数量5 |   6   |   7   |   8   |   9   |  10   |
-| :------: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| 线程开头 |  1  |  2  |  3  |  4  |  5  | 数量5 |  6  |  7  |  8  |  9  | 10  |
+|:--------:|:---:|:---:|:---:|:---:|:---:|:-----:|:---:|:---:|:---:|:---:|:---:|
 
 **原因:**  
 正是因为notify不会释放锁,所以调用完notify在调用wait方法释放锁,所以这里wait不是用于暂停线程的,而是用于释放锁的.  
@@ -1179,6 +1277,8 @@ public class Demo22 {
 1.1 前置知识学习  
 1.2 为什么需要多线程  
 1.3 线程的start方法  
+1.4 进程、线程、管程  
+1.5 用户线程和守护线程  
 
 
 ### 1.1 前置知识学习
@@ -1222,9 +1322,9 @@ Java中Thread类的start方法本质上是调用了native方法start0
 `private native void start0();`  
 
 2.C语言`satrt0`方法分析  
-首先自已下载openJdk8的源码  
-* src/share/navite/java/lang/thread.c  
-* src/share/demo/jvmti/waiters/Thread.cpp  
+首先自已下载openJdk8的源码,可以去OpenJdk的github上下载  
+* jdk/src/share/navite/java/lang/thread.c  
+* hotspot/src/share/vm/runtime/Thread.cpp  
 * hotspot/src/share/vm/prims/jvm.cpp
 
 thread.c中的部分代码:  
@@ -1244,6 +1344,67 @@ thread.cpp:
 `os:start_thread(thread);` 调用操作系统的方法来创建线程  
 ![thread.cpp](resources/JUC/2.png)  
 
+### 1.4 进程、线程、管程  
+* 进程:资源分配的基本单位
+* 线程:资源调度的基本单位
+* 管程:Monitor(监视器),平常所说的锁
 
+Monitor其实是一种同步机制,保证<font color="#00FF00">同一时间只能有一个线程可以进入临界区</font>,JVM中同步是基于进入和退出监视器对象(<font color="#FF00FF">Monitor管程对象</font>)来实现的,<font color="#00FF00">每个对象都会有一个Monitor对象</font>  
+```java
+Object o = new Object();
+new Thread(() -> {
+    synchronize(o) {
+
+    }
+},"t1").start();
+```
+<font color="#00FF00">Monitor对象会和Java对象一同创建并销毁</font>(例如这里的Object对象),它的底层是通过C++实现的  
+*提示:在深入理解Java虚拟机第6.4.10节的同步指令一章提到过<font color="#00FF00">管程</font>的作用*  
+
+
+### 1.5 用户线程和守护线程  
+一般情况下不做特殊说明默认就是<font color="#00FF00">用户线程</font>  
+* 用户线程:传统意义上的线程
+* 守护线程(Daemon Thread):精灵线程,<font color="#00FF00">起到守护其它线程的作用</font>,垃圾回收就是守护线程的一个例子,当系统中只剩下守护线程时JVM就会自动退出.
+
+*提示:Thread的`isDaemon()`方法可以获取一个线程是否是守护线程*  
+
+1.用户线程  
+```java
+// 默认是用户线程
+Thread t1 = new Thread(() -> {
+    System.out.println(Thread.currentThread().getName() + "开始运行" +
+            Thread.currentThread().isDaemon());
+    while (true) {
+
+    }
+});
+t1.start();
+
+TimeUnit.SECONDS.sleep(3);
+
+System.out.println(Thread.currentThread().getName() + "\t 主线程结束!");
+```
+
+**执行结果:** main线程打印完主线程结束后,JVM进程依旧没有退出,因为还存在t1这个用户线程  
+
+2.守护线程  
+```java
+Thread t1 = new Thread(() -> {
+    System.out.println(Thread.currentThread().getName() + "开始运行" +
+            Thread.currentThread().isDaemon());
+    while (true) {
+
+    }
+});
+// 设置为守护线程
+t1.setDaemon(true);
+t1.start();
+
+TimeUnit.SECONDS.sleep(3);
+
+System.out.println(Thread.currentThread().getName() + "\t 主线程结束!");
+```
+**执行结果:** main线程打印完主线程结束后,系统只剩下t1这个守护线程,JVM进程退出  
 
 
