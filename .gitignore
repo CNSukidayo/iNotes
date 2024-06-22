@@ -45,6 +45,7 @@
 !JavaLang/resources/**
 !JavaLang/领域模型(杂项).md
 !JavaLang/DDD.md
+!JavaLang/深入理解Java高并发编程.md
 !JavaLang/Java类大全.md
 !JavaLang/JUC.md
 !JavaLang/JVM-simple.md
