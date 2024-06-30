@@ -256,6 +256,7 @@ objectMonitor.hpp有几个关键的属性
 * `_count`:用来记录该线程获取锁的次数
 
 <font color="#FF00FF">每个对象都有与之对应的对象监视器(通过对象头中的对象标记(Mark Word)找到该ObjectMonitor)</font>,由ObjectMonitor对象的`_owner`属性就能知道当前是哪个线程获取了对象锁  
+**<font color="#FF00FF">注意:只有重量级锁才是通过ObjectMonitor实现的,即只有重量级锁才是通过管程实现的,此时重量级锁(对象)的Mark Word(对象标记)才存储指向它对应的ObjectMonitro的指针</font>**  
 ```mermaid
 graph LR;
   Object-->|Mark Word|ObjectMonitor-->|_owner|Thread
@@ -312,6 +313,9 @@ graph BT;
 本质上是基于AQS实现的,通过构造函数的传值来创建NonfairSync和FairSync分别实现非公平锁和公平锁  
 
 5.synchronize默认为非公平锁  
+
+**<font color="#FF00FF">非常重要:所以非公平锁实际上并不是队列中的线程之间非公平竞争,而是队首线程与新晋线程的竞争</font>**  
+*提示:这个结论可以参考第11.3 ReentrantLock源码切入AQS节的相关知识*  
 
 ### 2.5 可重入锁  
 1.解释  
@@ -2407,6 +2411,7 @@ Space losses: 0 bytes internal + 0 bytes external = 0 bytes total
 10.4 偏向锁  
 10.5 轻量级锁  
 10.6 重量级锁  
+10.7 锁消除与锁粗化  
 
 ### 10.1 JVM的锁类型分类
 1.分类  
@@ -2417,8 +2422,8 @@ JVM中的锁分为无锁、偏向锁、轻量级锁、重量级锁
 ![存储结构](resources/JUC/20.png)  
 
 * 偏向锁:MarkWord存储的是偏向的线程ID
-* 轻量级锁:MarkWord存储的是指向线程栈中Lock Record的指针
-* 重量级锁:MarkWord存储的是指向堆中的monitor对象的指针
+* 轻量级锁:MarkWord存储的是指向<font color="#FF00FF">线程栈</font>中Lock Record(锁记录)的指针
+* 重量级锁:MarkWord存储的是指向<font color="#FF00FF">堆</font>中的monitor对象的指针
 
 ### 10.2 synchronized的性能变化  
 1.Java5版本  
@@ -2432,8 +2437,9 @@ Java的线程是映射到到操作系统原生线程之上,如果要阻塞或唤
 Monitor是在JVM底层实现的(C++),<font color="#00FF00">本质是依赖操作系统的Mutex Lock进行实现</font>,操作系统实现线程之间的切换需要从用户态到内核态的转换,状态转换需要耗费很多的处理器时间,成本非常高,所以synchronized是Java语言中的一个重量级操作  
 
 3.Monitor与Java对象以及线程的关联  
-* 如果一个Java对象被某个线程锁住,则该Java对象的Mark Word(对象标记)字段中LockWord指向monitor的起始地址
-* Monitor的Owner字段会存放持有当前对象锁的线程id
+* 如果一个Java对象被某个线程锁住,则该Java对象的Mark Word(对象标记)字段中LockWord指向ObjectMonitor的起始地址
+  *<font color="#00FF00">注意:只有重量级锁的对象头MarkWord存储的才是指向ObjectMonitor的指针</font>*  
+* ObjectMonitor的`_owner`字段会存放持有当前对象锁的线程id
 
 
 ### 10.3 无锁  
@@ -2573,7 +2579,8 @@ Space losses: 0 bytes internal + 4 bytes external = 4 bytes total
 2.轻量级锁的加锁  
 ![图](resources/JUC/20.png)  
 JVM会为每个线程在当前线程的栈帧中创建用于存储<font color="#00FF00">锁记录</font>的空间,官方称为Displaced Mark Word,若一个线程获取锁时发现是轻量级锁,会把锁的MarkWord复制到自已的Displaced Mark Word,然后线程尝试用CAS将锁的MarkWord替换为指向<font color="#00FF00">锁记录(存在当前线程栈中的锁记录)</font>的指针,如果成功则线程获得锁,如果失败表示Mark Word已经抢先一步被替换成了其他线程的锁记录,说明在与其他线程竞争锁,当前线程就尝试使用自旋来获取锁  
-*疑问:所以我可以认为Displaced Mark Word(锁记录)中存储的信息很多,至少一个是当前线程的锁记录,还有一个是上一个线程遗留下的锁记录?*  
+*解惑:Displaced Mark Word(拷贝锁记录)中存储的是锁对象在升级为轻量级锁之前的信息,例如一开始对象是无锁或偏向锁状态,那么对象头的对象标记应该含有hashCode、cms_free、对象分代年龄等信息,转为偏向锁之后相当于要把这些信息覆盖为指向栈中锁记录的指针,那就会导致原来的信息丢失?为了避免原来的信息不丢失,于是乎就将原先对象头的信息拷贝一份存放在<font color="#00FF00">锁记录中(Displaced Mark Word)</font>,<font color="#FFC800">而现在对象头存放的是指向该锁记录的指针</font>*  
+*提示:这里的知识要和10.6 重量级锁的第3点hashCode与锁的知识来看*  
 *提示:这里图中指向栈中<font color="#00FF00">锁记录</font>的指针,说的就是这里栈帧中的锁记录*  
 
 3.轻量级锁的解锁  
@@ -2612,6 +2619,463 @@ Space losses: 0 bytes internal + 4 bytes external = 4 bytes total
 之前说过若某线程CAS自旋获取轻量级锁总是失败,则将使轻量级锁升级为重量级锁,<font color="#00FF00">于是轻量级锁升级为重量级锁的触发条件如下</font>  
 现代的JDK采用自适应自旋锁,即线程如果CAS自旋成功了,那么下一次自旋的次数就会增加,因为JVM认为既然该锁上次自旋获取成功了,那么这一次很大概率也会自旋成功,反之如果CAS自旋获取轻量级锁很少成功,那么下次会相应减少自旋的次数甚至不自旋,避免CPU空转  
 <font color="#00FF00">自适应意味着自旋的次数是不固定的</font>  
+
+### 10.6 重量级锁
+1.重量级锁原理  
+Java中synchronized的重量级锁,是基于进入和退出ObjectMonitor对象实现的,在编译时会将同步块的开始位置插入monitor enter指令,在结束位置插入monitor exit指令  
+当线程执行到monitor enter指令时,会尝试获取对象所对应的ObjectMonitor所有权,如果获取到了,即获取到了锁,会在ObjectMonitor的`_owner`中存放当前线程的id,这样它将处于锁定状态,除非退出同步块,否则其他线程无法获取到这个ObjectMonitor,并且该对象的Mark Word(对象标记)会存放指向该ObjectMonitor的指针  
+```mermaid
+graph LR;
+  Object-->|Mark Word|ObjectMonitor-->|_owner|Thread
+```
+
+2.代码演示  
+```java
+  public static void main(String[] args) throws InterruptedException {
+      Object o = new Object();
+      new Thread(() -> {
+          synchronized (o) {
+              System.out.println(ClassLayout.parseInstance(o).toPrintable());
+          }
+      }, "t1").start();
+
+      new Thread(() -> {
+          synchronized (o) {
+              System.out.println(ClassLayout.parseInstance(o).toPrintable());
+          }
+      }, "t2").start();
+  }
+/**
+ * 输出结果如下,将0x00000236d8d3d212转为二进制值为
+ * 00000000 00000000 00000010 00110110
+ * 11011000 11010011 11010010 00010010
+ * 发现最后两位标志是10确实是重量级锁的标志,fat lock即重量级锁
+ */
+java.lang.Object object internals:
+OFF  SZ   TYPE DESCRIPTION               VALUE
+  0   8        (object header: mark)     0x00000236d8d3d212 (fat lock: 0x00000236d8d3d212)
+  8   4        (object header: class)    0x00000d58
+ 12   4        (object alignment gap)    
+Instance size: 16 bytes
+Space losses: 0 bytes internal + 4 bytes external = 4 bytes total
+
+java.lang.Object object internals:
+OFF  SZ   TYPE DESCRIPTION               VALUE
+  0   8        (object header: mark)     0x00000236d8d3d212 (fat lock: 0x00000236d8d3d212)
+  8   4        (object header: class)    0x00000d58
+ 12   4        (object alignment gap)    
+Instance size: 16 bytes
+Space losses: 0 bytes internal + 4 bytes external = 4 bytes total
+```
+
+3.hashCode与锁  
+![图](resources/JUC/20.png)  
+还是这张图,在无锁状态下对象头有31bit用于存储对象的hashCode值,但在轻量级锁和重量级锁甚至是偏向锁下,由于这些bit已经被指针占用了,此时的hashCode存在什么地方?  
+JVM规定,如果一个对象已经调用过hashCode方法,它就再也无法进入偏向锁状态了,而当一个对象正处于偏向锁时,又收到需要计算hashCode的请求时,偏向锁会立即膨胀为重量级锁(fat lock),在重量级锁中由于Mark Word指向了ObjectMonitor的位置,而ObjectMonitro(C++)类中有字段可以存放非加锁状态下的Mark Word,<font color="#00FF00">也即原先存放在对象头中的hashCode、cms_free、对象分代年龄信息被挪到了ObjectMonitor中进行存放</font>  
+偏向锁对于hashCode方法是不受影响的,因为它不需要膨胀到重量级锁也可以解决hashCode、cms_free、对象分代年龄信息的存放,这些信息都存放在栈帧的锁记录(Displaced Mark Word)中,这部分知识可以参考10.5 轻量级锁章的相关知识  
+*注意:或许是JDK版本实现的不同,在JDK17的版本下如果锁正在被持有则轻量级锁调用hashCode方法会直接升级为重量级锁;如果锁对象先调用hashCode方法再获取锁则锁依旧是轻量级锁(JDK17没有偏向锁)*  
+
+```java
+public static void main(String[] args) throws InterruptedException {
+    Object o = new Object();
+    synchronized (o) {
+        System.out.println(ClassLayout.parseInstance(o).toPrintable());
+        o.hashCode();
+        System.out.println(ClassLayout.parseInstance(o).toPrintable());
+    }
+    Object obj = new Object();
+    obj.hashCode();
+    synchronized (obj) {
+        System.out.println(ClassLayout.parseInstance(obj).toPrintable());
+    }
+}
+/**
+ * 打印结果如下,thin lock是轻量级锁,现在JDK默认加锁都是轻量级锁
+ * 这里会发现在同一个代码块中,第一次打印锁为轻量级锁,但调用hashCode
+ * 方法之后锁却变为了重量级锁fat lock
+ */
+java.lang.Object object internals:
+OFF  SZ   TYPE DESCRIPTION               VALUE
+  0   8        (object header: mark)     0x0000007346bff200 (thin lock: 0x0000007346bff200)
+  8   4        (object header: class)    0x00000d58
+ 12   4        (object alignment gap)    
+Instance size: 16 bytes
+Space losses: 0 bytes internal + 4 bytes external = 4 bytes total
+
+java.lang.Object object internals:
+OFF  SZ   TYPE DESCRIPTION               VALUE
+  0   8        (object header: mark)     0x000001b94abc4f72 (fat lock: 0x000001b94abc4f72)
+  8   4        (object header: class)    0x00000d58
+ 12   4        (object alignment gap)    
+Instance size: 16 bytes
+Space losses: 0 bytes internal + 4 bytes external = 4 bytes total
+/**
+ * 依旧是轻量级锁
+ */
+java.lang.Object object internals:
+OFF  SZ   TYPE DESCRIPTION               VALUE
+  0   8        (object header: mark)     0x000000e0d2fff510 (thin lock: 0x000000e0d2fff510)
+  8   4        (object header: class)    0x00000d58
+ 12   4        (object alignment gap)    
+Instance size: 16 bytes
+Space losses: 0 bytes internal + 4 bytes external = 4 bytes total
+```
+
+### 10.7 锁消除与锁粗化  
+1.锁消除
+```java
+/**
+ * 如下这段代码中创建了十个线程
+ */
+public class JOLTest {
+  public static void main(String[] args) {
+      JOLTest jolTest = new JOLTest();
+      for (int i = 0; i < 10; i++) {
+          new Thread(jolTest::method).start();
+      }
+  }
+  public void method() {
+      // method方法对新创建的Object对象进行加锁操作
+      // JIT编译器会无视这把锁,这把锁是没有意义的
+      // 因为每次进入该方法都对一个新的对象加锁,并不涉及争用情况
+      // 编译还是正常的,只不过是JIT会忽视该锁
+      Object o = new Object();
+      synchronized (o) {
+          System.out.println("1111");
+      }
+  }
+}
+```
+即当前线程对当前方法栈中新创建的对象加锁是没有意义的  
+
+2.锁粗化  
+```java
+public class JOLTest {
+
+    static final Object object = new Object();
+
+    public static void main(String[] args) {
+        /**
+         * 经过JIT编译器的优化,t1的加锁代码就相当于t2
+         */
+        new Thread(() -> {
+            synchronized (object) {
+                System.out.println("1111");
+            }
+            synchronized (object) {
+                System.out.println("2222");
+            }
+            synchronized (object) {
+                System.out.println("3333");
+            }
+            synchronized (object) {
+                System.out.println("4444");
+            }
+        },"t1").start();
+        new Thread(() -> {
+            synchronized (object) {
+                System.out.println("1111");
+                System.out.println("2222");
+                System.out.println("3333");
+                System.out.println("4444");
+            }
+        },"t1").start();
+    }
+}
+```
+加入方法中首尾相接,前后相邻的都是同一个锁对象,那么JIT编译器就会把这几个synchronized代码块合并为一个大的同步代码块,<font color="#00FF00">加粗锁的范围</font>,避免多次申请锁与释放锁,从而提升代码性能  
+
+## 11.AbstractQueuedSynchronizer之AQS  
+**目录:**  
+11.1 AQS入门知识  
+11.2 AQS类介绍  
+11.3 ReentrantLock源码切入AQS  
+
+### 11.1 AQS入门知识
+1.什么是AQS  
+AQS(AbstractQueuedSynchronizer)直接翻译过来为抽象的队列同步器  
+AQS采用了模板方法设计模式,是用来实现锁或者其它同步器组件的公共基础部分的抽象实现,<font color="#00FF00">是JUC体系的基石,主要用于解决锁分配给哪个线程的问题</font>,本质上它就是一个抽象的FIFO列(先进先出)来完成资源获取线程的排队工作,并通过一个int类变量(state)表示持有锁的状态   
+![FIFO](resources/JUC/23.png)  
+CLH:Craig、Landin And Hagerstent队列,是个单向链表,AQS中的队列是CLH变体的虚拟双向队列(FIFO)  
+如果共享资源被占用,<font color="#FF00FF">就需要一定的阻塞等待唤醒机制来保证锁分配</font>,这个机制主要用的就是CLH队列的变体实现,<font color="#00FF00">将暂时获取不到锁的线程加入到队列中,这个队列就是AQS同步队列的抽象表现,它将要请求共享资源的线程及线程自身的等待状态(status)封装成队列的节点对象Node</font>,通过CAS、自旋以及LockSupport.park()的方式,<font color="#FFC800">维护state变量的状态(AQS的变量)</font>,使并发达到同步的效果  
+
+*提示:这里有两个变量,一个是AQS的状态变量state、一个是Node自已的状态变量status*  
+
+2.类继承关系  
+```mermaid
+graph BT;
+  AbstractQueuedSynchronizer-->AbstractOwnableSynchronizer
+  AbstractQueuedLongSynchronizer-->AbstractOwnableSynchronizer
+```
+AQS特指这里的AbstractQueuedSynchronizer  
+
+3.基于AQS框架实现的并发工具类  
+包括但不限于CountDownLatch、ReentrantLock、Semaphore、CyclicBarrier、ReentrantReadWriteLock  
+并且这四个类内部都各自封装了一个静态内部类Sync,并且该类都继承了AbstractQueuedSynchronizer  
+
+4.AQS源码粗析  
+![AQS](resources/JUC/24.png)  
+可以发现AQS内部封装了Node静态内部类(和上面对应,它封装了请求共享资源的线程及线程自身的等待状态),并且还包含了head、tail指针,以及存储当前锁状态的volatile int类型的变量state  
+
+5.AQS内部体系架构  
+![AQS](resources/JUC/25.png)  
+
+### 11.2 AQS类介绍  
+1.AQS的int变量  
+AQS中封装了当前锁状态的int型变量,<font color="#00FF00">如果该变量值为0代表当前没有线程争用这把锁,如果大于等于1则代表当前锁被正在别的线程争用</font>  
+
+2.Node中的变量介绍  
+2.1 Node与Thread的关系  
+它封装了请求共享资源的线程及线程自身的等待状态  
+
+2.2 类变量  
+```java
+abstract static class Node {
+    volatile Node prev;      
+    volatile Node next;
+    // 当前正在等待的线程对象      
+    Thread waiter;
+    // 线程当前的等待状态
+    volatile int status;
+}
+```
+
+2.3 继承自Node的两个静态内部类  
+```java
+// 线程以独占的方式等待锁
+static final class ExclusiveNode extends Node { }
+// 线程以共享的方式等待锁
+static final class SharedNode extends Node { }
+```
+
+### 11.3 ReentrantLock源码切入AQS  
+1.构造方法  
+```java
+private final Sync sync;
+abstract static class Sync extends AbstractQueuedSynchronizer {}
+public ReentrantLock(boolean fair) {
+    sync = fair ? new FairSync() : new NonfairSync();
+}
+```
+根据构造方法的入参决定当前ReentrantLock是公平锁还是非公平锁,内部实现就是创建FairSync或者NonfairSync  
+FairSync -> 公平锁
+NonfairSync -> 非公平锁
+
+2.lock方法的实现  
+ReentrantLock实现了Lock接口,所以自然要实现`lock`方法,而ReentrantLock的lock方法本质上是调用Sync对象的lock方法  
+```java
+abstract static class Sync extends AbstractQueuedSynchronizer {
+    
+    abstract boolean initialTryLock();
+
+    @ReservedStackAccess
+    final void lock() {
+      // 调用FairSync或NonfairSync的实现
+        if (!initialTryLock())
+            // acquire是父类方法,但父类方法又会调用tryAcquire方法
+            // FairSync和NonfairSync也都重写了tryAcquire方法
+            // 所以这里也会调用FairSync和NonfairSync的tryAcquire方法
+            acquire(1);
+    }
+}
+public abstract class AbstractQueuedSynchronizer
+    extends AbstractOwnableSynchronizer
+    implements java.io.Serializable {
+    public final void acquire(int arg) {
+        // FairSync和NonfairSync也都重写了tryAcquire方法
+        // tryAcquire方法的本意是尝试获取锁,如果获取失败了将调用这里的acquire方法
+        if (!tryAcquire(arg))
+            acquire(null, arg, false, false, false, 0L);
+    }
+}
+```
+
+3.FairSync和NonfairSync的tryAcquire方法  
+上述说过lock方法最终会调用FairSync和NonfairSync的tryAcquire方法,它们的实现分别如下  
+```java
+static final class FairSync extends Sync {
+    protected final boolean tryAcquire(int acquires) {
+      // 多了一个hasQueuedPredecessors方法
+      if (getState() == 0 && !hasQueuedPredecessors() &&
+          compareAndSetState(0, acquires)) {
+          // 将当前线程设置为独家线程
+          setExclusiveOwnerThread(Thread.currentThread());
+          return true;
+      }
+      return false;
+    }
+}
+
+static final class NonfairSync extends Sync {
+    protected final boolean tryAcquire(int acquires) {
+      if (getState() == 0 && compareAndSetState(0, acquires)) {
+          // 将当前线程设置为独家线程,当AQS的状态变量为0时,第一个获取锁的线程
+          // 并不会被添加到FIFO队列中,而是会将当前线程设置为独家线程
+          setExclusiveOwnerThread(Thread.currentThread());
+          return true;
+      }
+      return false;
+    }
+}
+
+public abstract class AbstractQueuedSynchronizer
+    extends AbstractOwnableSynchronizer
+    implements java.io.Serializable {
+    
+    /**
+     * AQS的方法
+     * 该方法就是用于判断CLH(FIFO)队列是否有排队的线程
+     * 该方法如果返回true则代表有一个线程在当前线程之前等待
+     * 改方法如果返回false则代表当前线程是队列中的第一个Node,或者当前是一个空队列
+     */
+    public final boolean hasQueuedPredecessors() {
+      Thread first = null; Node h, s;
+      if ((h = head) != null && ((s = h.next) == null ||
+                                  (first = s.waiter) == null ||
+                                  s.prev == null))
+          first = getFirstQueuedThread(); // retry via getFirstQueuedThread
+      return first != null && first != Thread.currentThread();
+    }
+} 
+```
+可以发现公平锁和非公平锁唯一的不同就是,公平锁多了一个`hasQueuedPredecessors`方法的之前,这个方法是判断队列是否有前置节点(Node)的方法  
+`hasQueuedPredecessors`方法判断了是否需要排队,导致公平锁与非公平锁的差异如下  
+公平锁:公平锁讲究先来先到,线程在获取锁时如果这个锁的等待队列中已经有线程在等待,那么当前线程就会进入等待队列中  
+非公平锁:不管是否有等待队列,如果可以获取锁,则立刻占有锁对象.<font color="#00FF00">也就是说队列的第一个排队线程苏醒后,不一定就是排头的这个线程获得锁</font>,它还是需要参加竞争锁(存在线程竞争的情况下),后来的线程可能不讲武德插队夺锁了  
+<font color="#00FF00">当AQS的状态变量为0时,第一个获取锁的线程,并不会被添加到FIFO队列中,而是会将当前线程设置为独家线程</font>,<font color="#FF00FF">并且后续正在持有锁的线程也会被设置为独家线程</font>  
+
+
+4.FairSync和NonfairSync的initialTryLock方法  
+之前说过Sync对象的lock方法第一步就是调用FairSync和NonfairSync的initialTryLock来初始化锁的获取  
+```java
+static final class FairSync extends Sync {
+  final boolean initialTryLock() {
+    Thread current = Thread.currentThread();
+    int c = getState();
+    if (c == 0) {
+        // 公平锁会多一步判断当前线程是否是队列之首
+        // compareAndSetState方法很关键,表明当前线程尝试用CAS的
+        // 方式去修改AbstractQueuedSynchronizer类中的state变量为1,如果CAS成功代表抢占成功
+        // 否则代表已有线程抢占
+        if (!hasQueuedThreads() && compareAndSetState(0, 1)) {
+            // 将当前线程设置为独家线程
+            setExclusiveOwnerThread(current);
+            return true;
+        }
+        // 保证锁的可重入,如果独家线程还是当前线程则加锁成功
+        // 但状态变量要自增
+    } else if (getExclusiveOwnerThread() == current) {
+        if (++c < 0) // overflow
+            throw new Error("Maximum lock count exceeded");
+        setState(c);
+        return true;
+    }
+    return false;
+  }
+}
+
+static final class NonfairSync extends Sync {
+    final boolean initialTryLock() {
+        Thread current = Thread.currentThread();
+        // 同理
+        if (compareAndSetState(0, 1)) {
+            setExclusiveOwnerThread(current);
+            return true;
+        } else if (getExclusiveOwnerThread() == current) {
+            int c = getState() + 1;
+            if (c < 0) // overflow
+                throw new Error("Maximum lock count exceeded");
+            setState(c);
+            return true;
+        } else
+            return false;
+    }
+}
+```
+
+5.AbstractQueuedSynchronizer的acquire方法  
+上述说过调用ReentrantLock的lock方法会先调用`initialTryLock`方法,如果该方法加锁失败,最终会调用回FairSync和NonfairSync的tryAcquire方法,如果在`tryAcquire`方法中获取了锁则皆大欢喜,如果没有获取锁则将进一步调用AbstractQueuedSynchronizer的`acquire`方法  
+//todo 不同的JDK版本实现不太一样,JDK8的版本根本就没有acquire方法,所以当前实验环境是JDK17,这地方只能尝试自已阅读源码  
+
+6.unLock方法的实现  
+已经经历过上述加锁方法流程的洗礼,现在看看unLock方法的实现  
+```java
+/**
+ * ReentrantLock的unLock方法的本质是调用Sync的release方法
+ * Sync继承自AbstractQueuedSynchronizer,所以会调用
+ * AbstractQueuedSynchronizer的release方法
+ */
+public class ReentrantLock implements Lock, java.io.Serializable {
+    public void unlock() {
+        sync.release(1);
+    }
+}
+public abstract class AbstractQueuedSynchronizer
+    extends AbstractOwnableSynchronizer
+    implements java.io.Serializable {
+
+    public final boolean release(int arg) {
+        // 调用tryRelease方法,该方法由Sync重写
+        // 如果锁已经被完全释放了,则调用signalNext方法,则唤醒队列中的下一个Node
+        // 通过head对象的next指针(双向链表)
+        if (tryRelease(arg)) {
+            signalNext(head);
+            return true;
+        }
+        return false;
+    }
+}
+
+abstract static class Sync extends AbstractQueuedSynchronizer {
+    @ReservedStackAccess
+    protected final boolean tryRelease(int releases) {
+        // 这个地方涉及到锁的可重入,releases参数传入的就是1
+        // getState获取的是AQS的状态变量
+        int c = getState() - releases;
+        // 要释放锁的线程不为独家线程,一般不会出现这种情况
+        // 如果出现就抛出异常
+        if (getExclusiveOwnerThread() != Thread.currentThread())
+            throw new IllegalMonitorStateException();
+        // 如果当前线程是最后一个unLock方法了(锁的可重入)
+        // 则将独家线程设置为null
+        // 这样后续线程便又可以通过CAS来获取锁了
+        boolean free = (c == 0);
+        if (free)
+            setExclusiveOwnerThread(null);
+        setState(c);
+        // 该方法的返回值实质上是返回当前锁是否已经被完全释放了(锁的可重入)
+        return free;
+    }
+}
+
+public abstract class AbstractQueuedSynchronizer
+    extends AbstractOwnableSynchronizer
+    implements java.io.Serializable {
+    /**
+     * 唤醒入参Node的下一个Node,让其获取锁资源
+     */
+    private static void signalNext(Node h) {
+        Node s;
+        // 还有一种情况是,当前FIFO队列中没有任何线程等待,即h.next为null
+        // 此时就什么也不做
+        if (h != null && (s = h.next) != null && s.status != 0) {
+            // 将Node的状态由Wait设置为-2
+            s.getAndUnsetStatus(WAITING);
+            // 唤醒(放行)Node,注意waiter字段的定义在11.2 AQS类介绍的第2.2点
+            // waiter就是Node封装的对应线程变量Thread
+            LockSupport.unpark(s.waiter);
+        }
+    }
+}
+```
+*注意:AQS的底层阻塞和唤醒队列中的线程是通过LockSupport来进行实现的,注意Object方法中的`wait`和`notify`方法是用于操作锁对象的,不是直接用于操作线程的;线程对象自已本身也可以是一个锁对象,不要搞混淆了;想要直接阻塞和唤醒一个线程就得用LockSupport类来实现*  
+*提示:LockSupport的相关知识见3.3 LockSupport*  
+
+对于最后一步`LockSupport.unpark(s.waiter)`还有补充的知识,这个地方就能体现公平锁和非公平锁的设计了,一旦CLH(FIFO)队列的第一个线程被唤醒(放行)后,此时不一定这个线程就能竞争得到这把锁,虽然说队列中已经被阻塞的线程肯定不可能来抢锁,但保不齐会有一个新的线程来竞争,这个时候就有可能这个新线程竞争成功导致队列中的第一个线程刚被唤醒就又被阻塞了,那么这就是非公平锁,对于公平锁而言,这也是为什么公平锁新线程在加锁时要调用`hasQueuedPredecessors`方法的原因,如果队列有线程则不允许你新线程与队列竞争,老老实实去排队  
+
+**<font color="#FF00FF">非常重要:所以非公平锁实际上并不是队列中的线程之间非公平竞争,而是队首线程与新晋线程的竞争</font>** 
+
+
 
 
 **附录:**  
