@@ -163,7 +163,8 @@ thenApply、thenAccept、thenRun方法执行的时候会默认使用CompletableF
 2.4 公平锁和非公平锁  
 2.5 可重入锁  
 2.6 死锁  
-
+2.7 自旋锁  
+2.8 偏向锁、轻量级锁、重量级锁  
 
 ### 2.1 锁的分类  
 *提示:关于锁的分类可以看操作系统相关的知识*  
@@ -254,10 +255,10 @@ objectMonitor.hpp有几个关键的属性
 * `_recursions`:锁的重入次数
 * `_count`:用来记录该线程获取锁的次数
 
-<font color="#FF00FF">每个对象都有与之对应的对象监视器</font>,由ObjectMonitor对象的`_owner`属性就能知道当前是哪个线程获取了对象锁  
+<font color="#FF00FF">每个对象都有与之对应的对象监视器(通过对象头中的对象标记(Mark Word)找到该ObjectMonitor)</font>,由ObjectMonitor对象的`_owner`属性就能知道当前是哪个线程获取了对象锁  
 ```mermaid
 graph LR;
-  Object-->ObjectMonitor-->|_owner|Thread
+  Object-->|Mark Word|ObjectMonitor-->|_owner|Thread
 ```
 
 ### 2.4 公平锁和非公平锁  
@@ -368,6 +369,50 @@ Found 1 deadlock.
 ```
 
 除了使用上面这两个命令之外还可以使用`jconsole`图形化工具,直接在控制台输入`jconsole`打开图形化界面,连接对应的Java程序,在顶部栏(概览、内存、线程、类xxx)中选择线程界面,点击检测死锁便会显示出当前监控的进程的死锁情况  
+
+
+### 2.7 自旋锁  
+*提示:本节与第6章CAS有很多关联知识点*  
+1.通过CAS实现线程Lock与Unlock操作  
+*提示:如何利用自旋锁CAS实现线程Lock与Unlock操作*  
+```java
+public class SpinLockDemo {
+
+    private AtomicReference<Thread> atomicReference = new AtomicReference<>();
+
+    public void lock() {
+        Thread currentThread = Thread.currentThread();
+        // 如果设置成功则跳出循环,否则一直循环设置
+        while (!atomicReference.compareAndSet(null, currentThread)) {
+        }
+    }
+
+    public void unlock() {
+        Thread currentThread = Thread.currentThread();
+        atomicReference.compareAndSet(currentThread, null);
+    }
+
+    public static void main(String[] args) {
+        SpinLockDemo spinLockDemo = new SpinLockDemo();
+        new Thread(() -> {
+            spinLockDemo.lock();
+            try { TimeUnit.SECONDS.sleep(3); } catch (InterruptedException e) { throw new RuntimeException(e); }
+            spinLockDemo.unlock();
+        },"t1").start();
+        new Thread(() -> {
+            spinLockDemo.lock();
+            System.out.println("thread2进入");
+            spinLockDemo.unlock();
+        },"t2").start();
+    }
+}
+```
+**运行结果:**  
+上述代码运行3秒之后t2线程输出thread2进入  
+需要注意的是AtomicReference如果不设置值,则该类默认包装的值是null
+
+### 2.8 偏向锁、轻量级锁、重量级锁  
+*提示:本节内容详情见第10章synchronized与锁升级*  
 
 
 ## 3.LockSupport与线程中断
@@ -1017,7 +1062,7 @@ public class DoubleCheck {
 **目录:**  
 6.1 CAS基本介绍  
 6.2 Unsafe类  
-6.3 原子引用  
+6.3 CAS缺点  
 
 ### 6.1 CAS基本介绍
 1.CAS的使用  
@@ -1065,6 +1110,33 @@ CAS是JDK提供的非阻塞原子性操作,它通过<font color="#00FF00">硬件
 CAS是一条CPU的原子指令(<font color="#00FF00">cmpxchg指令</font>),不会造成数据不一致问题,Unsafe提供的CAS方法(如compareAndSwapxxx)底层实现即为CPU的cmpxchg指令(汇编指令,X86指令集)  
 执行cmpxchg指令的时候,会判断当前系统是否为多核系统,如果是就给<font color="#00FF00">总线</font>加锁,只有一个线程会对总线加锁成功,加锁成功之后会执行CAS操作,即<font color="#00FF00">CAS原子操作实际上是CPU实现独占的</font>,相较于synchronize的重量级锁,这里的互斥时间要短很多,所以在多线程环境下性能会更好  
 `compareAndSet`方法的本质是通过调用Unsafe类的`compareAndSetInt`方法,`compareAndSetInt`方法是一个本地方法,<font color="#FF00FF">每个原子类的内部都通过调用`Unsafe.getUnsafe()`方法持有对Unsafe类的引用</font>  
+
+5.原子引用
+除了类似AtomicInteger、AtomicBoolean等基本数据类型的原子类型外,还可以自定义原子类型,为此JDK设计了原子引用类AtomicReference  
+```java
+public class AtomicClass {
+
+    public static void main(String[] args) {
+        User user1 = new User("z3", 18);
+        User user2 = new User("l4", 23);
+        AtomicReference<User> atomicReference = new AtomicReference<>();
+        atomicReference.set(user1);
+        atomicReference.compareAndSet(user1, user2);
+    }
+}
+
+class User {
+    String name;
+    int age;
+
+    public User(String name, int age) {
+        this.name = name;
+        this.age = age;
+    }
+}
+```
+*提示:API使用层面与AtomicInteger并无区别,<font color="#00FF00">但该类的底层实现是通过VarHandle类完成的</font>*  
+
 
 ### 6.2 Unsafe类
 1.API介绍    
@@ -1149,11 +1221,1397 @@ inline jint Atomic::cmpxchg(jint exchange_value,volatile jint* dest,jint compare
 }
 ```
 
-### 6.3 原子引用 
-1.原子类型  
-除了类似AtomicInteger、AtomicBoolean等基本数据类型的原子类型外,还可以自定义原子类型,为此JDK设计了原子引用类AtomicReference  
+### 6.3 CAS缺点
+1.CAS缺点    
+* 循环时间越长导致CPU开销越大
+* 引入ABA问题
+
+2.ABA问题  
+CAS算法实现的一个重要前提是需要去除内存中某时刻的数据并在当下时刻比较并替换,那么这中间存在的<font color="#00FF00">时间差</font>就会导致数据发生变化  
+例如线程1从内存位置V中取出A,这时线程2也从内存中取出A,线程2进行了一些操作将值改为了B,然后线程2又将内存V处的数据变为了A,这时线程1继续CAS操作发现内存中的值仍然是A,与旧值相同,此时线程1操作成功,<font color="#00FF00">尽管线程1的CAS操作成功,但是这并不代表整个过程就没有问题</font>  
+<font color="#FF00FF">但我个人并不觉得ABA是一个问题,因为乐观锁最重要的就是代码逻辑的不变性,应该是由数据导出代码逻辑,而不是由代码逻辑兼容数据</font>  
+
+3.AtomicStampedReference  
+ABA问题可以通过版本号进行解决,CAS操作比较的终究只有原子类本身封装的内容,如果再加一个版本号便可解决该问题,版本号本身也作为CAS比较的值  
+* `AtomicStampedReference(V,int)` 实例化AtomicStampedReference对象
+  args0:当前原子类包装的对象
+  args1:初始化版本号(邮戳)
+* `compareAndSet(V,V,int,int)` 比较并设置,注意该方法有四个参数,如果当前AtomicStampedReference封装的对象的值是agrs0并且当前对象的邮戳是agrs2,则将当前原子类封装的对象设置为args1,并将当前原子类的邮戳改为args3
+  其实在CAS操作下,这个方法的args2值的写法是固定的,就是`AtomicStampedReference.getStamp()`得到当前原子类的邮戳值,args3一般也写作`AtomicStampedReference.getStamp() + 1`
+  * args0:旧值对象
+  * args1:新值对象
+  * args2:旧邮戳(版本号)
+  * args3:新邮戳(版本号)
+
+*提示:需要注意的是,版本号必须不能回滚,每次更新之后至少要确保版本号是往前走的*  
+
+## 7.原子操作类  
+**目录:**  
+7.1 原子操作类  
+7.2 基本类型原子类  
+7.3 数组类型原子类  
+7.4 引用类型原子类  
+7.5 对象属性修改原子类  
+7.6 增强型原子类  
 
 
+### 7.1 原子操作类  
+1.原子操作类一览
+Java的原子操作类有:AtomicBoolean、AtomicInteger、AtomicIntegerArray、AtomicIntegerFieldUpdater、AtomicLong、AtomicLongArray、AtomicLongFieldUpdater、AtomicMarkableReference、AtomicReference、AtomicReferenceArray、AtomicReferenceFieldUpdater、AtomicStampedReference、DoubleAccumulator、DoubleAdder、LongAccumulator、LongAdder
+
+2.分类  
+上述原子操作类,可以分为:<font color="#00FF00">基本类型原子类、数组类型原子类、引用类型原子类、对象的属性修改原子类、增强型原子类</font>  
+
+### 7.2 基本类型原子类  
+1.分类  
+基本类型原子类包括:AtomicInteger、AtomicBoolean、AtomicLong  
+
+2.常见API  
+* `get() return int` 获取当前原子类封装的内容
+* `getAndSet(int) return int` 设置新值并返回旧值
+* `getAndIncrement() return int` 获取当前值并自增
+* `getAndDecrement() return int` 获取当前值并自减
+* `getAndAdd(int) return int` 获取当前值,并加上预期值(args0)
+* `compareAndSet(int,int) return boolean` 比较并设置,如果当前AtomicInteger对象的值是args0则将当前AtomicInteger的值设置为agrs1,否则什么也不做;若修改成功改方法返回true,否则返回false
+
+3.变量自增的demo  
+```java
+public class AtomicStampedReferenceDemo {
+
+    private static final int SIZE = 50;
+
+    public static void main(String[] args) throws InterruptedException {
+        AtomicInteger atomicInteger = new AtomicInteger();
+        CountDownLatch countDownLatch = new CountDownLatch(SIZE);
+        for (int i = 0; i < SIZE; i++) {
+            new Thread(() -> {
+                try {
+                    for (int j = 0; j < 1000; j++) {
+                        atomicInteger.incrementAndGet();
+                    }
+                } finally {
+                    countDownLatch.countDown();
+                }
+            }, String.valueOf(i)).start();
+        }
+        // 等待上述50个线程全部计算完毕后获取结果
+        countDownLatch.await();
+        System.out.println(atomicInteger.get());
+    }
+}
+```
+
+### 7.3 数组类型原子类  
+1.分类  
+数组类型原子类包括:AtomicIntegerArray、AtomicLongArray、AtomicReferenceArray  
+
+2.常见API  
+* `AtomicIntegerArray(int[])` 实例化原子数组,指定数组原子类封装的数组内容
+* `getAndSet(int,int) return int` 将数组中索引为args0的元素值设置为args1,返回值为旧值
+* `compareAndSet(int,int,int)` 比较并设置;args0为数组下标,args1为旧值,args2为新值
+* `get(int) return int` 得到args0参数下标对应的值
+
+*提示:大多数API皆是操作数组下标对应的元素*
+
+### 7.4 引用类型原子类  
+1.分类  
+引用类型原子类包括:AtomicReference、AtomicStampedReference、AtomicMarkableReference  
+
+2.AtomicMarkableReference类说明  
+与AtomicStampedReference是带有版本号邮戳方式的更新不同,AtomicMarkableReference只记录当前原子类是否有被更改过,相当于弱化版的版本号,只记录true和false,<font color="#00FF00">一旦原子类被更新则状态置为true</font>  
+
+* `AtomicMarkableReference(V,boolean)` 实例化,args0为当前引用类型原子类要封装的对象,args1为标记的初始默认值
+* `compareAndSet(V,V,boolean,boolean)` 比较并设置
+  * args0:旧值
+  * args1:新值
+  * args2:旧的标记值
+  * args3:新的标记值
+  *提示:实际上args2和args3的写法是固定的,就好似下面第3点的写法,当然获取有例外情况*
+
+3.AtomicMarkableReference使用demo  
+```java
+Integer number = 100;
+AtomicMarkableReference<Object> atomicMarkableReference = new AtomicMarkableReference<>(number, false);
+new Thread(() -> atomicMarkableReference.compareAndSet(number, 1000, atomicMarkableReference.isMarked(), !atomicMarkableReference.isMarked())).start();
+```
+
+### 7.5 对象属性修改原子类  
+1.分类  
+对象属性原子类包括:AtomicIntegerFieldUpdater、AtomicLongFieldUpdater、AtomicReferenceFieldUpdater  
+*提示:这三个类都是抽象类*  
+
+2.基本介绍  
+这三个原子类都是基于反射的实用程序,<font color="#FF00FF">可对指定类的`volatile`字段进行原子更新</font>;总结说就是以一种线程安全的方式操作非线程安全对象的某些字段,<font color="#FF00FF">通过下面的第5点和第6点可以发现,本类的功能十分强大</font>  
+
+3.出现背景  
+```java
+public class BankAccount {
+  private String bankName = "CCB";
+  private String bankNo = "110209090802930943";
+  private String owner = "zs";
+
+  int money = 0;
+  public synchronized void transfer() {
+    money++;
+  }
+}
+```
+假设对于该业务类,其中大部分信息都是固定的,但某些值在多线程环境下可能有安全问题,例如这里的money,根据之前的知识对写场景一般要加锁进行解决,但如同这里的代码一样,锁的粒度太粗;能否不加锁以实现对money变量的原子更新?  
+
+4.使用要求  
+* 目标字段必须被`public volatile`关键字修饰
+* 因为对象属性修改原子类(即本节论述的三个原子类)都是抽象类,所以每次使用的时候都必须调用类的静态方法`newUpdater()`创建一个更新器,并且设置需要想要更新的<font color="#00FF00">类和属性</font>
+
+5.使用demo1  
+```java
+public class AtomicFieldUpdater {
+    private static final int SIZE = 50;
+
+    public static void main(String[] args) throws InterruptedException {
+        BankAccount bankAccount = new BankAccount();
+        CountDownLatch countDownLatch = new CountDownLatch(SIZE);
+        for (int i = 0; i < SIZE; i++) {
+            new Thread(() -> {
+                for (int j = 0; j < 1000; j++) {
+                    bankAccount.transMoney();
+                }
+                countDownLatch.countDown();
+            }).start();
+        }
+        countDownLatch.await();
+        System.out.println(bankAccount.money);
+    }
+}
+
+class BankAccount {
+    private String bankName = "CCB";
+
+    public volatile int money = 0;
+
+    AtomicIntegerFieldUpdater<BankAccount> fieldUpdater =
+            AtomicIntegerFieldUpdater.newUpdater(BankAccount.class, "money");
+
+    public void transMoney() {
+        fieldUpdater.getAndIncrement(this);
+    }
+
+}
+```
+**执行结果为:50000**  
+
+6.使用demo2  
+*要求:多个线程同时调用某类的初始化方法,若未被初始化则执行初始化操作,要求只能有一个线程初始化成功,只有一个线程能够操作成功*  
+```java
+public class AtomicFieldUpdater {
+    private static final int SIZE = 10;
+
+    public static void main(String[] args) throws InterruptedException {
+        BankAccount bankAccount = new BankAccount();
+        CountDownLatch countDownLatch = new CountDownLatch(SIZE);
+        for (int i = 0; i < SIZE; i++) {
+            new Thread(() -> {
+                bankAccount.initBankName(Thread.currentThread().getName());
+                countDownLatch.countDown();
+            }).start();
+        }
+        countDownLatch.await();
+        System.out.println("账户名称为:" + bankAccount.bankName);
+    }
+}
+
+class BankAccount {
+    public volatile String bankName = null;
+    /*
+    注意:AtomicReferenceFieldUpdater有两个泛型,三个初始化参数
+    第一个参数依旧是要修改的类
+    第二个参数是第一个参数指定的类中字段类型的类
+    第三个参数是该字段的名称
+    别的原子类没有指定第二个字段是因为,AtomicIntegerFieldUpdater、AtomicLongFieldUpdater默认了要修改的字段类型就是Integer和Long
+    */
+    private AtomicReferenceFieldUpdater<BankAccount, String> fieldUpdater =
+            AtomicReferenceFieldUpdater.newUpdater(BankAccount.class, String.class, "bankName");
+
+    public void initBankName(String bankName) {
+        if (!fieldUpdater.compareAndSet(this, null, bankName)) {
+            System.out.println("已经初始化成功!");
+        } else {
+            System.out.println(String.format("线程:[%s],执行了初始化", Thread.currentThread().getName()));
+        }
+    }
+}
+```
+**输出结果为:**  
+```shell
+已经初始化成功!
+已经初始化成功!
+已经初始化成功!
+已经初始化成功!
+线程:[Thread-0],执行了初始化
+账户名称为:Thread-0
+```
+
+### 7.6 增强型原子类
+**目录:**  
+7.6.1 基本介绍  
+7.6.2 热点商品点赞统计案例  
+7.6.3 LongAdder源码分析  
+
+#### 7.6.1 基本介绍
+1.分类  
+增强型原子类:DoubleAccumulator、DoubleAdder、LongAccumulator、LongAdder  
+*提示:这里的四个增强原子类的命名规范都与上面其它的原子类不相同,可见一斑*  
+
+2.面试题  
+* 热点商品点赞计算器,点赞数自增,不要求实时精确
+* 一个很大的List,里面都是int类型,如何实现自增
+
+3.基本介绍  
+当多个线程更新用于收集统计信息但<font color="#FF00FF">不用于细粒度同步控制的目的</font>的公共和时(不要求实时精准),使用LongAdder类的效果通常优于AtomicInteger,<font color="#00FF00">在高度竞争的情况下次类的吞吐量明细更高</font>,但代价是空间消耗更高,注意LongAdder的sum方法在并发场景下不保证返回精确值  
+
+4.LongAdder常用API  
+* `add(long) return void` 将当前原子类封装的值加args0
+* `increment() return void` 将当前原子类封装的值自增
+* `decrement() return void` 将当前原子类封装的值自减
+* `sum() return long` 返回当前原子类封装的值,在没有并发控制的情况下该方法返回的值是精确值,存在并发情况下,该方法不保证返回精确值
+* `reset() return void` 将原子类封装的值重置为0,可用于替代重新new一个LongAdder,但此方法只可以在没有并发更新的情况下调用
+* `sumThenReset() return void` 获取当前封装的值并将封装的值设置为0
+
+5.LongAccumulator常用API  
+* `LongAccumulator(LongBinaryOperator,long)` 初始化LongAccumulator
+  相较于LongAdder而言,LongAccumulator支持自定义<font color="#00FF00">累加函数</font>表达式
+  * args0:LongBinaryOperator为函数式接口,该函数式接口由`applyAsLong(long,long) return long`构成,函数式接口的args0代表LongAccumulator当前封装的值,args1代表当前传入计算的值,后续调用`accumulate`函数传入的值便是这里的args1
+  * args1:指定当前原子类封装的初始值,由args0的LongBinaryOperator接口可知,LongAccumulator必须要指定初始值,否则玩不转
+* `accumulate(long) return void` 计算累加
+
+**使用demo:**
+```java
+LongAccumulator longAccumulator = new LongAccumulator((left, right) -> left * right,1);
+longAccumulator.accumulate(2);
+longAccumulator.accumulate(3);
+System.out.println(longAccumulator.get());
+// 输出结果为6
+```
+
+#### 7.6.2 热点商品点赞统计案例  
+*提示:本节对上述7.6.1的第2点的热点商品点赞案例进行解决,并对各种解决方案给出性能分析*  
+```java
+public class AdderDemo {
+
+    private static final int SIZE = 50;
+    private static final int _100W = 10000 * 100;
+
+    public static void main(String[] args) throws InterruptedException {
+        // 四种方式性能对比
+        ClickNumber clickNumber = new ClickNumber();
+        long startTime;
+        long endTime;
+
+        CountDownLatch countDownLatch1 = new CountDownLatch(SIZE);
+        CountDownLatch countDownLatch2 = new CountDownLatch(SIZE);
+        CountDownLatch countDownLatch3 = new CountDownLatch(SIZE);
+        CountDownLatch countDownLatch4 = new CountDownLatch(SIZE);
+        startTime = System.currentTimeMillis();
+        for (int i = 0; i < SIZE; i++) {
+            new Thread(() -> {
+                for (int j = 0; j < _100W; j++) {
+                    clickNumber.clickBySynchronized();
+                }
+                countDownLatch1.countDown();
+            }).start();
+        }
+        countDownLatch1.await();
+        endTime = System.currentTimeMillis();
+        System.out.println(String.format("执行时长为:%s", endTime - startTime));
+        startTime = System.currentTimeMillis();
+        for (int i = 0; i < SIZE; i++) {
+            new Thread(() -> {
+                for (int j = 0; j < _100W; j++) {
+                    clickNumber.clickByAtomicInteger();
+                }
+                countDownLatch2.countDown();
+            }).start();
+        }
+        countDownLatch2.await();
+        endTime = System.currentTimeMillis();
+        System.out.println(String.format("执行时长为:%s", endTime - startTime));
+        startTime = System.currentTimeMillis();
+        for (int i = 0; i < SIZE; i++) {
+            new Thread(() -> {
+                for (int j = 0; j < _100W; j++) {
+                    clickNumber.clickByLongAdder();
+                }
+                countDownLatch3.countDown();
+            }).start();
+        }
+        countDownLatch3.await();
+        endTime = System.currentTimeMillis();
+        System.out.println(String.format("执行时长为:%s", endTime - startTime));
+        startTime = System.currentTimeMillis();
+        for (int i = 0; i < SIZE; i++) {
+            new Thread(() -> {
+                for (int j = 0; j < _100W; j++) {
+                    clickNumber.clickByLongAccumulator();
+                }
+                countDownLatch4.countDown();
+            }).start();
+        }
+        countDownLatch4.await();
+        endTime = System.currentTimeMillis();
+        System.out.println(String.format("执行时长为:%s", endTime - startTime));
+
+    }
+
+}
+
+class ClickNumber {
+    int number = 0;
+
+    public synchronized void clickBySynchronized() {
+        number++;
+    }
+
+    AtomicInteger atomicInteger = new AtomicInteger();
+
+    public void clickByAtomicInteger() {
+        atomicInteger.incrementAndGet();
+    }
+
+    LongAdder longAdder = new LongAdder();
+
+    public void clickByLongAdder() {
+        longAdder.increment();
+    }
+
+    LongAccumulator longAccumulator = new LongAccumulator((left, right) -> left + right, 0);
+
+    public void clickByLongAccumulator() {
+        longAccumulator.accumulate(1);
+    }
+
+}
+```
+
+<font color="#00FF00">运行结果</font>  
+```shell
+执行时长为:2651~4000
+执行时长为:940
+执行时长为:57
+执行时长为:62
+```
+总结就是,<font color="#FF00FF">synchronize性能最差,它与AtomicInteger的性能相差4倍左右,LongAdder与LongAccumulator性能差距不大;与AtomicInteger相差越10倍左右</font>  
+
+
+#### 7.6.3 LongAdder源码分析  
+1.继承关系  
+![继承关系](resources/JUC/15.png)  
+<font color="#00FF00">LongAdder继承自Striped64,Striped64继承自Number类</font>  
+
+2.四个关键属性  
+Striped64有如下四个关键属性  
+```java
+abstract class Striped64 extends Number {
+  // 静态内部类,这里省略了类的内容,后续解释
+  static final class Cell {}
+  // CPU的核数,也是cells数组的最大长度
+  static final int NCPU = Runtime.getRuntime().availableProcessors();
+  // 单元格数组,一般是2的次方个数;Cell是
+  transient volatile Cell[] cells;
+  // 基础value值(即LongAdder原子类内部封装的值),当并发度较低时,只累加该值用于没有竞争的情况,通过CAS更新
+  transient volatile long base;
+  // 自旋锁,创建或者扩容cells数组时使用的自旋锁变量以此来调整单元格大小(扩容),创建单元格时使用的锁
+  transient volatile int cellsBusy;
+}
+```
+其它相关变量属性  
+* `collide`:标识扩容意向,false一定不会扩容,true可能会扩容
+* `cellsBusy`:初始化cells或者扩容cells需要获取锁,0表示无锁状态,1表示其它线程已经持有了锁
+* `casCellsBusy()`通过cas操作修改cellsBusy的值,CAS成功代表获取锁,返回true
+* `NCPU`:当前计算机CPU数量,Cell数组扩容时会使用到
+* `getProbe()`获取当前线程的hash值
+* `advanceProbe()`重置当前线程的hash值
+
+3.LongAdder高性能原理  
+在AtomicInteger中多线程环境下,所有线程都会CAS去更新一个value值,当线程多了之后会造成CPU空转的急剧上升,<font color="#FF00FF">LongAdder的原理是开辟多个单元</font>,<font color="#00FF00">一开始所有的计算都在base属性上进行这点与AtomicInteger无异</font><font color="#FF00FF">,但随着线程的增多LongAdder会扩容Cell开辟多个计算窗格,不同的线程在不同的计算窗格Cell上进行CAS计算,最终求和统计便是将base值加上每个Cell窗格中的值</font>,用空间换时间  
+多个线程需要同时对value进行操作时,可以对线程id进行hash得到hash值,在根据hash值映射到数组的某个下标,在对该下标中保存的值进行CAS操作,<font color="#00FF00">这样就能解决在多个Cell的情况下,某个线程具体要操作的Cell对象是谁的问题</font>  
+
+4.LongAdder的add方法源码讲解  
+```java
+public void add(long x) {
+    Cell[] cs; long b, v; int m; Cell c;
+    if ((cs = cells) != null || !casBase(b = base, b + x)) {
+        int index = getProbe();
+        boolean uncontended = true;
+        if (cs == null || (m = cs.length - 1) < 0 ||
+            (c = cs[index & m]) == null ||
+            !(uncontended = c.cas(v = c.value, v + x)))
+            longAccumulate(x, null, uncontended, index);
+    }
+}
+```
+```java
+public void add(long x) {
+    /*
+    cs表示cells引用
+    b表示获取的base值
+    v表示期望值
+    m表示cells数组的长度
+    c表示当前线程命中的cell单元格
+    */
+    Cell[] cs; long b, v; int m; Cell c;
+    /*
+    1:第一个判断,首先让cs变量等于cells并判断是否不为null,如果是第一次调用该线程由于cells必然是null所以返回false
+    2:接着把base值赋值给b,并调用casBase方法将base值更新为b+x,如果更新成功则返回true,取反后返回false,此时不会进入判断体内
+    3:但如果因为线程争抢导致casBase更新失败,此时便会进入判断体内部,也代表此时有多个线程并发更改base值
+    6:又有进程抢占,在(cs = cells ) !=null的判断会直接为true,此后任何进程调用该方法都会直接进入判断体内,因为此时cell数组已经被初始化过
+    */
+    if ((cs = cells) != null || !casBase(b = base, b + x)) {
+        // 4:是否有冲突
+        boolean uncontended = true;
+        // getProbe方法用于得到当前线程的哈希值probe,或者说当前线程要修改的Cell数组对应的索引值
+        int index = getProbe();
+        /*
+        5:由于cs此时依旧是null,所以第一个判断直接进入判断体内,执行longAccumulate方法,这步会初始化Cell数组
+        7: cs == null || (m = cs.length - 1)这一步以后都会为false
+        (c = cs[index & m]) == null这一步判断当前线程对应的槽位是否为null
+        cs[index & m]就相当于对线程计算hash然后得到槽位,如果之前已经初始化创建过Cell所以这一步的判断也为false,如果该Cell没有被初始化则会进入到longAccumulate方法进行初始化操作,因为初始化Cells数组的时候,并不会创建数组中的每个Cell,仅仅只会创建一个,所以即使cells数组被创建,也不能保证其中的每个元素都不为null
+        最后对当前线程对应的Cell进行cas更新操作,更新成功后uncontended被赋值为true,取反后为false,所以此时并不会走longAccumulate方法
+        8:唯一存在变数的就是最后一步,当前线程对它对应的Cell做cas更新操作的时候如果已经有线程正在对该Cell做更新操作
+        此时便产生冲突会进入到longAccumulate方法,为了解决这一问题,此时便会扩容
+        */
+        if (cs == null || (m = cs.length - 1) < 0 ||
+            (c = cs[index & m]) == null ||
+            !(uncontended = c.cas(v = c.value, v + x)))
+            longAccumulate(x, null, uncontended, index);
+    }
+}
+
+/**
+ * 要想看懂本方法还需要前置知识本节第2点四个关键属性
+ * args0:需要增长的值
+ * args1:LongBinaryOperator累加表达式,在LongAdder类中传入的是null,即表达式就是累加,该参数是为了LongAccumulator的复用设计的
+ * args2:是否有冲突/竞争,即当前Cell对应的cas操作是否更新成功,该参数需要重点关注
+ * agrs3:为线程的probe值/hash值
+ */
+final void longAccumulate(long x, LongBinaryOperator fn,
+                          boolean wasUncontended, int index) {
+    // 9:如果线程的probe值为0代表线程还未初始化
+    if (index == 0) {
+        // 9:使用ThreadLocalRandom为当前线程重新计算一个hash值,强制初始化
+        ThreadLocalRandom.current(); // force initialization
+        // 9:重新获取probe值,hash值被重置就好比一个全新的线程一样,所以设置了wasUncontended的竞争状态为true
+        index = getProbe();
+        // 9:重新计算了当前线程的hash值后认为此次不算是一次竞争
+        wasUncontended = true;
+    }
+    /*
+    10:死循环
+    对于collide值,如果hash取模映射得到的Cell单元不是null,则为true,此值也可以看做是扩容意向
+    */
+    for (boolean collide = false;;) {       // True if last slot nonempty
+        Cell[] cs; Cell c; int n; long v;
+        // case1:cells已经被初始化了  
+        if ((cs = cells) != null && (n = cs.length) > 0) {
+            // case1.1:如果当前线程要访问的cell还没有初始化,cells初始化和cell初始化是两码事要分清
+            if ((c = cs[(n - 1) & index]) == null) {
+                /*如果当前cells没有初始化cell的操作,注意这里cellsBusy变量的含义发生了改变
+                对于case2而言cellsBusy代表当前是否有线程在初始化cells数组
+                对于本处而言cellsBusy代表是否有线程正常初始化cell
+                */
+                if (cellsBusy == 0) {       // Try to attach new Cell
+                    // 创建cell
+                    Cell r = new Cell(x);   // Optimistically create
+                    // 双检加锁,这里casCellsBusy()方法是cas层面的加锁操作 
+                    if (cellsBusy == 0 && casCellsBusy()) {
+                        try {               // Recheck under lock
+                            Cell[] rs; int m, j;
+                            if ((rs = cells) != null &&
+                                (m = rs.length) > 0 &&
+                                rs[j = (m - 1) & index] == null) {
+                                // 将创建的cell赋值到cells数组中
+                                rs[j] = r;
+                                break;
+                            }
+                        } finally {
+                            cellsBusy = 0;
+                        }
+                        continue;           // Slot is now non-empty
+                    }
+                }
+                collide = false;
+            }
+            else if (!wasUncontended)       // CAS already known to fail cas已经知道本次更新失败
+                wasUncontended = true;      // Continue after rehash 通过死循环进行下次更新,这个判断的意义在于执行下面的advanceProbe()方法重新计算索引,
+                // 并且在下一次循环的时候能成功执行下一个else分支判断,即c.cas(v = c.value,(fn == null) ? v + x : fn.applyAsLong(v, x))的分支
+            // 尝试重写当前线程对应的新的Cell,如果成功写入则跳出循环,后续的每次循环都会走该方法,原汁原味的cas操作
+            else if (c.cas(v = c.value,
+                            (fn == null) ? v + x : fn.applyAsLong(v, x)))
+                break;
+            // 如果尝试重新写新的Cell还是失败,则判断当前Cells数组的大小是否大于CPU的核心数,或者当前类的cells已经不是本次循环使用的cells对象,(代表cells已经被别的线程扩容的情况下)
+            // 将collide设置为false,代表不希望进行扩容操作,进行下一次循环
+            else if (n >= NCPU || cells != cs)
+                collide = false;            // At max size or stale
+            // 否则将collide扩容意向标识设置为true,collide是局部变量,不存在并发问题
+            else if (!collide)
+                collide = true;
+            // 加锁,这里cellsBusy的含义又变为了是否有线程正在扩容
+            else if (cellsBusy == 0 && casCellsBusy()) {
+                try {
+                    // 双检加锁
+                    if (cells == cs)        // Expand table unless stale
+                        // 扩容,左移
+                        cells = Arrays.copyOf(cs, n << 1);
+                } finally {
+                    cellsBusy = 0;
+                }
+                collide = false;
+                continue;                   // Retry with expanded table
+            }
+            // 重新计算cells数组的下标值
+            index = advanceProbe(index);
+        }
+        /*
+        case2:cells没有加锁且没有初始化,则尝试对它进行加锁,并初始化cells数组
+        cellsBusy变量用于判断是否有别的线程正在初始化或扩容cells数组,0表示无锁状态,1表示其它线程已经持有了锁
+        这里的casCellsBusy()相当于加锁操作
+        */
+        else if (cellsBusy == 0 && cells == cs && casCellsBusy()) {
+            try {     // 5.1:初始化Cell Initialize table
+                // 这里还有一个细节,这里又判断了一次cells == cs 类似于double check的操作
+                if (cells == cs) {
+                    // 5.1:Cell数组初始化的值是固定的为2
+                    Cell[] rs = new Cell[2];
+                    // 5.1:给Cell数组中的元素赋初始值,x为需要增长的值
+                    rs[index & 1] = new Cell(x);
+                    cells = rs;
+                    break;
+                }
+            } finally {
+                cellsBusy = 0;
+            }
+        }
+        // case3:cells正在进行初始化,则尝试直接在基数base上进行累加操作
+        // 如果多线程竞争太过激烈,并且Cell还处于初始化阶段中,这里需要有一个兜底的方案,尝试直接在base上进行操作,这个兜底的方法最终会调用break终止死循环
+        // Fall back on using base
+        else if (casBase(v = base,
+                          (fn == null) ? v + x : fn.applyAsLong(v, x)))
+            break;
+    }
+}
+/**
+ * cas操作更新CELLSBUSY从0变为1,正好应证了cellsBusy为0时代表无锁,1代表正在被
+ * 更改,这里的cas操作类似AtomicReferenceFieldUpdater,
+ * 是通过反射的方式直接修改Striped64类的cellsBusy变量以实现的
+ */
+final boolean casCellsBusy() {
+    return CELLSBUSY.compareAndSet(this, 0, 1);
+}
+```
+
+5.一图总结add方法  
+![一图总结](resources/JUC/16.png)  
+
+6.LongAdder的sum方法源码讲解  
+```java
+public long sum() {
+    Cell[] cs = cells;
+    long sum = base;
+    if (cs != null) {
+        for (Cell c : cs)
+            if (c != null)
+                sum += c.value;
+    }
+    return sum;
+}
+```
+本方法没有加锁,这也是为什么<font color="#00FF00">LongAdder的sum方法在并发场景下不保证返回精确值</font>的原因,sum方法的调用只是计算cells数组一瞬间的累加值,该方法没有加`synchronized`关键字,自然无法保证精确  
+
+## 8.ThreadLocal  
+**目录:**  
+8.1 ThreadLocal  
+8.2 ThreadLocal底层源码分析  
+8.3 ThreadLocal内存泄漏问题  
+8.4 Entry为什么是弱引用  
+8.5 ThreadLocal使用建议  
+
+
+### 8.1 ThreadLocal
+1.ThreadLocal基本介绍  
+ThreadLocal提供线程局部变量,这些变量与正常的变量不同,因为每一个线程在访问ThreadLocal实例的时候(通过其get或set方法)<font color="#00FF00">都有自已的、独立初始化的变量副本</font>,ThreadLocal实例通常是类中的私有静态字段,使用它的目的是希望将状态(如用户ID或事务ID)与线程关联起来  
+
+2.api介绍  
+* `static withInitial(Supplier<? extends S>) return ThreadLocal<S>` 创建一个线程局部变量副本,通过这种方式创建的ThreadLocal,调用其`get`方法将返回这里Supplier回调函数提供的值,而不是null,withInitial方法内部通过一个匿名内部类重写了`initialValue`方法来实现,通过调用该方法创建的ThreadLocal就相当于有了初始值,不至于在调用get方法时返回null
+* `protected initialValue() return T` 返回当前线程局部变量副本中的初始值,也即通过静态方法创建ThreadLocal时指定的值,该方法默认实现返回null;<font color="#00FF00">该方法不可以直接被用户调用</font>
+* `get() return T` 返回当前线程局部变量副本中保存的内容
+* `remove() return void` 删除当前线程局部变量副本中保存的内容
+* `set(T) return void` 设置当前线程局部变量副本中保存的内容
+
+3.注意事项  
+阿里巴巴Java开发规范手册中提到,必须回收自定义的ThreadLocal变量,尤其在线程池场景下,<font color="#FF00FF">线程经常会被复用</font>,如果不清理自定义的ThreadLocal变量,<font color="#00FF00">可能会影响后续业务逻辑和造成 **<font color="#FF00FF">内存泄漏</font>** 等问题</font>,所以要在代码块中使用try-finally进行回收  
+```java
+objectThreadLocal.set(userInfo);
+try{
+    // do something...
+} finally {
+    objectThreadLocal.remove();
+}
+```
+
+### 8.2 ThreadLocal底层源码分析  
+1.Thread、ThreadLocal、ThreadLocalMap之间的关系  
+Thread类里拥有ThreadLocal和ThreadLocalMap的引用,ThreadLocalMap是ThreadLocal的一个静态内部类  
+为什么每个线程都有唯一的ThreadLocal就是因为Thread拥有ThreadLocal的引用  
+ThreadLocal内部有一个静态内部类ThreadLocalMap,ThreadLocalMap内部也有一个静态内部类Entry(Entry->Map细细体会这里的联系),并且<font color="#FF00FF">Entry继承自WeakReference弱引用类</font>  
+
+2.ThreadLocal内部方法分析  
+```java
+public T get() {
+    // 首先得到当前线程
+    Thread t = Thread.currentThread();
+    // 根据当前线程,调用getMap方法
+    ThreadLocalMap map = getMap(t);
+    // 如果map不为null则进入判断体
+    if (map != null) {
+        // 根据当前线程从map中获取Entry
+        ThreadLocalMap.Entry e = map.getEntry(this);
+        // 如果获得的entry不为null
+        if (e != null) {
+            // 则Entry的value就是当前线程保存的局部变量副本
+            @SuppressWarnings("unchecked")
+            T result = (T)e.value;
+            return result;
+        }
+        // 否则还是还初始化
+    }
+    // 如果map为null,则初始化map;setInitialValue实际上调用的就是之前提到过的initialValue方法
+    return setInitialValue();
+}
+
+/**
+ * getMap方法的本质就是返回Thread对象内部的threadLocals
+ * threadLocals实际上就是本节第1点所说的,Thread内部拥有的ThreadLocal的引用
+ */
+ThreadLocalMap getMap(Thread t) {
+    return t.threadLocals;
+}
+
+/**
+ * 设置初始值
+ */
+private T setInitialValue() {
+    // 调用initialValue方法获取初始值
+    T value = initialValue();
+    Thread t = Thread.currentThread();
+    ThreadLocalMap map = getMap(t);
+    // 如果map不为null,则设置当前ThreadLocal(ThreadLocalMap)的初始值
+    if (map != null) {
+        map.set(this, value);
+    } else {
+        // 创建map的时候会一并创建Entry
+        createMap(t, value);
+    }
+    if (this instanceof TerminatingThreadLocal) {
+        TerminatingThreadLocal.register((TerminatingThreadLocal<?>) this);
+    }
+    return value;
+}
+
+void createMap(Thread t, T firstValue) {
+    // 创建map同时一并创建Entry,并赋值了Thread里的threadLocals字段
+    t.threadLocals = new ThreadLocalMap(this, firstValue);
+}
+
+public void set(T value) {
+    Thread t = Thread.currentThread();
+    ThreadLocalMap map = getMap(t);
+    if (map != null) {
+        map.set(this, value);
+    } else {
+        createMap(t, value);
+    }
+}
+```
+*提示:这里ThreadLocalMap的set和getEntry方法的分析详情见8.4章节有介绍*  
+
+3.小总结  
+每个线程都有其唯一对应的ThreadLocalMap对象,ThreadLocalMap的本质就是一个Map,<font color="#FF00FF">它的Key就是ThreadLocal</font>,value就是该ThreadLocal对象封装变量副本,<font color="#00FF00">因为一个线程可以对应多个ThreadLocal,所以Thread对应的ThreadLocalMap可以存放多个元素</font>,即这个map存放当前线程所创建的所有ThreadLocal,这样每个ThreadLocal在获取值时相当于把自已作为ThreadLocalMap的key进行获取,<font color="#00FF00">ThreadLocal自身其实并不存放值</font>  
+ThreadLocal -> Thread -> ThreadLocalMap -> Entry -> value
+```mermaid
+graph LR;
+  ThreadLocal -->|得到| Thread -->|得到| ThreadLocalMap -->|调用get方法
+  把ThreadLocal对象本身作为key| Entry --> Value
+```
+
+4.Entry  
+接下来看一下Entry的源码,注意继承是弱引用不是虚引用  
+```java
+static class Entry extends WeakReference<ThreadLocal<?>> {
+    /** The value associated with this ThreadLocal. */
+    Object value;
+
+    Entry(ThreadLocal<?> k, Object v) {
+        super(k);
+        value = v;
+    }
+}
+```
+可以发现Entry继承了WeakReference,是一个弱引用,并且在构造方法里把ThreadLocal作为弱引用的对象传入,即Entry这个弱引用对象的Key封装了ThreadLocal  
+![Entry](resources/JUC/18.png)  
+*提示:为什么要用弱引用,详情见第8.4节*  
+
+### 8.3 ThreadLocal内存泄漏问题
+1.什么是内存泄漏  
+大量不再被使用的对象无法回收,就是内存泄漏
+
+2.强软弱虚  
+2.1 类图继承关系如下  
+```mermaid
+graph BT;
+  SoftReference --> Reference
+  WeakReference --> Reference
+  PhantomReference --> Reference
+  Reference --> Object
+  ReferenceQueue --> Object
+```
+*提示:其中Reference是强引用,一般new出来的对象都是该引用,SoftReference软引用、WeakReference弱引用、PhantomReference虚引用(Phantom=幽灵),一般虚引用会和ReferenceQueue勾搭上*  
+
+3.强引用  
+当内存不足,JVM开始垃圾回收,对于强引用的对象,就算是出现了OOM也不会对该对象进行回收;强引用是我们最常见的普通对象引用,只要还有强引用指向一个对象,就能表明对象还"活着",垃圾收集器不会碰这种对象.  
+在Java中最常见的就是强引用,把一个对象赋给一个引用变量.这个引用变量就是一个强引用,当一个对象被强引用变量引用时,它处于可达状态,它是不可能被垃圾回收机制回收的,即使该对象以后永远都不会被用到,JVM也不会回收,因此强引用是造成Java内存泄漏的主要原因之一  
+对于一个普通的对象,如果没有其他的引用关系,只要超过了引用的作用域或者显式地将相应(强)引用赋值为null,一般认为就是可以被垃圾收集的了  
+```java
+public class ThreadLocalDemo {
+    public static void main(String[] args) {
+        MyObject myObject = new MyObject();
+        System.out.println("gc before " + myObject);
+        myObject = null;
+        // 手动GC
+        System.gc();
+        System.out.println("gc after " + myObject);
+    }
+}
+
+class MyObject {
+    @Override
+    protected void finalize() throws Throwable {
+        System.out.println("finalize");
+    }
+}
+/**
+ * 输出结果为:
+ * gc before io.github.cnsukidayo.juc.MyObject@6d311334
+ * finalize
+ * gc after null
+ */
+```
+
+4.软引用  
+软引用是一种相对强引用弱化了一些的引用,需要用`java.lang.ref.SoftReference`类来实现,对于<font color="#00FF00">只有软引用</font>的对象来说,<font color="#00FF00">当系统内存充足时它不会被回收,当系统内存不足时它会被回收</font>  
+软引用通常用在对内存敏感的程序中,比如高速缓存就有用到软引用,内存够用的时候就保留,不够用就回收  
+```java
+public class ThreadLocalDemo {
+    public static void main(String[] args) throws InterruptedException {
+        // 添加JVM运行参数 -Xms10m -Xmx10m 设置内存大小为10M
+        MyObject myObject = new MyObject();
+        SoftReference<MyObject> softReference = new SoftReference<>(myObject);
+        System.out.println("gc before " + softReference.get());
+        // 正常执行内存够用,不会回收;睡眠1s让GC运行起来
+        System.gc();
+        System.out.println("gc after " + softReference.get());
+        try {
+            // 创建20M的数组,内存铁定不够用
+            byte[] bytes = new byte[20 * 1024 * 1024];
+        } catch (Exception e) {
+            e.printStackTrace();
+        } finally {
+            System.out.println("gc after " + softReference.get());
+        }
+    }
+}
+
+class MyObject {
+}
+/**
+ * 运行结果如下
+ * gc before io.github.cnsukidayo.juc.MyObject@6d311334
+ * gc after io.github.cnsukidayo.juc.MyObject@6d311334
+ * gc after io.github.cnsukidayo.juc.MyObject@6d311334
+ * Exception in thread "main" java.lang.OutOfMemoryError: Java heap space
+ * at io.github.cnsukidayo.juc.ThreadLocalDemo.main(ThreadLocalDemo.java:20)
+ */
+```
+
+5.弱引用  
+弱引用需要用java.lang.ref.WeakReference类来实现,它比软引用的生存周期更短,对于只有弱引用的对象来说,<font color="#00FF00">只要垃圾回收机制一运行,不管JVM的内存空间是否足够,都会回收该对象占用的内存</font>  
+```java
+public class ThreadLocalDemo {
+    public static void main(String[] args) throws InterruptedException {
+        MyObject myObject = new MyObject();
+        WeakReference<MyObject> weakReference = new WeakReference<>(myObject);
+        // 不让main方法引用该对象
+        myObject = null;
+        System.out.println("gc before " + weakReference.get());
+        System.gc();
+        System.out.println("gc atfer " + weakReference.get());
+    }
+}
+
+class MyObject {
+}
+/**
+ * 执行结果如下:
+ * gc before io.github.cnsukidayo.juc.MyObject@6d311334
+ * gc atfer null
+ */
+```
+
+<font color="#00FF00">软引用和弱引用的使用场景</font>  
+假如有一个应用需要读取大量的本地图片,如果每次读取图片都从硬盘中读取则会严重影响性能,但如果一次性把这些图片都加载到内存可能会造成内存溢出或者是内存利用率不高的问题,<font color="#00FF00">此时使用软引用/弱引用就可以解决这个问题</font>  
+设计思路是用一个HashMap来保存图片的路径和包装该图片对象的软引用之间的映射关系,在内存不足时JVM会自动回收这些缓存图片对象所占用的空间,从而有效地避免了OOM的问题  
+`Map<String,SoftReference<BitMap>> imageCache = new HahMap<>();`  
+
+6.虚引用  
+6.1 虚引用必须和引用对垒(ReferenceQueue)联合使用  
+虚引用需要`java.lang.ref.PhantomReference`类来实现,与其它几种引用都不同,虚引用并不会决定对象的生命周期,<font color="#00FF00">如果一个对象仅持有虚引用,那么它就和没有任何引用一样,在任何时候都可能被垃圾回收期回收</font>,它不能单独使用也不能通过它访问对象,<font color="#FF00FF">虚引用必须和引用队列(ReferenceQueue)联合使用,当虚引用对象被回收时会自动添加到引用队列中去</font>
+
+6.2 PhantomReference的get方法总是返回null  
+虚引用的主要作用是跟踪对象被垃圾回收的状态,<font color="#00FF00">仅仅是提供了一种确保对象被finalize以后,做某些事情的通知机制</font>;<font color="#FF00FF">PhantomReference的get方法总是返回null</font>,因此无法访问对应的引用对象
+
+6.3 处理监控通知使用  
+换句话说,设置虚引用关联对象的唯一目的,就是在这个对象被收集器回收的时候收到一个系统通知或者后续添加进一步的处理,<font color="#00FF00">用来实现比finalize机制更灵活的回收操作</font>;可以从引用队列中找到被回收的对象,类似与死信队列;<font color="#FF00FF">只保障最终被回收的对象会加入到该队列中</font>  
+
+6.4 api大全  
+* `PhantomReference(T, ReferenceQueue<? super T>)` 实例化虚引用对象
+  * args0:要被虚引用包装的对象
+  * args1:引用队列
+* `get() return T` 该方法总是返回null
+
+6.5 代码demo  
+```java
+public class ThreadLocalDemo {
+    public static void main(String[] args) throws InterruptedException {
+        // 添加JVM运行参数 -Xms10m -Xmx10m 设置内存大小为10M
+        MyObject myObject = new MyObject();
+        System.out.println("myobject before " + myObject);
+        ReferenceQueue<MyObject> referenceQueue = new ReferenceQueue<>();
+        PhantomReference<MyObject> phantomReference = new PhantomReference<>(myObject, referenceQueue);
+        // 该方法总是返回null
+        System.out.println("phantomReference.get()---" + phantomReference.get());
+        List<byte[]> list = new ArrayList<>();
+        new Thread(() -> {
+            while (true) {
+                // 尝试打爆内存容量
+                list.add(new byte[1024 * 1024]);
+                try { TimeUnit.MILLISECONDS.sleep(500); } catch (InterruptedException e) { throw new RuntimeException(e); }
+                System.out.println("list 添加成功 " + phantomReference.get());
+            }
+        }).start();
+        new Thread(() -> {
+            while (true) {
+                Reference<? extends MyObject> poll = referenceQueue.poll();
+                if (poll != null) {
+                    System.out.println("有虚对象被回收 " + poll);
+                    break;
+                }
+            }
+        }).start();
+
+    }
+}
+
+class MyObject {
+    @Override
+    protected void finalize() throws Throwable {
+        System.out.println("MyObject finalize");
+    }
+}
+/**
+ * 执行的结果为
+ * myobject before io.github.cnsukidayo.juc.MyObject@6d03e736
+ * phantomReference.get()---null
+ * list 添加成功 null
+ * list 添加成功 null
+ * list 添加成功 null
+ * MyObject finalize
+ * list 添加成功 null
+ * Exception in thread "Thread-0" java.lang.OutOfMemoryError: Java heap space
+ * at io.github.cnsukidayo.juc.ThreadLocalDemo.lambda$main$0(ThreadLocalDemo.java:27)
+ * at io.github.cnsukidayo.juc.ThreadLocalDemo$$Lambda$14/0x0000000800c00c00.run(Unknown Source)
+ * 有虚对象被回收 java.lang.ref.PhantomReference@54034183
+ * at java.base/java.lang.Thread.run(Thread.java:833)
+ */
+```
+
+7.一图总结强软弱虚的回收机制  
+![强软弱虚](resources/JUC/17.png)  
+
+### 8.4 Entry为什么是弱引用  
+假设在某个方法function中创建了ThreadLocal对象,此栈帧的变量强引用堆内存中的ThreadLocal变量,但当这个方法结束后栈帧销毁,此引用自然也就没有了;但此时线程对象Thread内部的ThreadLocalMap依旧还持有该ThreadLocal的引用(Entry的key指向该ThreadLocal),如果程序代码养成良好习惯手动remove也就罢了,如果代码没有remove,并且Thread被复用的情况下就会导致线程对象不会被回收,进而ThreadLocalMap不会被回收,从而ThreadLocalMap里存储的Entry越来越多,如果此时Entry设计成强引用ThreadLocal对象,就将导致这些Entry无法被回收,造成内存泄漏,<font color="#00FF00">使用<font color="#FF00FF">弱引用</font>就可以使ThreadLocal对象在方法执行完毕后顺利被回收且Entry的key引用指向为null,因为此时一旦GC就没有任何地方引用该ThreadLocal对象了</font>  
+<font color="#FF00FF">此后再调用get、set或remove方法时,就会尝试删除key为null的entry,可以释放value对象所占用的内存</font>  
+
+1.Key为null的Entry  
+![Entry](resources/JUC/18.png)  
+再来回顾这张图,虽然现在通过Key为弱引用解决了ThreadLocal对象不能被回收的问题,<font color="#00FF00">但value对象可还是强引用</font>,如果Thread被复用导致ThreadLocalMap不能被回收,从而导致内存中<font color="#00FF00">大量</font>key为null的Entry的value一直不能被回收(即这里的T对象)从而导致内存泄漏问题,<font color="#00FF00">注意这个Map底层是一个Entry数组,所以key为null的Entry是不止一个的(不像HashMap那样Key是唯一的)</font>  
+虽然弱引用保证了key指向的ThreadLocal对象能被及时回收,但是v指向的value对象是需要ThreadLocalMap调用get、set时发现key为null时才会去回收整个entry、value,<font color="#00FF00">因此弱引用不能100%保证内存不泄露,我们要在不使用某个ThreadLocal对象后,手动调用remove方法来删除它</font>  
+
+2.不手动remove为何会造成内存泄漏  
+* 当前Thread对应的ThreadLocalMap中的Entry越来越多且不回收ThreadLocal对象,导致内存泄漏;当然由于弱引用设计一旦GC这些ThreadLocal将被回收
+* 即使Entry中的ThreadLocal对象被回收,但Entry的value所引用的对象无法被回收,从而导致ThreadLocalMap中存在大量key为null的Entry导致内存泄漏
+
+3.ThreadLocal内部方法补充  
+*提示:之前在8.2章就已经讲解过ThreadLocal内部的get和set方法,这里补充其内部的ThreadLocalMap的`set`、`getEntry`、`remove`方法*  
+```java
+static class ThreadLocalMap {
+
+  /**
+   * 调用ThreadLocal的set方法,最终会进入该方法
+   */
+  private void set(ThreadLocal<?> key, Object value) {
+      Entry[] tab = table;
+      int len = tab.length;
+      int i = key.threadLocalHashCode & (len-1);
+
+      for (Entry e = tab[i];
+              e != null;
+              e = tab[i = nextIndex(i, len)]) {
+          /**
+           * refersTo是一个本地方法,这里的作用就是判断当前Map里的某个Entry和
+           * 入参ThreadLocal是否是同一个对象,如果是则将该Entry的value覆盖为
+           * 入参的value
+           */
+          if (e.refersTo(key)) {
+              e.value = value;
+              return;
+          }
+          /**
+           * 如果Map里的某个Entry的Key是null的话,就调用replaceStaleEntr
+           * 方法清除当前Entry
+           * replaceStaleEntr方法内部会调用cleanSomeSlots+expungeStaleEntry
+           * 方法来最终清除该Entry
+           */
+          if (e.refersTo(null)) {
+              replaceStaleEntry(key, value, i);
+              return;
+          }
+      }
+
+      tab[i] = new Entry(key, value);
+      int sz = ++size;
+      if (!cleanSomeSlots(i, sz) && sz >= threshold)
+          rehash();
+  }
+
+  private void remove(ThreadLocal<?> key) {
+      Entry[] tab = table;
+      int len = tab.length;
+      int i = key.threadLocalHashCode & (len-1);
+      for (Entry e = tab[i];
+            e != null;
+            e = tab[i = nextIndex(i, len)]) {
+          // 同理
+          if (e.refersTo(key)) {
+              e.clear();
+              expungeStaleEntry(i);
+              return;
+          }
+      }
+  }
+
+  /**
+   * ThreadLocal的get方法最终会进入该方法
+   */
+  private Entry getEntry(ThreadLocal<?> key) {
+    int i = key.threadLocalHashCode & (table.length - 1);
+    Entry e = table[i];
+    if (e != null && e.refersTo(key))
+        return e;
+    else
+        // 调用getEntryAfterMiss
+        return getEntryAfterMiss(key, i, e);
+  }
+
+  private Entry getEntryAfterMiss(ThreadLocal<?> key, int i, Entry e) {
+    Entry[] tab = table;
+    int len = tab.length;
+
+    while (e != null) {
+        if (e.refersTo(key))
+            return e;
+        // 这一步同样会清除key为null的Entry
+        if (e.refersTo(null))
+            expungeStaleEntry(i);
+        else
+            i = nextIndex(i, len);
+        e = tab[i];
+    }
+    return null;
+  }
+
+}
+```
+
+4.小总结  
+从前面的set、getEntry、remove方法看出,在threadLocal的生命周期里,针对threadLocal存在的内存泄漏的问题,都会通过expungeStaleEntry、cleanSomeSlots、replaceStaleEntry这三方法清理掉key为null的脏entry  
+
+### 8.5 ThreadLocal使用建议  
+* 通过ThreadLocal.withInitial()方法创建ThreadLocal
+* 建议把ThreadLocal设置为static变量
+  关于这一点说明一下,ThreadLocal能够实现线程变量的隔离,不在于它自已而在于ThreadLocalMap,所以ThreadLocal可以只被初始化一次(可以被到处使用),只分配一块固定的内存空间即可,没必要作为成员变量被多次初始化
+  <font color="#00FF00">一般操作ThreadLocal都是自已封装静态方法API来操作静态的ThreadLocal对象</font>
+* 用完记得remove
+
+## 9.Java对象内存布局和对象头  
+目录:  
+9.1 Java对象内存布局  
+9.2 JOL  
+
+
+### 9.1 Java对象内存布局  
+1.对象内存布局  
+在Hotspot虚拟机中,对象在堆内存中的存储布局可以划分为三个部分:<font color="#00FF00">对象头(Header)、实例数据(Instance Data)、对齐填充(Padding)</font>  
+
+2.对象头  
+对象头又可以划分成两个部分:对象标记(Mark Word)、类元信息(类型指针)  
+![对象头](resources/JUC/19.png)  
+*提示:数组类型的对象会比单纯的对象多一个Length信息*  
+<font color="#FF00FF">在64位JDK中,对象标记(Mark Word)占用8个字节,类元信息(类型指针)占用8个字节一共占用16个字节</font>  
+所以面试题,JVM中new Object()会占用多少内存?因为Object不包含实例数据,<font color="#00FF00">所以它占用的内存就是对象头占用的内存,即16个字节</font>,并且该字节数正好是8字节的倍数也不会对齐填充  
+
+2.1 对象标记(Mark Word)  
+对象标记主要包含以下信息:哈希码、GC标记、GC次数、同步锁标记、偏向锁持有者  
+* 哈希码:Object类中的`hashCode`是一个本地方法,该方法本质上就是访问对象头中的哈希码内容
+* GC次数:当前对象经历过的内存回收次数
+
+|               存储内容               | 标志位 |       状态       |
+|:------------------------------------:|:------:|:----------------:|
+|              对象哈希码              |   01   |      未锁定      |
+|           指向锁记录的指针           |   00   |    轻量级锁定    |
+|          指向重量级锁的指针          |   10   | 膨胀(重量级锁定) |
+|          空,不需要记录信息           |   11   |      GC标记      |
+| 偏向线程ID、偏向时间戳、对象分代年龄 |   01   |      可偏向      |
+
+<font color="#FF00FF">Mark Word(对象标记)的存储结构如下</font>,一共8个字节  
+![存储结构](resources/JUC/20.png)  
+
+2.2 类元信息(类型指针)  
+JDK底层在实现的时候(C++)把对象头分为对象标记(markOop)和类元信息/类型指针(kclassOop),<font color="#00FF00">类元信息存储的是指向该对象类元数据(kclass)的首地址</font>,也就是说对象是通过类进行实例化的,<font color="#FF00FF">而当前对象隶属于哪个类就通过这里的类元信息/类型指针(kclassOop)指针指向的类元数据来进行获取</font>  
+<font color="#00FF00">类元数据(kclass)存放在JVM的方法区内</font>  
+
+2.3 C++源代码  
+hotspot\src\share\vm\oops\oop.hpp文件  
+```c++
+// 定义了oopDesc这个类
+class oopDesc {
+ private:
+  // markOop这里的_mark就是对象标记信息
+  volatile markOop  _mark;
+  // union联合关键字,这里的_metadata就是类元信息
+  // 内部存储了一个kclass指针指向类元数据
+  union _metadata {
+    // kclass指针
+    Klass*      _klass;
+    narrowKlass _compressed_klass;
+  } _metadata;
+}
+```
+
+3.实例数据  
+所谓实例数据就是该对象内部的定义的各种属性信息,也包括父类的属性信息  
+
+4.对齐填充  
+<font color="#00FF00">对齐填充保证创建的对象占用内存是8字节的倍数</font>  
+
+### 9.2 JOL  
+1.JOL介绍  
+JOL是JDK官网推出的一款用于分析Java对象在内存中占用情况分析的工具类,官网地址:[https://openjdk.org/projects/code-tools/jol/](https://openjdk.org/projects/code-tools/jol/)  
+这个工具直接在Java的Maven中添加如下依赖便可使用  
+```xml
+<dependency>
+    <groupId>org.openjdk.jol</groupId>
+    <artifactId>jol-core</artifactId>
+    <!-- 根据JDK版本选择合适的版本即可 -->
+    <version>0.17</version>
+</dependency>
+```
+
+
+2.分析Object对象占用内存大小  
+```java
+public static void main(String[] args) {
+    Object o = new Object();
+    // 输出分析结果
+    System.out.println(ClassLayout.parseInstance(o).toPrintable());
+}
+/**
+ * 输出结果如下
+ */
+java.lang.Object object internals:
+OFF  SZ   TYPE DESCRIPTION               VALUE
+  0   8        (object header: mark)     0x0000000000000001 (non-biasable; age: 0)
+  8   4        (object header: class)    0x00000d58
+ 12   4        (object alignment gap)    
+Instance size: 16 bytes
+Space losses: 0 bytes internal + 4 bytes external = 4 bytes total
+```
+其中OFF(offset)表示内容在内存中的偏移量,SZ(size)表示该内容占用的字节大小,DESCRIPTION是描述信息,VALUE是该值的内容  
+这里0-8的字节用于存储对象头-对象标记,接着8-12这四个字节用于存储类元信息即类元数据的地址,这里和之前说的类元信息占8个字节有冲突,原因是这里涉及<font color="#00FF00">指针压缩</font>的概念,这里的`0x00000d58`便是类元信息的内存地址,最后的12-16这四个字节是对齐填充  
+Instance size表明当前对象在堆内存中占用16个字节  
+
+3.分析普通对象占用的内存大小  
+```java
+public class JOLTest {
+
+    public static void main(String[] args) {
+        Customer customer = new Customer();
+        // 输出分析结果
+        System.out.println(ClassLayout.parseInstance(customer).toPrintable());
+    }
+
+}
+
+class Customer {
+    int id;
+    boolean flag = false;
+}
+/**
+ * 输出结果如下
+ */
+io.github.cnsukidayo.juc.Customer object internals:
+OFF  SZ      TYPE DESCRIPTION               VALUE
+  0   8           (object header: mark)     0x0000000000000001 (non-biasable; age: 0)
+  8   4           (object header: class)    0x00c01200
+ 12   4       int Customer.id               0
+ 16   1   boolean Customer.flag             false
+ 17   7           (object alignment gap)    
+Instance size: 24 bytes
+Space losses: 0 bytes internal + 7 bytes external = 7 bytes total
+```
+同理对象头不做过多解释,观察发现这里多了实例数据的部分,之前说过实例数据就是对象内定义的各种属性,例如这里12-16这四个字节存储的是int类型的值,值为0;接着16-17这一个字节存储的是boolean类型的值,值为false(不过要注意boolean类型不一定是一个字节);最后17-24这7个字节是对齐填充  
+
+4.指针压缩  
+JVM启动的时候默认会加上`-XX:+UseCompressedClassPointers`参数,该参数的意思就是启动指针压缩功能,这就是为什么存储类元信息的指针只占用4字节内存的原因  
+通过在JVM运行时添加`-XX:-UseCompressedClassPointers`参数来关闭指针压缩,关闭后再次查看Object对象内存占用的情况如下  
+```java
+java.lang.Object object internals:
+OFF  SZ   TYPE DESCRIPTION               VALUE
+  0   8        (object header: mark)     0x0000000000000001 (non-biasable; age: 0)
+  8   8        (object header: class)    0x0000020092401cf0
+Instance size: 16 bytes
+Space losses: 0 bytes internal + 0 bytes external = 0 bytes total
+```
+
+## 10.synchronized与锁升级  
+**目录:**  
+10.1 JVM的锁类型分类  
+10.2 synchronized的性能变化  
+10.3 无锁  
+10.4 偏向锁  
+10.5 轻量级锁  
+10.6 重量级锁  
+
+### 10.1 JVM的锁类型分类
+1.分类  
+JVM中的锁分为无锁、偏向锁、轻量级锁、重量级锁  
+
+2.锁类型的对象头内存布局  
+在第9章介绍过对象头的内存布局,其中不同锁体现在对象头中的效果如下图所示  
+![存储结构](resources/JUC/20.png)  
+
+* 偏向锁:MarkWord存储的是偏向的线程ID
+* 轻量级锁:MarkWord存储的是指向线程栈中Lock Record的指针
+* 重量级锁:MarkWord存储的是指向堆中的monitor对象的指针
+
+### 10.2 synchronized的性能变化  
+1.Java5版本  
+在Java5之前只有synchronized,这个操作是操作系统级别的重量级操作;这就导致在高并发环境下如果锁竞争激烈将导致性能的急剧下降,这种实现方式将会导致程序频繁进行<font color="#00FF00">用户态和内核态的切换</font>  
+![切换](resources/JUC/21.png)  
+Java的线程是映射到到操作系统原生线程之上,如果要阻塞或唤醒一个线程就需要操作系统介入,需要在户态与内核态之间切换,这种切换会消耗挣大量的系统资源,因为用户态与内核态都有各自专用的内存空间,专用的寄存器等,用户态切换至内核态需要传递给许多变量、参数给内核,内核也需要保护好用户态在切换时的一些寄存器值、变量等,以便内核态调用结束后切换回用户态继续工作  
+在Java早期版本中,<font color="#00FF00">synchronized属于重量级锁,效率低下,因为监视器锁（monitor）是依赖于底层的操作系统的MutexLock(系统互斥量)来实现的</font>,挂起线程和恢复线程都需要转入内核态去完成,阻塞或唤醒一个Java线程需要操作系统切换CPU状态来完成,这种状态切换需要耗费处理器时间,为了减少获得锁和释放锁所带来的性能消耗,<font color="#FF00FF">Java6引入了轻量级锁和偏向锁</font>  
+
+2.管程和ObjectMoniter
+*提示:复习2.3 对象锁和类锁中的知识,以及管程的相关知识*  
+Monitor是在JVM底层实现的(C++),<font color="#00FF00">本质是依赖操作系统的Mutex Lock进行实现</font>,操作系统实现线程之间的切换需要从用户态到内核态的转换,状态转换需要耗费很多的处理器时间,成本非常高,所以synchronized是Java语言中的一个重量级操作  
+
+3.Monitor与Java对象以及线程的关联  
+* 如果一个Java对象被某个线程锁住,则该Java对象的Mark Word(对象标记)字段中LockWord指向monitor的起始地址
+* Monitor的Owner字段会存放持有当前对象锁的线程id
+
+
+### 10.3 无锁  
+**无锁时的对象头**  
+```java
+public static void main(String[] args) {
+    Object o = new Object();
+    // 输出分析结果
+    System.out.println(ClassLayout.parseInstance(o).toPrintable());
+    o.hashCode();
+    System.out.println(ClassLayout.parseInstance(o).toPrintable());
+}
+/**
+ * 输出结果如下,将对象头中的对象标记的16进制值转为二进制为
+ * 00000000 00000000 00000000 00000000
+ * 00000000 00000000 00000000 00000001
+ * 观察发现此时确实为无锁标识
+ * 此时有另外一个问题,为什么没有看到hashCode的内容?  
+ * 这是因为新创建的对象默认不会赋值hashCode,必须调用hashCode方法后才会为对象生成hashCode
+ */
+java.lang.Object object internals:
+OFF  SZ   TYPE DESCRIPTION               VALUE
+  0   8        (object header: mark)     0x0000000000000001 (non-biasable; age: 0)
+  8   4        (object header: class)    0x00000d58
+ 12   4        (object alignment gap)    
+Instance size: 16 bytes
+Space losses: 0 bytes internal + 4 bytes external = 4 bytes total
+
+/**
+ * 调用完hashCode方法后,第二次的打印结果如下,确实生成了hashCode,将值转为二进制后的内容为
+ * 00000000 00000000 00000000 01010110
+ * 01100111 01110110 10101101 00000001
+ * 所以hashCode的二进制值为
+ * 1010110 01100111 01110110 10101101
+ * 将其转为十进制为1449621165
+ */
+1449621165
+java.lang.Object object internals:
+OFF  SZ   TYPE DESCRIPTION               VALUE
+  0   8        (object header: mark)     0x000000566776ad01 (hash: 0x566776ad; age: 0)
+  8   4        (object header: class)    0x00000d58
+ 12   4        (object alignment gap)    
+Instance size: 16 bytes
+Space losses: 0 bytes internal + 4 bytes external = 4 bytes total
+```
+
+### 10.4 偏向锁  
+1.解释  
+当线程A第一次竞争到锁时,通过操作修改Mark Word(对象标识)中的偏向线程ID、偏向模式,如果不存在其它线程竞争,<font color="#00FF00">那么持有偏向锁的线程将永远不需要进行同步</font>  
+*提示:偏向锁主要是单线程竞争的场景*  
+当一段同步代码一直被同一个线程多次访问,由于只有一个线程那么该线程在后续访问时便会自动获得锁;<font color="#00FF00">这样就不需要程序频繁在用户态和内核态之间切换</font>  
+
+HotSpot的作者进过研究发现,大多数情况下在多线程场景下,<font color="#00FF00">锁不仅不存在多线程竞争,还存在锁由同一个线程多次获取的情况</font>,偏向锁就是在这种情况下出现的,它的出现是为了解决<font color="#00FF00">只有在一个线程执行同步代码时提高性能</font>  
+偏向锁会偏向于第一个访问锁的线程,如果在接下来的运行过程中,该锁没有被其他的线程访问,则持有偏向锁的线程将永远不需要触发同步.也即偏向锁在资源没有竞争情况下消除了同步语句,懒的连CAS操作都不做了,直接提高程序性能  
+
+2.理论实现  
+在实际应用运行过程中发现,"锁总是同一个线程持有,很少发生竞争",<font color="#00FF00">也就是说锁总是被第一个占用他的线程拥有,这个线程就是锁的偏向线程</font>  
+那么只需要在锁第一次被拥有的时候,记录下偏向线程ID(threadId,可以参考10.1章的图).这样偏向线程就一直持有着锁(后续这个线程进入和退出这段加了同步锁的代码块时,<font color="#00FF00">不需要再次加锁和释放锁</font>;而是直接会去检查锁的MarkWord里面是不是放的自己的线程ID)  
+如果相等,表示偏向锁是偏向于当前线程的,就不需要再尝试获得锁了,直到竞争发生才释放锁.以后每次同步,检查锁的偏向线程ID与当前线程ID是否一致,如果一致直接进入同步.无需每次加锁解锁都去CAS更新对象头.<font color="#00FF00">如果自始至终使用锁的线程只有一个</font>,很明显偏向锁几乎没有额外开销,性能极高
+如果不等,表示发生了竞争,锁已经不是总是偏向于同一个线程了,<font color="#FF00FF">这个时候会尝试使用CAS来替换MarkWord里面的线程ID为新线程的ID</font>,即第二个线程自旋一段时间等待第一个线程退出
+* 如果CAS竞争成功,表示之前的线程不存在了,MarkWord里面的线程ID为新线程的ID,锁不会升级,仍然为偏向锁;
+* 如果CAS竞争失败,这时候可能需要升级变为<font color="#FF00FF">轻量级锁</font>,才能保证线程间公平竞争锁.  
+
+*注意:偏向锁只有遇到其他线程尝试竞争偏向锁时,持有偏向锁的线程才会释放锁,线程是不会主动释放偏向锁的*  
+
+3.技术实现  
+一个synchronized方法被一个线程抢到了锁时,那这个方法所在的对象就会在其所在的Mark Word(对象标识)中将偏向锁修改状态位,同时还会有占用前54位来存储线程指针作为标识(threadId).若该线程再次访问同一个synchronized方法时,<font color="#00FF00">该线程只需去对象头的MarkWord中去判任务信息断一下是否有偏向锁指向本身的ID,无需再进入Monitor去竞争对象了</font>  
+![技术实现](resources/JUC/20.png)  
+
+4.偏向锁的JVM参数  
+在控制台执行`java -XX:+PrintFlagsInitial | grep  BiasedLock*`命令查看JDK启动时偏向锁相关的启动参数,结果如下  
+```shell
+intx BiasedLockingBulkRebiasThreshold         = 20                                        {product} {default}
+intx BiasedLockingBulkRevokeThreshold         = 40                                        {product} {default}
+intx BiasedLockingDecayTime                   = 25000                                     {product} {default}
+# 偏向锁开启的启动延迟时间(毫秒),即程序启动后偏向锁不会立即生效,会间隔这里的时候后才生效
+intx BiasedLockingStartupDelay                = 0                                         {product} {default}
+# 是否开启偏向锁,JDK8为true,本笔记的环境为JDK17已经不开启偏向锁了
+bool UseBiasedLocking                         = false                                     {product} {default}
+```
+通过以下参数来设置JVM偏向锁参数  
+* `-XX:+UseBiasedLocking` 开启偏向锁
+* `-XX:BiasedLockingStartupDelay=0` 设置偏向锁启动延迟时间
+* `-XX:-UseBiasedLocking` 关闭偏向锁,<font color="#FF00FF">关闭后程序的加锁操作会直接进入轻量级锁状态</font>
+
+5.代码演示  
+*注意:因为JDK15之后默认偏向锁已经不开启了,所以为了演示效果在JDK17的版本下要添加JVM运行参数,即`-XX:+UseBiasedLocking`开启偏向锁,如果是JDK8则要添加`-XX:BiasedLockingStartupDelay=0`参数设置偏向锁延迟开启的时间为0,否则下述代码的加锁操作将直接为轻量级锁*  
+```java
+public class JOLTest {
+    public static void main(String[] args) throws InterruptedException {
+        Object o = new Object();
+        synchronized (o) {
+            System.out.println(ClassLayout.parseInstance(o).toPrintable());
+        }
+    }
+}
+/**
+ * 输出结果如下
+ * 0x000001e7f92d3805转为二进制为
+ * 00000000 00000000 00000000 00000000
+ * 01111001 11111110 01001011 01001110
+ * 这里的最后三位理论上应该是010代表偏向锁,但考虑到JDK版本的问题
+ * 并不是010,不过这里已经打印了确实是biased就不去细究了
+ * 
+ */
+java.lang.Object object internals:
+OFF  SZ   TYPE DESCRIPTION               VALUE
+  0   8        (object header: mark)     0x000001e7f92d3805 (biased: 0x0000000079fe4b4e; epoch: 0; age: 0)
+  8   4        (object header: class)    0x00000d58
+ 12   4        (object alignment gap)    
+Instance size: 16 bytes
+Space losses: 0 bytes internal + 4 bytes external = 4 bytes total
+```
+
+5.偏向锁的撤销  
+之前的第2点提到过第二个线程抢占锁时发现偏向锁的ID不是当前线程的ID就表明发生了锁竞争,此时第二个线程就会使用CAS来竞争锁,如果竞争失败此时就会将锁升级为<font color="#00FF00">轻量级锁</font>,所以就要先撤销原先的偏向锁,而偏向锁的撤销必须要等待进入<font color="#FF00FF">全局安全点(此时不会执行任何代码,有点类似JVM的Stop The World)</font>后才会执行,所以第二个线程会一直CAS直到代码进入全局安全点  
+
+偏向锁使用一种等到<font color="#00FF00">竞争出现才释放锁的机制</font>,只有当其他线程竞争锁时,持有偏向锁的原来线程才会被撤销,<font color="#FF00FF">撤销需要等待全局安全点(该时间点上没有字节码正在执行)</font>,同时检查持有偏向锁的线程是否还在执行(因为进入安全点并不代表持有偏向锁的线程已经执行完临界区的代码了),所以针对原有线程是否已经执行完临界区的代码就分为两种情况  
+* 若第一个线程还要继续执行临界区的代码,它还没有执行完其他线程就来抢锁,该偏向锁会被取消掉并出现<font color="#FF00FF">锁升级</font>,此时轻量级锁由原来持有偏向锁的线程持有,继续执行其临界区的代码,而正在竞争的线程会进入<font color="#FF00FF">CAS自旋</font>等待获得该轻量级锁,如果自旋到一定次数(自适应自旋)依旧没有成功则会升级为<font color="#FFC800">重量级锁</font>  
+* 第一个线程已经执行完临界区的代码(退出同步代码块),<font color="#00FF00">则将对象头设置为无锁状态该并撤销偏向锁,重新偏向</font>  
+
+*注意:这里出现了两次CAS自旋,分别有不同的含义*
+
+6.锁的升级全流程图  
+至此通过偏向锁作为承上启下的一个锁,这里给出JVM锁升级的全貌图  
+![锁升级全过程](resources/JUC/22.png)  
+
+7.偏向锁不在被推荐  
+自JDK15开始偏向锁就被Java官方废弃了,当然偏向锁还是保留的,只是不再推荐使用了;从本节的第4点也可以看出,偏向锁已经默认不开启了,主要原因就是偏向锁的维护成本太高了  
+
+
+### 10.5 轻量级锁  
+1.基本介绍  
+轻量级锁:多线程竞争,但是任意时刻最多只有一个线程竞争,即不存在锁竞争太过激烈的情况,也就没有线程阻塞,轻量级锁是为了在线程近乎<font color="#FF00FF">交替执行</font>同步块时提高性能  
+根据之前10.4章的知识,轻量级锁必然是从偏向锁升级过来的,<font color="#00FF00">当轻量级锁由原来持有偏向锁的线程持有后,参与竞争的线程会自旋等待获取该轻量级锁</font>,<font color="#FF00FF">但自旋的时间非常短暂,不存在进一步的锁竞争,此时就会保持该锁为轻量级锁,</font>避免进一步升级到重量级锁  
+
+2.轻量级锁的加锁  
+![图](resources/JUC/20.png)  
+JVM会为每个线程在当前线程的栈帧中创建用于存储<font color="#00FF00">锁记录</font>的空间,官方称为Displaced Mark Word,若一个线程获取锁时发现是轻量级锁,会把锁的MarkWord复制到自已的Displaced Mark Word,然后线程尝试用CAS将锁的MarkWord替换为指向<font color="#00FF00">锁记录(存在当前线程栈中的锁记录)</font>的指针,如果成功则线程获得锁,如果失败表示Mark Word已经抢先一步被替换成了其他线程的锁记录,说明在与其他线程竞争锁,当前线程就尝试使用自旋来获取锁  
+*疑问:所以我可以认为Displaced Mark Word(锁记录)中存储的信息很多,至少一个是当前线程的锁记录,还有一个是上一个线程遗留下的锁记录?*  
+*提示:这里图中指向栈中<font color="#00FF00">锁记录</font>的指针,说的就是这里栈帧中的锁记录*  
+
+3.轻量级锁的解锁  
+在释放锁时,当前线程会使用CAS操作将Displaced Mark Word的内容复制回锁的Mark Word里面(这样竞争的线程再CAS就能成功了),如果没有发生竞争,那么这个复制的操作就会成功,<font color="#00FF00">如果有其他线程因为自旋多次导致轻量级锁升级为了重量级锁,那么CAS操作失败,此时会释放所并唤醒被阻塞额线程</font>  
+
+4.加锁解锁流程解释  
+假设一开始偏向锁就是null,所有的Displaced Mark Word去CAS申请的时候也都是判断指向锁记录的指针是不是null,如果是则替换为当前线程的锁记录指针,如果不是则代表有别的线程已经竞争了,此时自旋;当线程释放偏向锁时相当于再把已有的锁记录变回为null,此时别的线程CAS发现它变为null了,不就CAS成功了么  
+
+5.代码演示  
+```java
+/**
+ * JDK17之后默认就是轻量级锁
+ */
+public static void main(String[] args) throws InterruptedException {
+    Object o = new Object();
+    synchronized (o) {
+        System.out.println(ClassLayout.parseInstance(o).toPrintable());
+    }
+}
+/**
+ * 输出结果如下 0x000000d60daff800 转为二进制后的结果为
+ * 00000000 00000000 00000000 11010110
+ * 00001101 10101111 11111000 00000000
+ * 可以发现最后两位确实是00代表轻量级锁
+ */
+java.lang.Object object internals:
+OFF  SZ   TYPE DESCRIPTION               VALUE
+  0   8        (object header: mark)     0x000000d60daff800 (thin lock: 0x000000d60daff800)
+  8   4        (object header: class)    0x00000d58
+ 12   4        (object alignment gap)    
+Instance size: 16 bytes
+Space losses: 0 bytes internal + 4 bytes external = 4 bytes total
+```
+
+6.轻量级锁升级为重量级锁  
+之前说过若某线程CAS自旋获取轻量级锁总是失败,则将使轻量级锁升级为重量级锁,<font color="#00FF00">于是轻量级锁升级为重量级锁的触发条件如下</font>  
+现代的JDK采用自适应自旋锁,即线程如果CAS自旋成功了,那么下一次自旋的次数就会增加,因为JVM认为既然该锁上次自旋获取成功了,那么这一次很大概率也会自旋成功,反之如果CAS自旋获取轻量级锁很少成功,那么下次会相应减少自旋的次数甚至不自旋,避免CPU空转  
+<font color="#00FF00">自适应意味着自旋的次数是不固定的</font>  
 
 
 **附录:**  
