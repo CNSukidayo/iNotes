@@ -165,6 +165,7 @@ thenApply、thenAccept、thenRun方法执行的时候会默认使用CompletableF
 2.6 死锁  
 2.7 自旋锁  
 2.8 偏向锁、轻量级锁、重量级锁  
+2.9 独占锁、读写锁、邮戳锁  
 
 ### 2.1 锁的分类  
 *提示:关于锁的分类可以看操作系统相关的知识*  
@@ -418,6 +419,8 @@ public class SpinLockDemo {
 ### 2.8 偏向锁、轻量级锁、重量级锁  
 *提示:本节内容详情见第10章synchronized与锁升级*  
 
+### 2.9 独占锁、读写锁、邮戳锁  
+*提示:本节的内容参考第12章*  
 
 ## 3.LockSupport与线程中断
 **目录:**  
@@ -3074,6 +3077,567 @@ public abstract class AbstractQueuedSynchronizer
 对于最后一步`LockSupport.unpark(s.waiter)`还有补充的知识,这个地方就能体现公平锁和非公平锁的设计了,一旦CLH(FIFO)队列的第一个线程被唤醒(放行)后,此时不一定这个线程就能竞争得到这把锁,虽然说队列中已经被阻塞的线程肯定不可能来抢锁,但保不齐会有一个新的线程来竞争,这个时候就有可能这个新线程竞争成功导致队列中的第一个线程刚被唤醒就又被阻塞了,那么这就是非公平锁,对于公平锁而言,这也是为什么公平锁新线程在加锁时要调用`hasQueuedPredecessors`方法的原因,如果队列有线程则不允许你新线程与队列竞争,老老实实去排队  
 
 **<font color="#FF00FF">非常重要:所以非公平锁实际上并不是队列中的线程之间非公平竞争,而是队首线程与新晋线程的竞争</font>** 
+
+7.AbstractQueuedSynchronizer的cancelAcquire方法  
+在第5点中提到的`acquire`方法的最后会执行`cancelAcquire`方法,这个方法放到最后执行代表新线程加入FIFO发生了异常,需要将该节点从FIFO队列中移除,所以该方法只在异常情况下才会被调用,<font color="#00FF00">但是这个方法的本意是清除队列中所有想要退出等待的Node</font>  
+```java
+public abstract class AbstractQueuedSynchronizer
+    extends AbstractOwnableSynchronizer
+    implements java.io.Serializable {
+    private int cancelAcquire(Node node, boolean interrupted,
+                            boolean interruptible) {
+        if (node != null) {
+            node.waiter = null;
+            node.status = CANCELLED;
+            if (node.prev != null)
+                cleanQueue();
+        }
+        if (interrupted) {
+            if (interruptible)
+                return CANCELLED;
+            else
+                Thread.currentThread().interrupt();
+        }
+        return 0;
+    }
+
+    private void cleanQueue() {
+        // 最完成大循环
+        for (;;) {     
+            // 内层小循环,开始时定义了q指向队尾node,s=null
+            // q指向当前节点
+            // s指向当前节点的下一个节点
+            // p指向当前节点的上一个节点
+            for (Node q = tail, s = null, p, n;;) {
+                // 1:该方法会从队尾向前遍历直到遍历到队列中的第一个元素为止,会直接return退出整个方法
+                // 为什么是第一个元素?因为队列中的第一个Node是人为创建的虚拟Node,没有实际含义
+                // 用户真正有用的Node是从第二个开始计算的
+                // 并且该方法的p = q.prev能够保证p指针每进过一次循环,指针都是在向前走的(不是死循环)
+                if (q == null || (p = q.prev) == null)
+                    return;                     
+                // 9:如果当前遍历的这一个Node还不想退出则跳过该Node(通过break跳过,配合p = q.prev)
+                if (s == null ? tail != q : (s.prev != q || s.status < 0))
+                    break;                      
+                // 2:如果当前节点的状态是要取消
+                if (q.status < 0) {
+                    // 3:如果s为null则代表当前节点是尾节点
+                    // 则调用casTail方法将尾节点设置为p(p现在为null),也就是要把尾节点设置为null
+                    // 如果s不为null,则代表当前节点不是尾节点,则调用casPrev方法
+                    // 将当前节点的下一个节点s的上一个节点设置为p
+                    if ((s == null ? casTail(q, p) : s.casPrev(q, p)) &&
+                        q.prev == p) {
+                        // 4:如果替换成功,则还要将当前节点的上一个节点p设置为当前节点的下一个节点s
+                        // 这样就把当前节点q从队列中移除了
+                        p.casNext(q, s);         // OK if fails
+                        // 如果p节点的上一个节点为null,则p节点此时是哪个虚拟节点
+                        // 此时p节点的下一个节点即s(已经不是q了)
+                        // s是队首节点了
+                        if (p.prev == null)
+                            signalNext(p);
+                    }
+                    break;
+                }
+                // 
+                if ((n = p.next) != q) {         // help finish
+                    if (n != null && q.prev == p) {
+                        p.casNext(n, q);
+                        if (p.prev == null)
+                            signalNext(p);
+                    }
+                    break;
+                }
+                s = q;
+                q = q.prev;
+            }
+        }
+    }
+}
+```
+简而言之这个方法就是将FIFO队列中所有需要取消的Node从队列中移除,又因为队列是双向链表,所以需要手动调整Node对象上下指针指向的对象  
+
+
+## 12.ReentrantLock、ReentrantReadWriteLock、StampedLock  
+**目录:**  
+12.1 基本概念串讲  
+12.2 ReentrantReadWriteLock代码示例  
+12.3 ReentrantReadWriteLock锁降级  
+12.4 StampedLock  
+
+### 12.1 基本概念串讲  
+1.ReentrantReadWriteLock定义  
+读写锁定义为:<font color="#00FF00">一个资源能够被多个读线程访问,或者被一个写线程访问.但是不能同时存在读写线程</font>  
+
+2.ReentrantReadWriteLock类关系分析  
+```mermaid
+graph BT;
+  ReentrantReadWriteLock-->|继承|ReadWriteLock
+  ReentrantReadWriteLock-->|组合|Lock
+```
+相关代码:
+```java
+/**
+ * 读写锁接口的两个方法分别是获取读锁和写锁
+ * 获取Lock对象
+ */
+public interface ReadWriteLock {
+    Lock readLock();
+    Lock writeLock();
+}
+
+public class ReentrantReadWriteLock
+        implements ReadWriteLock, java.io.Serializable {
+    // 分别持有读锁和写锁的引用
+    private final ReentrantReadWriteLock.ReadLock readerLock;
+    private final ReentrantReadWriteLock.WriteLock writerLock;
+    // 内部也是通过Sync来实现的公平锁和非公平锁
+    final Sync sync;
+
+    public static class ReadLock implements Lock, java.io.Serializable {
+        // 这里Sync就是用于实现公平锁和非公平锁的
+        // 至于读写锁的功能则交由该内部类来实现
+        private final Sync sync;
+        protected ReadLock(ReentrantReadWriteLock lock) {
+            sync = lock.sync;
+        }
+    }
+
+    public static class WriteLock implements Lock, java.io.Serializable {
+        private final Sync sync;
+        protected WriteLock(ReentrantReadWriteLock lock) {
+            sync = lock.sync;
+        }
+    }
+}
+```
+
+3.ReentrantReadWriteLock的不同  
+相较于synchronized关键词,不管是读还是写操作都需要加锁来保证原子性,在读多写少的场景下会导致性能的下降,于是乎就可以使用这里的ReentrantReadWriteLock来解决该问题(<font color="#00FF00">一个资源能够被多个读线程访问,或者被一个写线程访问,但是不能同时存在读写线程</font>)  
+之前说过也可以使写方法单独加锁,读方法加volatile关键词来实现,但这种方法读写操作并非原子操作,volatile只是保证可见性,保证变量最终的值能够被正确读取到(不保证写可见),所以本质上和ReentrantReadWriteLock是不同的东西  
+
+4.ReentrantReadWriteLock的缺点  
+* 写锁饥饿
+  在读多写少的场景下会导致写锁饥饿抢不到锁,因为读读不互斥只要有读后续就可以不停加入读锁,读锁一直占着你写锁自然没办法抢锁,极端场景999个读线程1个写线程,大概率这个写线程是获取不到锁的
+* 锁降级
+  
+*提示:读写锁只有在读多写少的场景下才有较高的性能体现*
+
+5.StampedLock  
+为了解决上述读写锁ReentrantReadWriteLock的缺点,引入了StampedLock(邮戳锁)  
+*提示:邮戳锁和之前的AtomicStampedReference是不同的,AtomicStampedReference是原子类不是锁*  
+
+### 12.2 ReentrantReadWriteLock代码示例  
+1.场景描述  
+定义了一个Map类里面存放各种读写数据,现在要求读读共享,读写互斥,写写互斥  
+
+2.ReentrantLock的代码实现  
+```java
+public class ReentrantReadWriteLockDemo {
+
+    public static void main(String[] args) {
+        MyResource myResource = new MyResource();
+        for (int i = 0; i < 10; i++) {
+            int finalI = i;
+            new Thread(() -> myResource.write(String.valueOf(finalI), String.valueOf(finalI)), String.valueOf(i)).start();
+        }
+        for (int i = 0; i < 10; i++) {
+            int finalI = i;
+            new Thread(() -> myResource.read(String.valueOf(finalI)), String.valueOf(i)).start();
+        }
+
+    }
+}
+
+class MyResource {
+    Map<String, String> resource = new HashMap<>();
+
+    ReentrantReadWriteLock reentrantReadWriteLock = new ReentrantReadWriteLock();
+    ReentrantLock reentrantLock = new ReentrantLock();
+
+    public void write(String key, String value) {
+        // 使用ReentrantLock完成上锁操作
+        reentrantLock.lock();
+        try {
+            System.out.println(Thread.currentThread().getName() + "\t" + "正在写入");
+            resource.put(key, value);
+            TimeUnit.MILLISECONDS.sleep(500);
+            System.out.println(Thread.currentThread().getName() + "\t" + "完成写入");
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        } finally {
+            reentrantLock.unlock();
+        }
+    }
+
+    public void read(String key) {
+        reentrantLock.lock();
+        try {
+            System.out.println(Thread.currentThread().getName() + "\t" + "读取");
+            String result = resource.get(key);
+            TimeUnit.MILLISECONDS.sleep(200);
+            System.out.println(Thread.currentThread().getName() + "\t" + "完成写入" + "\t" + result);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        } finally {
+            reentrantLock.unlock();
+        }
+    }
+}
+/**
+ * 最终打印的结果如下
+ * 0	正在写入
+ * 0	完成写入
+ * 1	正在写入
+ * 1	完成写入
+ * 3	正在写入
+ * 3	完成写入
+ * 4	正在写入
+ * 4	完成写入
+ * 2	正在写入
+ * 2	完成写入
+ * 0	正在读取
+ * 0	完成读取	0
+ * 1	正在读取
+ * 1	完成读取	1
+ * 2	正在读取
+ * 2	完成读取	2
+ * 3	正在读取
+ * 3	完成读取	3
+ * 4	正在读取
+ * 4	完成读取	4
+ */
+```
+*提示:注意代码中lock和unlock使用的是ReentrantLock来实现的*  
+观察上述的打印结果可以发现,在写入的时候确实不允许读取,并且写写之间也是互斥的,正在写入与完成写入两个打印语句是成双出现的,但是读取的时候也是,正在读取与完成读取也是成双出现的,这是因为ReentrantLock无法完成读读共享的原因  
+
+3.使用ReentrantReadWriteLock进行改写  
+只需要将上述加锁部分的代码改成对应读锁或写锁的lock与unlock操作  
+```java
+public class ReentrantReadWriteLockDemo {
+
+    public static void main(String[] args) {
+        MyResource myResource = new MyResource();
+        for (int i = 0; i < 5; i++) {
+            int finalI = i;
+            new Thread(() -> myResource.write(String.valueOf(finalI), String.valueOf(finalI)), String.valueOf(i)).start();
+        }
+        for (int i = 0; i < 5; i++) {
+            int finalI = i;
+            new Thread(() -> myResource.read(String.valueOf(finalI)), String.valueOf(i)).start();
+        }
+        // 在读操作还没有完成之前又来了三个写锁线程
+        for (int i = 0; i < 3; i++) {
+            int finalI = i;
+            new Thread(() -> myResource.write(String.valueOf(finalI), String.valueOf(finalI)), String.valueOf(i)).start();
+        }
+    }
+}
+
+class MyResource {
+    Map<String, String> resource = new HashMap<>();
+
+    ReentrantReadWriteLock reentrantReadWriteLock = new ReentrantReadWriteLock();
+    ReentrantLock reentrantLock = new ReentrantLock();
+
+    public void write(String key, String value) {
+        reentrantReadWriteLock.writeLock().lock();
+        try {
+            System.out.println(Thread.currentThread().getName() + "\t" + "正在写入");
+            resource.put(key, value);
+            TimeUnit.MILLISECONDS.sleep(500);
+            System.out.println(Thread.currentThread().getName() + "\t" + "完成写入");
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        } finally {
+            reentrantReadWriteLock.writeLock().unlock();
+        }
+    }
+
+    public void read(String key) {
+        reentrantReadWriteLock.readLock().lock();
+        try {
+            System.out.println(Thread.currentThread().getName() + "\t" + "正在读取");
+            String result = resource.get(key);
+            // 故意让读取的时间变长
+            TimeUnit.MILLISECONDS.sleep(2000);
+            System.out.println(Thread.currentThread().getName() + "\t" + "完成读取" + "\t" + result);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        } finally {
+            reentrantReadWriteLock.readLock().unlock();
+        }
+    }
+}
+/**
+ * 打印的结果如下
+ * 0	正在写入
+ * 0	完成写入
+ * 4	正在写入
+ * 4	完成写入
+ * 2	正在写入
+ * 2	完成写入
+ * 1	正在写入
+ * 1	完成写入
+ * 3	正在写入
+ * 3	完成写入
+ * 0	正在读取
+ * 1	正在读取
+ * 2	正在读取
+ * 3	正在读取
+ * 4	正在读取
+ * 0	完成读取	0
+ * 3	完成读取	3
+ * 2	完成读取	2
+ * 1	完成读取	1
+ * 4	完成读取	4
+ * 1	正在写入
+ * 1	完成写入
+ * 2	正在写入
+ * 2	完成写入
+ * 0	正在写入
+ * 0	完成写入
+ */
+```
+观察上述的打印发现,读取之间是可以共享的了,不一定要等到上一个线程读取完毕之后下一个线程才可以进入读取,即读读共享  
+并且在读取期间无法进行写操作  
+
+### 12.3 ReentrantReadWriteLock锁降级  
+1.什么是锁降级  
+如果一个线程持有了写锁,在没有释放写锁的情况下,它还可以继续获取读锁,<font color="#00FF00">若在不释放读锁的情况下释放写锁,那么写锁就降级为了读锁</font>;锁降级是针对写锁而言的,但是锁升级是不允许的,即从读锁升级为写锁是不被允许的  
+
+2.读锁无法升级为写锁  
+```java
+public static void main(String[] args) {
+    ReentrantReadWriteLock reentrantReadWriteLock = new ReentrantReadWriteLock();
+    ReentrantReadWriteLock.ReadLock readLock = reentrantReadWriteLock.readLock();
+    ReentrantReadWriteLock.WriteLock writeLock = reentrantReadWriteLock.writeLock();
+
+    readLock.lock();
+    System.out.println("读取");
+    writeLock.lock();
+    System.out.println("写入");
+    writeLock.unlock();
+    readLock.unlock();
+}
+/**
+ * 输出结果,此时打印完读取后线程阻塞,程序卡主
+ */
+```
+<font color="#00FF00">读锁在lock时必须不能有读锁,否则读锁就会阻塞(铁律)</font>
+
+3.写锁降级为读锁  
+```java
+public static void main(String[] args) {
+    ReentrantReadWriteLock reentrantReadWriteLock = new ReentrantReadWriteLock();
+    ReentrantReadWriteLock.ReadLock readLock = reentrantReadWriteLock.readLock();
+    ReentrantReadWriteLock.WriteLock writeLock = reentrantReadWriteLock.writeLock();
+    writeLock.lock();
+    System.out.println("写入");
+
+    readLock.lock();
+    System.out.println("读取");
+    writeLock.unlock();
+    readLock.unlock();
+}
+/**
+ * 输出结果
+ * 写入
+ * 读取
+ */
+```
+
+4.为什么要有锁降级  
+先看一段伪代码,这段代码表示CacheData内部封装了一个data数据,如果该数据没有被写入过则可以被写入,在写入的过程中不释放写锁直接申请读锁,此时发生锁降级,这样做的目的是防止数据不一致,也就是说若我要使用刚写完的数据完成后续操作(写后读操作)时不要释放写锁再获取读锁,而是保持写锁不释放,因为一旦释放了写锁此时就有可能有别的线程获取读锁并修改数据,导致之前写完的数据data已经不是最新数据了,此时若不重新获取data数据就会发生数据错乱  
+```java
+class CacheData<T> {
+    boolean cacheValid = false;
+    T data;
+    ReentrantReadWriteLock rwl = new ReentrantReadWriteLock();
+    void processCacheData(){
+        // 加读锁保证cacheValid变量的原子性
+        rwl.readLock().lock();
+        // 若没有添加过缓存
+        if(!cacheValid){
+            rwl.readLock().unlock();
+            // 加写锁
+            rwl.writeLock().lock();
+            try{
+                // 再次判断双检加锁
+                if(!cacheValid){
+                    // 更改data值
+                    data = xxx
+                    // 环境已设置
+                    cacheValid = true;
+                }
+                // 降级为读锁
+                rwl.readLock().lock();
+            }finally{
+                rwl.writeLock().unlock();
+            }
+        }
+        try{
+            use(data);
+        }finally{
+            rwl.readLock().unlock();
+        }
+    }
+}
+```
+
+
+
+### 12.4 StampedLock  
+1.介绍  
+StampedLock相较于ReentrantReadWriteLock的改进之处在于,<font color="#00FF00">StampedLock在读取的过程中也允许写锁加入(但是写写还是冲突的)</font>,即线程获取写锁时不会被阻塞,但是这样会导致读取的数据可能存在不一致情况,所以就需要额外的方法来判断<font color="#FF00FF">读的过程中是否有数据写入,这是一种乐观的读锁</font>  
+显然乐观锁的并发效率更高,但一旦有小概率的写入导致读取的数据不一致,需要能检测出来,再读一遍即可  
+锁内部封装了一个`stamp`变量(long类型)代表了锁的状态,当stamp返回零时,表示线程获取锁失败,并且在加锁或解锁的时候都必须传入最初获取的stamp值  
+
+2.特点介绍  
+* 所有获取锁的方法,都会返回一个<font color="#00FF00">邮戳(Stamp)</font>,Stamp为0表示获取失败,其余情况全部表示获取成功
+* 所有释放锁的方法,都需要申请锁时获得的<font color="#00FF00">邮戳(Stamp)</font>
+* StampedLock是不可重入锁,危险(如果一个线程已经持有了写锁,再去获取写锁的话会造成阻塞)
+
+3.访问模式  
+StampedLock有三种方式模式  
+* Reading(读模式悲观):功能和ReentrantReadWriteLock的读锁类似
+* Writing(写模式):功能和ReentrantReadWriteLock的写锁类似
+* Optimistic reading(乐观读模式):无锁机制,类似与数据库的乐观锁,支持读写并发,很乐观认为读取时没人修改,假如被修改则锁在升级为悲观读模式
+
+4.StampedLock-传统读写互斥代码演示  
+本示例代码和传统的ReentrantReadWriteLock效果一致,都是读写互斥,StampedLock本身完成可以当做读写锁来使用  
+```java
+public class StampedLockDemo {
+
+    static int number = 10;
+    static StampedLock stampedLock = new StampedLock();
+
+    public void write() {
+        long stamp = stampedLock.writeLock();
+        System.out.println(Thread.currentThread().getName() + "\t" + "写线程准备修改");
+        try {
+            number += 1;
+        } finally {
+            stampedLock.unlockWrite(stamp);
+        }
+        System.out.println(Thread.currentThread().getName() + "\t" + "写线程修改结束");
+    }
+
+    public void read() {
+        long stamp = stampedLock.readLock();
+        System.out.println(Thread.currentThread().getName() + "\t" + "准备读取");
+        for (int i = 0; i < 4; i++) {
+            try { TimeUnit.SECONDS.sleep(1); } catch (InterruptedException e) { throw new RuntimeException(e); }
+            System.out.println(Thread.currentThread().getName() + "\t" + "正在读取中");
+        }
+        try {
+            int result = number;
+            System.out.println(Thread.currentThread().getName() + "\t" + "获得结果 " + result);
+        }finally {
+            stampedLock.unlockRead(stamp);
+        }
+    }
+
+    public static void main(String[] args) throws InterruptedException {
+        StampedLockDemo resource = new StampedLockDemo();
+        // 读线程
+        new Thread(resource::read,"readThread").start();
+        TimeUnit.SECONDS.sleep(1);
+        new Thread(() -> {
+            System.out.println(Thread.currentThread().getName() + "\t" + "尝试写入");
+            resource.write();
+        }, "writeThread").start();
+    }
+
+}
+/**
+ * 打印结果如下,可以发现写线程无法获取锁
+ * readThread	准备读取
+ * writeThread	尝试写入
+ * readThread	正在读取中
+ * readThread	正在读取中
+ * readThread	正在读取中
+ * readThread	正在读取中
+ * readThread	获得结果 10
+ * writeThread	写线程准备修改
+ * writeThread	写线程修改结束
+ */
+```
+
+5.StampedLock-读写不互斥代码演示  
+```java
+public class StampedLockDemo {
+
+    static int number = 10;
+    static StampedLock stampedLock = new StampedLock();
+
+    public void write() {
+        long stamp = stampedLock.writeLock();
+        System.out.println(Thread.currentThread().getName() + "\t" + "写线程准备修改");
+        try {
+            number += 10;
+        } finally {
+            stampedLock.unlockWrite(stamp);
+        }
+        System.out.println(Thread.currentThread().getName() + "\t" + "写线程修改结束 "  + number);
+    }
+    
+    public void tryOptimisticRead() {
+        // 乐观读锁是没有释放锁的这个操作的
+        long stamp = stampedLock.tryOptimisticRead();
+        int result = number;
+        System.out.println(Thread.currentThread().getName() + "\t" + "读线程进入验证数据,true无修改,false有修改" + "\t" + stampedLock.validate(stamp));
+        for (int i = 0; i < 4; i++) {
+            try { TimeUnit.SECONDS.sleep(1); } catch (InterruptedException e) { throw new RuntimeException(e); }
+            System.out.println(Thread.currentThread().getName() + "\t" + "使用读取到的数据进行业务逻辑处理中....");
+        }
+        if (!stampedLock.validate(stamp)) {
+            System.out.println(Thread.currentThread().getName() + "\t" + "数据被修改了,执行业务回滚逻辑!!!");
+            // 悲观读锁
+            long readStamp = stampedLock.readLock();
+            try {
+                result = number;
+                System.out.println(Thread.currentThread().getName() + "\t" + "从乐观读升级为悲观读后的数据为 " + result);
+            } finally {
+                stampedLock.unlockRead(readStamp);
+            }
+        } else {
+            System.out.println(Thread.currentThread().getName() + "\t" + "数据被修改了,执行业务commit操作!!!");
+        }
+    }
+
+    public static void main(String[] args) throws InterruptedException {
+        StampedLockDemo resource = new StampedLockDemo();
+        // 读线程
+        new Thread(resource::tryOptimisticRead, "readThread").start();
+        // 如果这里写线程6秒后启动,则乐观读将会成功,业务不会回滚
+        TimeUnit.SECONDS.sleep(1);
+        new Thread(() -> {
+            System.out.println(Thread.currentThread().getName() + "\t" + "尝试写入");
+            resource.write();
+        }, "writeThread").start();
+    }
+
+}
+/**
+ * 打印结果如下,发现读线程在已经处理的期间,写锁可以正常获取
+ * 只不过最后在验证的时候发现数据已经被修改,此时应当执行回滚操作
+ * 并将乐观读锁升级为悲观读锁,重新读取数据进行处理
+ * readThread	读线程进入验证数据,true无修改,false有修改	true
+ * readThread	使用读取到的数据进行业务逻辑处理中....
+ * writeThread	尝试写入
+ * writeThread	写线程准备修改
+ * writeThread	写线程修改结束 20
+ * readThread	使用读取到的数据进行业务逻辑处理中....
+ * readThread	使用读取到的数据进行业务逻辑处理中....
+ * readThread	使用读取到的数据进行业务逻辑处理中....
+ * readThread	数据被修改了,执行业务回滚逻辑!!!
+ * readThread	从乐观读升级为悲观读后的数据为 20
+ */
+```
+
+6.<font color="#FF00FF">StampedLock的缺点</font>  
+* StampedLock不支持重入
+* StampedLock的悲观读锁和写锁都不支持条件变量(Condition)
+* 使用StampedLock一定不要使用线程中断操作,不要调用`interrupt`方法  
 
 
 
