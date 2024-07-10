@@ -375,6 +375,12 @@ Found 1 deadlock.
 
 除了使用上面这两个命令之外还可以使用`jconsole`图形化工具,直接在控制台输入`jconsole`打开图形化界面,连接对应的Java程序,在顶部栏(概览、内存、线程、类xxx)中选择线程界面,点击检测死锁便会显示出当前监控的进程的死锁情况  
 
+3.死锁产生的条件  
+*可以从操作系统的层面说明死锁产生的四个必要条件*  
+* 互斥条件:进程对所分配到的资源进行排他性使用,即在一段时间内,某资源只能被一个进程占用.如果此时还有其他进程请求该资源,则请求进程只能等待,死锁就不会发生.  
+* 请求和保持条件:进程已经占有了至少一个资源,但又提出了新的资源请求,而该被请求的资源以被其它进程占有,此时请求进程被阻塞,同时其对自已的资源保持不放.  
+* 不可抢占条件:进程已获得的资源在未使用完之前不能抢占,只能在进程使用完时由其自已释放.  
+* 循环等待条件:该条件指发生死锁时,必然存在一个"进程-资源"循环链,即进程集合{P0、P1、P2...Pn}中的P0正在等待已被P1占用的资源,P1正在等待已被P2占用的资源,......,Pn正在等待以被P0占用的资源
 
 ### 2.7 自旋锁  
 *提示:本节与第6章CAS有很多关联知识点*  
@@ -3653,13 +3659,16 @@ B.线程基础知识
 
 ## A.Java并发编程实战
 **目录:**  
-1.各种demo  
+1.synchronized原语  
+2.synchronized与this  
+3.synchronized与静态方法  
 
 
 
 
-### 1.各种demo
-`demo1:`  
+
+
+### 1.synchronized原语
 ```java
 public class Demo1 {
     private int count;
@@ -3675,11 +3684,9 @@ public class Demo1 {
 ```
 
 **解释:**  
-当第一个线程访问m方法时,通过synchronized关键字会对<font color="#00FF00">堆内存中的Object对象</font>,加上一把锁(锁信息记录在堆内存的对象中,如果此时object指向别的对象,那么锁的对象就改变了(你想想如果原先的对象不再被引用就会被回收,新的对象再被加锁,所以锁所在的对象也就改变了)),然后进行方法的访问,此时正好运行到count++;语句结束时  
-第二个线程需要调用该方法,synchronized需要再次对堆内存中的Object对象加锁,但是此时由于第一个线程还在对该方法的访问中(没有释放锁)所以第二个线程就会进行等待,直到第一个线程释放锁,第二个线程才有资格加锁访问方法,如果有第三个线程也是一样的.  
-只要一个线程在访问加锁,别的线程不能访问的就称之为<font color="#00FF00">互斥锁</font>  
+当第一个线程访问m方法时,通过synchronized关键字会对<font color="#00FF00">堆内存中的Object对象</font>,加上一把锁(锁信息记录在堆内存的对象头中),然后进行方法的访问,此时正好运行到count++;语句结束时,第二个线程需要调用该方法,synchronized需要再次对堆内存中的Object对象加锁,但是此时由于第一个线程还在对该方法的访问中(没有释放锁)所以第二个线程就会进行等待,直到第一个线程释放锁,第二个线程才有资格加锁访问方法,如果有第三个线程也是一样的.只要一个线程在访问加锁,别的线程不能访问的就称之为<font color="#00FF00">互斥锁</font>  
 
-`demo2:`  
+### 2.synchronized与this  
 ```java
 public class Demo2 {
     private int count = 100;
@@ -3705,7 +3712,7 @@ public class Demo2 {
 }
 ```
 
-`demo3:`  
+### 3.synchronized与静态方法  
 ```java
 public class Demo4 {
     private static int count = 100;
@@ -3718,9 +3725,9 @@ public class Demo4 {
 }
 ```
 之前说的锁都是锁住<font color="#00FF00">堆内存当中的对象</font>,但是一个类的静态方法是不需要new就可以访问的,所以你就没有办法在堆内存中给这个对象加上锁了.  
-不过你可以通过 **对象.class** 来锁住一个Class对象,也能起到同样的效果.(对象.class本质也是一个存放在堆内存中的对象,所以synchronized锁住的还是一个对象)  
+不过你可以通过<font color="#00FF00">对象.class</font>来锁住一个Class对象,也能起到同样的效果(对象.class本质上也是一个存放在堆内存中的对象,<font color="#FF00FF">即类的Class对象</font>,所以synchronized锁住的还是一个对象)  
 
-`demo4:`模拟多线程访问同一个对象的run方法  
+### 4.缓存一致性问题  
 ```java
 public class Demo5 implements Runnable{
     private int count = 10;
@@ -3750,7 +3757,7 @@ public class Demo5 implements Runnable{
 *每次执行的结果都可能不一样*
 
 **分析:**  
-主要是因为运算方法和打印方法分开执行(或者说是两个方法被执行的时间不确定)  
+主要是因为运算方法和打印方法分开执行(或者说是两个方法被执行的时间不确定,即非原子操作)  
 分析86679产生的原因:  
 一共五个线程,当第一个线程进入方法运行到count--时,此时值变成9,但是由于执行打印方法不够快(没有无间隙执行打印命令),导致第二个线程进来了并且执行count--,此时值变成8,此时第一个线程(也有可能是第二个线程)执行打印语句,但此时值已经变成8,输出就是8.  
 一个线程的执行过程中(方法没有完全执行完毕就算执行过程)被另外一个线程打断了,就称之为线程重路.  
@@ -3779,11 +3786,11 @@ public class Demo5 implements Runnable{
 ```
 **此时输出的结果一定是98765**  
 
-`demo5:`  
+### 5.synchronized和非synchronized方法  
 **结论:**  
 在同一个类,在一个synchronized的方法执行中,非synchronized方法也是可以执行的.因为非synchronized没被锁.  
 
-`demo6:`脏读问题  
+### 6.脏读问题
 ```java
 public class Account {
     String name;
@@ -3804,7 +3811,8 @@ public class Account {
 
     public static void main(String[] args) {
         Account account = new Account();
-        new Thread(()->account.set("张三",100)).start();	//创建一个线程,并设置属性
+        new Thread(()->account.set("张三",100)).start();	
+        //创建一个线程,并设置属性
         System.out.println(account.getSalary("张三"));
 
         try {
@@ -3827,7 +3835,7 @@ public class Account {
 由于写和读是两个线程操控的,当我代码执行到this.name=name;的时候就有可能被另外一个线程打断,去执行读的方法,显然此时写数据还没写完就会读到0.这个0可以理解为读到了还没有提交的数据(过时的数据),也就是脏读.  
 但这不绝对,这主要取决你你的业务逻辑,如果你的业务就是支持脏读的,你不需要对读方法加锁(同时也会增加性能).哪个方法加锁哪个不加锁完全也是根据你的业务逻辑来的,所以你要考虑清楚.  
 
-`demo7:`锁的可重入  
+### 7.锁的可重入 
 ```java
 public class Demo7 {
     public synchronized void m1() {
@@ -3843,23 +3851,21 @@ public class Demo7 {
         new Demo6().m1();
     }
 }
+/**
+ * 执行结果
+ * m1
+ * m2
+ */
 ```
 **代码说明:**  
 在同一个线程当中(一定是同一个线程),m1和m2方法都锁住同一个对象.并且m1方法在执行的过程中调用了m2方法.  
 
-**结果:**  
-```shell
-m1
-m2
-```
-
 **原因分析:**  
-当运行m1方法时,会给当前对象加上一把锁,然后m1方法体又去执行了m2方法,但是m2又需要当前对象的锁.貌似不太合适  
-但是由于在同一个线程当中如果后面的方法要加的锁是当前锁的对象,那么就没有问题.  
-注意一定是同一个线程.这种情况称之为锁的<font color="#00FF00">可重入</font>.  
+当运行m1方法时,会给当前对象加上一把锁,然后m1方法体又去执行了m2方法,但是m2又需要当前对象的锁,所以当同一个线程当中如果后面的方法要加的锁是当前锁的对象,那么就没有问题.注意一定是同一个线程;这种情况称之为锁的<font color="#00FF00">可重入</font>
+<font color="#00FF00">JVM在执行时判断当前线程要申请的锁对象的对象头中的ObjectMonitor指向的线程是不是当前线程,如果是则锁的可重入执行MonitroEnter</font>  
 
-`demo8:`死锁  
-**产生原因:**  
+### 8.死锁  
+8.1 产生原因  
 *可以从操作系统的层面说明死锁产生的四个必要条件*  
 * 互斥条件:进程对所分配到的资源进行排他性使用,即在一段时间内,某资源只能被一个进程占用.如果此时还有其他进程请求该资源,则请求进程只能等待,死锁就不会发生.  
 * 请求和保持条件:进程已经占有了至少一个资源,但又提出了新的资源请求,而该被请求的资源以被其它进程占有,此时请求进程被阻塞,同时其对自已的资源保持不放.  
@@ -3914,7 +3920,7 @@ public class Demo8 {
 }
 ```
 
-`demo9:`通过父类实现锁可重入  
+### 9.synchronized与父类  
 ```java
 public class Demo9 {
     public synchronized void m(){
@@ -3932,22 +3938,22 @@ class Deom8Children extends Demo9 {
         super.m();
     }
 }
-```
-
-**打印结果:**  
-```
-children
-father
+/**
+ * 输出结果
+ * children
+ * father
+ */
 ```
 
 **原因:**  
-还是同一个线程中的原因.注意这里锁定的是同一个对象  
+还是同一个线程中的原因;注意这里锁定的是同一个对象,<font color="#00FF00">线程是否能取得锁只看<font color="#FF00FF">锁对象</font>是否已被其他线程占有</font>  
 
-`demo10:`  
-**知识点:**  
-程序在执行过程中,如果出现异常,默认情况锁会被释放  
+### 10.synchronized与异常  
+10.1 知识点
+程序在执行过程中,<font color="#00FF00">如果出现异常,默认情况锁会被释放</font>,关于这一点还可以参考JVM层面的字节码指令,在释放锁时有两个monitorexit指令,详情见2.3 对象锁和类锁->4.synchronize底层字节码  
 所以在并发处理的过程中,有异常要多加小心,不然可能会发生不一致的情况  
 
+10.2 代码演示  
 ```java
 public class Demo9 {
     public synchronized void t1() {
@@ -3981,25 +3987,25 @@ public class Demo9 {
         new Thread(()->demo9.t2()).start();		//一旦t1抛出异常,t2立即获得该锁
     }
 }
+/**
+ * 输出结果
+ * tOne0
+ * tOne1
+ * tOne2
+ * tOne3
+ * tOne4
+ * t2start
+ */
 ```
 
 **代码说明:**  
 此时如果有一份资源,被多个线程访问,如果获得那把锁的线程(第一个线程)数据处理到一半时发生了异常,如果不处理异常(使用异常抛出),直接释放锁.那么紧接着获得这把锁的线程访问到的数据将是你处理到一半的错误数据.  
 
-**打印结果:**  
-```shell
-tOne0
-tOne1
-tOne2
-tOne3
-tOne4
-t2start
-```
-
-`demo11`:volatile关键字  
-**作用:**  
+### 11.volatile关键词的使用  
+10.1 关键字介绍  
 volatile关键字使一个变量在多个线程间可见  
 
+10.2 缓存一致性问题  
 ```java
 public class Demo11 {
     private boolean running = true;
@@ -4022,9 +4028,9 @@ public class Demo11 {
     }
 }
 ```
+10.3 解决方案
+<font color="#00FF00">加上volatile关键字</font>加上这个关键字并不代表,线程每次运行都会去读取主内存中的内容,而是当被加关键字的属性发生改变时,会通知所有的线程数据(缓冲区数据)已经过期,需要重新读取.  
 
-**解决办法:** 加上volatile关键字  
-加上这个关键字并不代表,线程每次运行都会去读取主内存中的内容,而是当被加关键字的属性发生改变时,会通知所有的线程数据(缓冲区数据)已经过期,需要重新读取.  
 ```java
 public class Demo11 {
     private volatile boolean running = true;		//加上关键字
@@ -4050,11 +4056,14 @@ public class Demo11 {
 *注意:*  
 如果这里的死循环不是一个空循环,而是中间存在一些语句,那么就不会出现上面所说的那种情况(设置false无效).  
 *原因:*  
-如果你的循环里面有一些sleep语句打印语句之类的,可能执行的时候会使CPU空出时间,从而CPU回去读取主内存的数据.(很模糊,原因比较复杂)  
+如果你的循环里面有一些sleep语句打印语句之类的,可能执行的时候会使CPU空出时间,从而CPU会去读取主内存的数据.(很模糊,原因比较复杂)  
 *另外:*  
 如果这个方法加上了线程同步synchronized也不会出现这样的问题.但是使用volatile的效率要比synchronized高很多.但是volatile不能代替synchronized,因为volatile只有可见性,而synchronized既有可见性又有原子性.  
 
-`demo12:`  
+*提示:本节可以参考的地方就太多了:)*  
+
+### 12.volatile不保证写可见  
+12.1 代码演示
 ```java
 public class Demo12 {
     volatile int count = 0;
@@ -4073,7 +4082,9 @@ public class Demo12 {
         list.forEach((t)->t.start());//遍历容器启动线程
         list.forEach((t)-> {
             try {
-                t.join();//保证当前的每个线程执行完毕后才执行下一线程
+                // 保证当前的每个线程执行完毕后才执行下一线程
+                // join方法的本意是同步等待当前线程执行完毕
+                t.join();
             } catch (InterruptedException e) {
                 e.printStackTrace();
             }
@@ -4087,23 +4098,24 @@ public class Demo12 {
     }
 }
 ```
+12.2 输出结果
 理想的打印情况:10000  
 实际的打印情况:小于10000  
 
-**原因:**  
+12.3 原因解释
 主要还是因为volatile虽然读可见,但是写不可见.  
 当第一个线程从主内存中读取到数据为100,放到缓冲区进行自增为101,但还没有写给主内存的时候.第二个线程从主内存读取数据也为100,同样放到缓冲区进行自增为101,并提交数据给主内存,此时主内存count为101.第二个线程提交结束后第一个线程紧接着提交数据也为101.此时虽然是增加了两次数据但写出的时候是以覆盖的形式写出的.  
 
-**volatile和synchronized的区别:**  
+12.4 volatile和synchronized的区别  
 * volatile:效率较高,只保证可见性.
+  <font color="#00FF00">如果只需要保证可见性的时候使用volatile</font>
 * synchronized:效率较低,保证可见性和原子性.  
 
-如果只需要保证可见性的时候使用volatile.
-
-**解决方法:**  
+12.5 解决方案  
 为m方法增加synchronized,删除volatile(没必要在存在了)  
 
-`demo13:`
+### 13.AtomicInteger的相关使用  
+*提示:关于原子类的相关知识可以参考7.原子操作类这一章*  
 如果你只是进行一些++这种简单的运算,可以使用Atomic家族类(不同的类型类名不同)  
 ```java
 public class Demo13 {
@@ -4133,7 +4145,7 @@ public class Demo13 {
 }
 ```
 **特性:**  
-Atomic家族类的方法都是具有原子性的,但用的不是synchronized而是非常底层的东西,所以效率比较高.  
+Atomic家族类的方法都是具有原子性的,但用的不是synchronized而是CAS操作,所以效率比较高.  
 
 **问题:**  
 但是Atomic类的多个方法之间并不构成原子性  
@@ -4169,7 +4181,9 @@ public class Demo13 {
 有点类似之前的情况,方法1和方法2之间不是顺序执行的.  
 第一个线程执行到1步骤时,增加到了101,还没有执行步骤2时.线程2进来了将数据增加到102后,并运行步骤2设置值为102.此时线程一继续执行步骤2将值设置为101.  
 
-`demo14:`关于synchronized优化问题  
+
+
+### 14.synchronized的粒度  
 **结论:**  
 同步代码块中的语句越少越好
 
@@ -4196,7 +4210,7 @@ m1的锁将整个方法全部锁定
 m2只在业务逻辑里面增加了同步锁,所以m2的效率比m1要高.  
 细力度的锁  
 
-`demo15:`永远不要锁一个字符串对象  
+### 15.synchronized与字符串  
 ```java
 public class Demo14 {
     String s1 = "String";
@@ -4215,12 +4229,13 @@ public class Demo14 {
 ```
 你以为m1和m2方法锁定的是两个不同的对象,但实际上s1和s2锁定的是同一个对象.  
 原因:分析jvm内存  
-栈内存中的s1和s2指向堆内存中的两个对象,因为是字符串常量,所以堆内存中的两个对象又指向堆中的字符串常量池(又因为内容相同,所以指向同一个字符串常量),所以这两个是同一个对象.
+栈内存中的s1和s2指向堆内存中的两个对象,因为是字符串常量,所以堆内存中的两个对象又指向堆中的字符串常量池(又因为内容相同,所以指向同一个字符串常量),所以这两个是同一个对象.  
 
-`demo16:`曾经淘宝面试题  
+### 16.notify与wait  
+16.1 问题场景  
 有一个容器,A线程负责给容器添加10个元素.B线程负责监视这个容器直到容器大小为5的时候打印一个通知.  
 
-写法一:  
+16.2 方法1
 ```java
 public class Demo15 {
     volatile List list = new ArrayList<>();
@@ -4256,14 +4271,13 @@ public class Demo15 {
 
 **思路:**  
 使用wait和notify以及notifyAll  
-wait和notify的用法:javaSE中有讲到过  
-这两个方法只能是被锁定对象去调用.  
-wait:当一个线程的方法获已经得到锁,但是条件没有满足无法执行语句的时候,调用被锁的对象的wait方法,可以暂停该线程,并释放锁.  
-notify:调用一个被锁住对象的notify方法,会唤醒正在这个对象上等待的某一个线程.继续执行调用wait方法后面的代码,不是重新进方法.  
-但是nofity方法不会释放锁,而且被唤醒的线程需要重新获得锁.  
-notifyAll:和notify类似,只不过会唤醒这个对象的所有线程.  
+这两个方法只能是被锁定对象去调用,<font color="#00FF00">即由锁对象本身去调用,在Java中每个对象都有与之对应的ObjectMonitor</font>  
+* wait:当一个线程的方法获已经得到锁,但是条件没有满足无法执行语句的时候,调用锁对象的wait方法,可以让当前线程释放锁并暂停线程,<font color="#FF00FF">wait本意是释放锁而不是暂停线程,因果关系不能导致</font>,是因为释放锁了才导致线程无权执行临界区的代码  
+* notify:调用一个被锁住对象的notify方法,会唤醒正在这个对象上等待的某一个线程.继续执行调用wait方法后面的代码,不是重新进方法.  
+  <font color="#00FF00">但是调用nofity方法的线程不会不会释放对象锁,<font color="#FF00FF">被唤醒的线程需要重新获得锁</font>(只是被唤醒的线程wait语句失效了)</font>  
+* notifyAll:和notify类似,只不过会唤醒等待这个锁对象的所有线程(这些线程依旧要重新抢锁)  
 
-写法二:  
+16.3 写法2
 ```java
 public class Demo15 {
     volatile List list = new ArrayList<>();
@@ -4318,7 +4332,7 @@ public class Demo15 {
 **问题:**  
 还是需要while(true),而且当线程一结束之后,线程二就会wait造成算法无法结束.
 
-写法三:  
+16.4 写法3  
 ```java
 public class Demo16 {
     volatile List list = new ArrayList<>();
@@ -4373,7 +4387,7 @@ public class Demo16 {
 **原因:**  
 当数量达到5的时候,线程一虽然被唤醒了,但是需要重新获得这把锁.由于notify方法不会释放锁,所以需要等待线程二方法执行完毕线程一才可以获得锁.
 
-写法四:  
+16.5 写法4  
 ```java
 public class Demo16 {
     volatile List list = new ArrayList<>();
@@ -4428,9 +4442,9 @@ public class Demo16 {
 |:--------:|:---:|:---:|:---:|:---:|:---:|:-----:|:---:|:---:|:---:|:---:|:---:|
 
 **原因:**  
-正是因为notify不会释放锁,所以调用完notify在调用wait方法释放锁,所以这里wait不是用于暂停线程的,而是用于释放锁的.  
+正是因为notify不会释放锁,所以调用完notify在调用wait方法释放锁,所以这里wait不是用于暂停线程的,<font color="#00FF00">而是用于释放锁的</font>.  
 
-写法五:使用门栓  
+16.6 写法5  
 ```java
 public class Demo17 {
     volatile List list = new ArrayList<>();
@@ -4476,10 +4490,9 @@ public class Demo17 {
 **优点:**  
 效率高(没有同步快)  
 
-`demo17:`ReentrantLock  
+### 17.ReentrantLock初步使用  
 **介绍:**  
-ReentrantLock用于替代`synchronized`  
-ReentrantLock实现了<font color="#FF00FF">Lock</font>接口
+ReentrantLock用于替代`synchronized`;ReentrantLock实现了<font color="#FF00FF">Lock</font>接口  
 ```java
 public class Demo18 {
     Lock lock = new ReentrantLock();
@@ -4518,9 +4531,9 @@ public class Demo18 {
 }
 ```
 **注意:**  
-必须要手动释放锁,使用synchronized锁定如果遇到异常,jvm会自动释放,但是lock必须手动释放锁,因此经常在finally中进行锁的释放  
+必须要手动释放锁,使用synchronized锁定如果遇到异常,jvm会自动释放(两个monitorexit指令),但是lock必须手动释放锁,因此经常在finally中进行锁的释放  
 
-`demo18:`  
+### 18.ReentrantLock与tryLock  
 可以通过ReentrantLock的tryLock方法进行尝试性的加锁,这个方法会返回一个布尔值.你可以根据这个返回值来进行你想要的操作.比如返回值为false不可锁定我可能会执行别的方法而不是像synchronized那样只能干等着.  
 ```java
 public class Demo19 {
@@ -4550,7 +4563,7 @@ public class Demo19 {
             这是个阻塞方法,就是如果这么长时间还不能获得到这把锁就返回false,一旦可以锁定就返回true
             */
             locked = lock.tryLock(5, TimeUnit.SECONDS);			
-            System.out.println("m2方法是否可以锁定");
+            System.out.println("m2方法是否可以锁定 " + locked);
         } catch (InterruptedException e) {
             e.printStackTrace();
         }finally {
@@ -4575,7 +4588,7 @@ public class Demo19 {
 }
 ```
  
-`demo19:`  
+### 19.ReentrantLock与Interrupted  
 使用ReentrantLock还可以调用lockInterruptibly方法,可以对线程interrupt做出响应.
 ```java
 public class Demo19 {
@@ -4585,7 +4598,7 @@ public class Demo19 {
             lock.lock();
             System.out.println("线程1");
             try {
-                Thread.sleep(Integer.MAX_VALUE);		//谁很长时间
+                Thread.sleep(Integer.MAX_VALUE);		//睡很长时间
             } catch (InterruptedException e) {
                 e.printStackTrace();
             } finally {
@@ -4621,14 +4634,15 @@ public class Demo19 {
 线程1  
 线程2被打断  
 
-`demo20:`  
-ReentrantLock还可以指定公平锁.所谓的公平锁就是哪个线程等待的时间长,哪个线程就能的到这把锁.  
-synchronized是非公平锁:如果有多个线程需要访问同一个方法,当一个线程拿到锁之后别的线程就需要等待,当拿到锁的线程释放锁的时候,根据CPU的调度问题,你指不定是哪个线程能拿到那把锁.就算一个线程等了很长时间,一个线程等了很短的时间,但有可能拿到这把锁的是那个等了不短不长的那个线程.相比于公平锁,synchronized的效率要高因为不需要计算那个线程等待的时间长.  
-**公平锁:**  
+### 20.ReentrantLock与公平锁  
+20.1 概念介绍  
+ReentrantLock还可以指定公平锁,所谓的公平锁就是哪个线程等待的时间长,哪个线程就能的到这把锁(其实不是,是根据FIFO的队列顺序来决定的,详情见2.4 公平锁和非公平锁的内容,并且这里还涉及到AQS)  
+synchronized是非公平锁:如果有多个线程需要访问同一个方法,当一个线程拿到锁之后别的线程就需要等待,当拿到锁的线程释放锁的时候,根据CPU的调度问题,你指不定是哪个线程能拿到那把锁.就算一个线程等了很长时间,一个线程等了很短的时间,但有可能拿到这把锁的是那个等了不短不长的那个线程.相比于公平锁,synchronized的效率要高因为不需要计算那个线程等待的时间长.
+20.2 公平锁使用方式    
 `Lock lock = new ReentrantLock(true);`  
 //构造参数为true就代表公平锁,如果没有设置就是非公平锁.公平锁效率低于非公平锁.
 
-**非公平锁:**  
+20.3 非公平锁代码  
 ```java
 public class Demo20 {
     Lock lock = new ReentrantLock();
@@ -4652,15 +4666,17 @@ public class Demo20 {
 112111222211  
 总之就是没有规律,不知道给哪个线程锁
 
+20.4 公平锁执行结果  
 **公平锁:**  
 111 2121212121 222  
 给一下线程1给一下线程2.很公平前面的111是因为线程一执行的太快了  
 
-`demo21:`  
-**面试题:**  
+### 21.用wait、notify、notifyAll实现一个同步容器  
+21.1 面试题  
 写一个固定容量同步容器,拥有put和get方法,以及getCount方法.能够支持两个生产者线程以及10个消费者线程的阻塞调用.使用wait和notify/notifyAll  
 何为同步容器?如果你的容器满了那么put方法就必须等待,如果你的容器空了,那么get方法就必须等待.  
-写法一:使用wait和notify  
+
+21.2 使用wait和notify完成  
 ```java
 public class Demo21 {
     private LinkedList list = new LinkedList();
@@ -4726,9 +4742,8 @@ public class Demo21 {
 如果现在容器元素是10个,第一个生产者线程会调用wait方法释放锁,第二个生产者线程也会调用wait释放锁.此时消费者线程将10消费成9,并通过notifyAll同时唤醒了两个生产者线程.被唤醒的线程需要重新获得当前对象的锁(假定这里就是生产者的某一个获得了锁,而不是消费者获得锁),但你不知道这两个线程是哪个线程会得到锁,如果这里使用的是if,假如此时线程1得到锁,那么他会顺着wait后面的语句继续执行,添加一个元素并唤醒所有等待的线程(注意此时消费者没有线程wait只是得不到这把搜所以无法执行get的代码),线程一执行完毕会释放锁,如果下一次还是线程一得到这把锁,那么由于此时的size是10所以线程一会被wait,wait释放锁恰巧被生产者的线程二获得这把锁,由于线程是被唤醒的所以会执行wait后面的代码,此时添加一个元素size就变成了10.  
 如果使用while,主要的区别就是生产者线程二被唤醒之后且拿到这把锁之后的区别:wait释放锁恰巧被生产者的线程二获得这把锁(前面的和上面一样),虽然线程是被唤醒的,但是由于while语句的特性,上一次执行wait语句的时候说明while里面的判断条件是true,既然是true 执行wait后的代码就需要再循环一次,再循环一次的时候发现size已经变成10了,所以生产者线程二再次wait.  
 
-写法二:使用Lock和Condition  
+21.3 使用Lock和Condition完成  
 ```java
-
 public class Demo22 {
     private LinkedList list = new LinkedList();
     private final int MAX = 10;
@@ -4799,6 +4814,835 @@ public class Demo22 {
 在一个线程中是通过producer线程进行等待的  
 而在另外一个线程中是通过consumer进行唤醒的,所以唤醒的线程只有可能是producer线程.  
 *提示:signal联系操作系统信号量机制的知识点*  
+
+### 22.线程局部变量ThreadLocal  
+如果对一个变量添加了volatile关键字,那么这个变量在线程之间将是可见的.现在如果想要一个线程对一个变量的改变不让另一个线程得知就需要使用线程局部变量.  
+
+```java
+public class Demo23 {
+    static ThreadLocal<Person> threadLocal = new ThreadLocal();
+
+    public static void main(String[] args) {
+        new Thread(() -> {
+            System.out.println(threadLocal.get());
+        }).start();
+        new Thread(() -> {
+            threadLocal.set(new Person());
+        }).start();
+
+    }
+}
+
+class Person {
+    String name = "张三";
+}
+
+/**
+ * 打印结果如下
+ * null
+ */
+```
+
+<font color="#00FF00">意思也就是说线程二的变量在线程一当中无法使用</font>  
+
+### 23.不加锁实现线程安全的懒加载  
+```java
+public class Demo24 {
+
+    public static class Inner {
+        private static Demo24 demo24 = new Demo24();
+    }
+
+    public static Demo24 getDemo24() {
+        return Inner.demo24;
+    }
+
+    public static void main(String[] args) {
+        for (int i = 0; i < 10; i++) {
+            new Thread(() -> {
+                Demo24.getDemo24();
+            }).start();
+        }
+    }
+}
+/**
+ * 只有当调用getDemo24()这个方法,执行到return语句的时候才会初始化Inner这个类
+ * 实现懒加载.
+ */
+```
+
+### 24.买车票  
+24.1 问题
+有N张火车票,每张票都有一个编号,同时又10个售票站,用代码模拟出来不会产生并发问题.
+
+24.2 使用synchronized解决  
+```java
+public class Demo25 {
+    static  List<String> list = new ArrayList<>();
+
+    static {
+        for (int i = 1; i < 10001; i++) {
+            list.add("车票UID:" + i);
+        }
+    }
+
+    public synchronized void sell() {
+        while (list.size() > 0) {
+            System.out.println("售卖车票" + list.remove(0));
+        }
+    }
+
+    public static void main(String[] args) {
+        Demo25 demo25 = new Demo25();
+        for (int i = 0; i < 10; i++) {
+            new Thread(() -> {
+                demo25.sell();
+            }).start();
+        }
+    }
+}
+// 缺点:效率不高
+```
+
+24.3 使用并发容器ConcurrentLinkedDeque解决  
+```java
+public class Demo26 {
+    static Queue<String> queue = new ConcurrentLinkedDeque();		//并发容器
+
+    static {
+        for (int i = 1; i < 1001; i++) {
+            queue.add("车票UID:" + i);
+        }
+    }
+
+    public static void main(String[] args) {
+        for (int i = 0; i < 10; i++) {
+            new Thread(() -> {
+                while (true) {
+                    String poll = queue.poll();
+                    if (poll == null) break;
+                    else System.out.println("售卖车票" + poll);
+                }
+
+            }).start();
+        }
+    }
+}
+/**
+ * 使用并发容器的特点如下:
+ * poll()方法是一个并发的方法,这个方法会拿出容器的第一个元素,如果有内容就返回内
+ * 容,如果没有就返回null.当值为null的时候说明容器已经没有元素了,此时就可以结束线
+ * 程了.而且这个方法的底层没有使用synchronized,所以效率会比较高.
+ */
+```
+
+
+### 25.并发容器之Map  
+*注意:通过Collections.synchronizedXXX()可以将一个容器变为线程安全的.为一个不加锁的容器添加锁*  
+* Hashtable:线程安全,效率低,键和值都不可以为null,键可以被覆盖,用于并发性不高
+* HashMap:线程不安全,效率高.键可以有一个为null,值可以多个为null.键可以被覆盖.
+* TreeMap:树结构,会排好顺序,线程不安全
+* ConcurrentHashMap:并发容器,用于并发性特别高.
+* ConcurrentSkipListMap:调表Map,<font color="#00FF00">用于并发性特别高,并且需要排序的情况</font>
+
+25.1 在多线程的情况下,什么样的容器效率比较高  
+```java
+public class Demo27 {
+    public static void main(String[] args) {
+
+        Map map = new Map();				//关于实现类是不停变化的,因为要测试时间
+        Random random = new Random();
+        Thread[] thread = new Thread[100];		//一百个线程
+        CountDownLatch countDownLatch = new CountDownLatch(thread.length);	//100个锁
+        long start = System.currentTimeMillis();	//开始计时
+        for (int i = 0; i < thread.length; i++) {	//每个线程需要为自已的map容器添加元素.key:随机数,value:随机数
+            thread[i] = new Thread(()->{		
+                for (int j = 0; j < 10000; j++) {
+                    map.put(random.nextInt(100000),random.nextInt(100000));
+                }
+                countDownLatch.countDown();		//一个线程执行完毕之后,门栓减一
+            });
+        }
+
+        Arrays.asList(thread).forEach((t)->t.start());      //将数组转换为容器
+        try {
+            countDownLatch.await();		//当所有线程全部减完之后,主线程继续执行
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        long end = System.currentTimeMillis();
+        System.out.println(end-start);
+    }
+}
+/**
+ * 不同map的执行时间结果如下
+ * 相对时间:
+ * HashMap:219
+ * Hashtable:272
+ * ConcurrentHashMap:255
+ * ConcurrentSkipListMap:307
+ */
+```
+
+25.2 ConcurrentHashMap效率比Hashtable的原因  
+* Hashtable:锁住整个对象
+* ConcurrentHashMap:虽然也是并发容器,但是会默认把这个容器<font color="#00FF00">分成16段</font>,但每次往里面插入数据的时候只锁定这16段其中的一个数据;<font color="#FF00FF">细化锁</font>
+  如果很多线程同时想要插入数据,假定一个线程锁定第一段,另外一个线程锁定第三段,那么这两个线程就可以同时插入数据.
+  这种思路就很类似LongAdder类的思想,详情参考7.6 增强型原子类的相关知识
+
+### 26.并发容器之List(写时复制(写数据的时候复制))
+26.1 相关概念介绍
+多线程环境下,写的效率较低,读的效率较高.适合少写多度的环境.
+写入数据的时候,会将原容器复制一份,然后在这个新容器里面添加新元素,最后把指针指向这个心的容器,所以读的时候就不需要加锁了.  
+
+26.2 代码演示  
+```java
+public class Demo28 {
+    public static void main(String[] args) {
+        List list = new Vector();
+        Random random = new Random();
+        Thread[] threads = new Thread[100];
+        for (int i = 0; i < threads.length; i++) {
+            threads[i] = new Thread(() -> {
+                for (int j = 0; j < 1000; j++) {
+                    list.add(random.nextInt(10000));
+                }
+            });
+        }
+        run(threads);
+        System.out.println(list.size());
+    }
+
+    public static void run(Thread threads[]) {
+        long start = System.currentTimeMillis();
+        Arrays.asList(threads).forEach((t) -> t.start());
+        Arrays.asList(threads).forEach((t) -> {
+            try {
+                t.join();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        });
+        long end = System.currentTimeMillis();
+        System.out.println(end - start);
+    }
+
+}
+```
+
+26.3 效率排行   
+* ArraysList:并发会出问题,效率最高;打印结果不对,效率28
+* Vector:效率稍低,打印结果为10000.效率31
+* CopyOnWriteArrayList:效率4317
+
+### 27.并发容器之Queue(单向队列)
+27.1 基本介绍  
+单向队列,先进先出  
+
+27.2 常用api介绍  
+* `offer() retunrn boolean`为容器尾部添加一个元素,返回值用于判断添加方法是否执行成功,不会抛出异常
+* `offer(E,long,TimeUnit) return boolean` 尝试往容器中添加元素,并指定在规定的时间内返回结果
+  * args0:添加的元素
+  * args1:多长时间给出相应的返回结果
+  * args2:时间单位
+* `poll` 拿出容器的第一个元素并将该元素删除
+* `peek` 拿出容器的第一个元素,该方法会保留该元素
+
+27.3 层次结构  
+![层次结构](resources/JUC/26.png)  
+*注意:ConcurrentLinkedQueue是直接实现了Queue接口,而其它的实现类实现的时BlockingQueue子接口,为阻塞队列*  
+阻塞队列(BlockQueue)新增的方法:
+* `put`	为容器尾部添加一个元素,如果容器满了就会等待
+* `take` 获取并删除容器的第一个元素,如果空了就会等待
+
+27.4 实现类特征说明  
+* ConcurrentLinkedQueue:链结构,你可以一直往里面放元素,直到内存不够.
+* LinkedBlockingQueue:链结构,无界队列	
+* ArrayBlockingQueue:数组,有大小
+* DelayQueue:定时执行任务,每个元素都有一个等待时间	
+* LinkedTransferQueue:适用于更高的高并发,将数据直接丢给消费者,要想使用新增方法必须new子类,<font color="#00FF00">这个类实际上是BlockingQueue的子接口TransferQueue的实现类</font>
+* SynchronousQueue	同步队列,容量为0
+
+27.5 使用LinkedBlockingQueue实现生产者消费者模式  
+```java
+public class Demo30 {
+    static BlockingQueue<Integer> queue = new LinkedBlockingQueue();      //使用阻塞接口
+    public static void main(String[] args) {
+        new Thread(() -> {
+            for (int i = 0; i < 100; i++) {
+                try {
+                    queue.put(i);
+                    Thread.sleep(new Random().nextInt(1000));		//每生产一次之后让线程暂停一下
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+        }).start();
+
+        for (int i = 0; i < 5; i++) {
+            new Thread(() -> {
+                while (true) {		//不停的的尝试去获取
+                    try {
+                        System.out.println(Thread.currentThread().getName() + "---" + queue.take());
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+                }
+            }).start();
+        }
+
+    }
+}
+```
+
+27.6 使用ArrayBlockingQueue实现生产者消费者模式  
+```java
+public class Demo31 {
+    public static void main(String[] args) {
+        BlockingQueue<Integer> queue = new ArrayBlockingQueue(10);		//构造方法,传入数组大小
+        for (int i = 0; i < 11; i++) {
+            try {
+                queue.put(i);
+                System.out.println(i);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+}
+```
+
+27.7 DelayQueue使用简述  
+该容器的特点在于,被放入的每一个元素自已记载一个时间,自已还有多长时间可以被消费者取走,所以想要取出这个容器的元素,必须等待该元素可以被消费.  
+队列默认排好顺序,等待时间最短的排在最前面,等待时间最短的先往外拿.  
+从这里的介绍可以发现,这个类的思路跟`ScheduledThreadPoolExecutor`线程池有异曲同工之妙  
+DelayQueue实现类指定了泛型的上线,泛型E继承自Delay,所以该类的`put(E)`方法传入的对象必须是Delay的实现类,代码如下  
+```java
+public class Demo32 {
+    static BlockingQueue<MyTask> queue = new DelayQueue();
+
+    static class MyTask implements Delayed {
+
+        private long runTime;		//注意传入的runTime一定是比当前系统时间要长的时间
+
+        public MyTask(long runTime) {
+            this.runTime = runTime;
+        }
+
+        /**
+         * @param unit
+         * @return 还有多长时间可以取出当前元素
+         */
+        @Override
+        public long getDelay(TimeUnit unit) {
+            return unit.convert(runTime - System.currentTimeMillis(), TimeUnit.MILLISECONDS);
+        }
+
+        /**
+         * 比较器
+         *getDelay()方法:获取元素已经等待的时间
+         * @param o
+         * @return
+         */
+        @Override
+        public int compareTo(Delayed o) {
+            if (this.getDelay(TimeUnit.MILLISECONDS) < o.getDelay(TimeUnit.MILLISECONDS)) {
+                return -1;
+            } else if (this.getDelay(TimeUnit.MILLISECONDS) == o.getDelay(TimeUnit.MILLISECONDS)) {
+                return 0;
+            } else {
+                return 1;
+            }
+        }
+
+        @Override
+        public String toString() {
+            return "MyTask{" +
+                    "runTime=" + runTime +
+                    '}';
+        }
+    }
+
+    public static void main(String[] args) {
+        try {
+            long now = System.currentTimeMillis();
+            MyTask myTask1 = new MyTask(now + 1000);
+            MyTask myTask2 = new MyTask(now + 2000);
+            MyTask myTask3 = new MyTask(now + 1500);
+            MyTask myTask4 = new MyTask(now + 2500);
+            MyTask myTask5 = new MyTask(now + 500);
+            queue.put(myTask1);
+            queue.put(myTask2);
+            queue.put(myTask3);
+            queue.put(myTask4);
+            queue.put(myTask5);
+            System.out.println(queue);		//保留容器本身有序这个说法,容器的最后两个元素顺序好像颠倒了
+            for (int i = 0; i < 5; i++) {
+                System.out.println(queue.take());
+            }
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+
+    }
+}
+/**
+ * 执行结果如下
+ * 打印:
+ * MyTask{runTime=1562825640775}
+ * MyTask{runTime=1562825641275}
+ * MyTask{runTime=1562825641775}
+ * MyTask{runTime=1562825642275}
+ * MyTask{runTime=1562825642775}
+ * 结论:队列中需要线被执行的任务,会被优先执行.
+ */
+```
+
+27.7 LinkedTransferQueue使用简述  
+适用于更高的高并发,之前的容器都是通过生产者线程的offer/put往容器中添加数据,然后消费者通过take来获取数据,通过一个队列,但是这样的效率太低了,现在使用LinkedTransferQueue会判断是否有消费者,如果有消费者直接把数据传给消费者.  
+* `transfer()` 将数据直接丢给消费者,如果没有消费者,线程会阻塞
+
+```java
+public class Demo33 {
+    static LinkedTransferQueue<String> queue = new LinkedTransferQueue();
+
+    public static void main(String[] args) {
+        new Thread(() -> {
+            try {
+                System.out.println(queue.take());
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }).start();
+
+        try {
+            queue.transfer("aaa");
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+
+    }
+}
+/**
+ * 输出结果
+ * 可以正常得到结果,消费者线程拿不到数据会阻塞.此时一旦生产者生产了,那么直接给消
+ * 费者,消费者就能拿到数据了.
+ * 如果先开启生产者线程后开启消费者线程则程序会一直阻塞,因为transfer方法会阻塞到
+ * 有消费者线程拿到数据后才结束,如果main线程阻塞了,自然消费者线程都不会运行
+ * 自然也就没有消费者从队列中获取数据
+ */
+```
+27.8 SynchronousQueue使用简述  
+同步队列(特殊的LinkedTransferQueue),容量为0,也就是说这个队列无法存放数据,生产出来的数据必须马上消费掉,或者等待消费  
+```java
+public class Demo34 {
+    static BlockingQueue<String> queue = new SynchronousQueue();
+
+    public static void main(String[] args) {
+        new Thread(()->{
+            try {
+                System.out.println(queue.take());
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }).start();
+        //queue.add("aa");		如果调用add方法会立即报错
+	try {
+            queue.put("aaa");	//此时由于容量为0,也就是容器满了,容器放不下了.所以调用该方法就会被阻塞.等待消费者消费
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+    }
+}
+```
+
+### 28.并发容器之Deque(双端队列)  
+28.1 基本介绍  
+双端队列,既可以先进先出又可以先出后出.  
+
+28.2 常用api介绍  
+* `addFirst(E) return boolean` 在队首添加一个元素,返回值用于判断添加方法是否执行成功,不会抛出异常
+* `addLast(E) return boolean` 往队尾添加一个元素,特性类似addFirst方法
+* `peekFirst() return E` 查看队首元素,该方法不会删除队首元素,如果链表为空则返回null
+* `peekLast() return E` 查看队尾元素,该方法不会删除队尾元素,如果链表为空则返回null
+* `pollFirst() return E` 取出容器的队首元素,该方法会删除队首元素
+* `pollLast() return E` 取出容器的队尾元素,该方法会删除队尾元素
+
+* `getFirst() return E` 查看容器的队首元素,该方法不会删除队首元素,如果链表为空则会抛出异常,注意和peekFirst的区别
+* `getLast() return E` 查看容器的队尾元素,该方法不会删除队尾元素,如果连链表为null会抛出异常
+* `contains(Object o) return E` 判断容器中是否存在一个元素
+
+
+### 29.Executor(执行器)基本介绍  
+29.1 常用方法介绍   
+`execute(Runnable command)` 调用线程执行任务
+这个接口在java线程池中是一个顶层接口,这个接口有一个execute(Runnable command)抽象方法.这个方法是操作你传入的线程,是单纯的调用方法还是开辟一个线程,取决于你的实现.
+```java
+public class Demo35 implements Executor {
+    @Override
+    public void execute(Runnable command) {
+        command.run();				//这种实现就是单纯的调用传入线程的run方法.
+    }
+}
+```
+29.2 实现类介绍  
+`ThreadPerTaskExecutor` 传入一个线程(Runnable实现类),为该方法开辟一个线程
+
+### 30.ExecutorService(执行器服务)
+30.1 ExecutorService介绍
+执行器服务:一堆服务(各种Runnable实现类)扔在那,一堆执行器在等待,等待服务调用执行器执行,定义一个Runnable或者Callable调用执行器就被执行了;执行器服务顾名思义解释提供执行器功能的服务类  
+
+### 31.Callable  
+31.1 Callable基本介绍  
+Callable是类似于Runnable的接口,实现Callable接口的类和实现Runnable的类都是可被其他线程执行的任务.  
+Callable和Runnable有几点不同:
+* Cllable规定的方法是call(),而Runnable规定的方法是run().
+* call()方法可抛出异常,而run()方法是不能抛出异常的.
+* Callable的任务执行后可返回值(通过泛型指定)(这个返回值就是Futhre对象),运行Callable任务可拿到一个Future对象,而Runnable的任务是不能返回值的.
+
+31.2 Futhre基本介绍  
+Futhre表示异步计算的结果他提供了检查计算是否完成的方法,以等待计算的结果,并检索计算的结果.通过Futhre对象可了解任务执行情况,可取消任务的执行,还可获取执行的结果.  
+Future是Java 5添加的类,用来描述一个异步计算的结果.你可以使用isDone方法检查计算是否完成,或者使用get阻塞住调用线程,直到计算完成返回结果,你也可以使用cancel方法停止任务的执行.在Java 8中,CompletableFuture提供了非常强大的Future的扩展功能,可以帮助我们简化异步编程的复杂性,提供了函数式编程的能力,可以通过回调的方式处理计算结果,并且提供了转换和组合CompletableFuture的方法.CompletableFuture和FutureTask同属于Future接口的实现类,都可以获取线程的执行结果.
+
+### 32.Executors(工具类)基本介绍  
+32.1 Executors基本介绍  
+一个工具类,相当于Arrays(操作数组)、Collections(操作集合(容器))、Executors(操作Executor)
+
+32.2 常用api介绍  
+* `static newFixedThreadPool(int) return ExecutorService` 创建固定的线程池,args0表示线程个数
+* `newCachedThreadPool() return ExecutorService` 创建缓存线程池
+* `newSingleThreadExecutor() return ExecutorService` 创建只有一个线程的线程池
+* `newScheduledThreadPool(int) return ScheduledExecutorService` 执行定时任务 
+* `newWorkStealingPool() return ExecutorService` 工作窃取线程池
+  线程大小是根据CPU的核心数来确定的,我这里是8核也就是8线程
+
+32.3 ExecutorService接口的常用方法  
+* `shutdown() return void`	关闭线程池,会等待所有的任务都执行完毕才会关闭线程池
+* `shutdownNow() return void` 强制关闭
+* `isTerminated() return void` 所有任务是否全部关闭(全部执行完毕)
+* `isShutdown() return void` 线程池是否将要被关闭?
+
+### 33.线程池(ThreadPool)之固定线程池  
+33.1 基本概念介绍  
+线程池就是线程数组(一堆线程),当一个任务执行结束时线程不会关闭而是归还到线程池当中,供下一个任务使用.这样就不需要频繁创建线程,你的效率就会提高,并发性会很好.线程能重用就重用,线程的启动和关闭时比较浪费资源的.
+一个线程池维护两个队列:
+* 线程队列:等待(排队)的任务
+* 结束的线程队列
+  线程池的大小不要小于CPU核心的数量,不然太浪费了.如果你是四核的那么线程数就不要小于4
+
+33.2 代码演示  
+```java
+public class Demo36 {
+    public static void main(String[] args) {
+        ExecutorService services = Executors.newFixedThreadPool(5);			//创建线程池
+        for (int i = 0; i < 6; i++) {
+            services.execute(() -> {				//执行任务
+                try {
+                    Thread.sleep(500);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+                System.out.println(Thread.currentThread().getName());
+            });
+        }
+        System.out.println(services);
+    }
+}
+/**
+ * 输出结果
+ * Running, pool size = 5, active threads = 5, queued tasks = 1, 
+ * completed tasks = 0
+ * Running:运行状态
+ * pool size:线程池的线程个数
+ * active threads:正在使用的线程个数
+ * queued tasks:等待(排队)的任务,排在线程池所维护的一个线程队列
+ * completed tasks:结束的线程队列个数(简单理解为执行完毕的任务的个数)
+ */
+```
+
+### 34.FutureTask  
+34.1 基本介绍  
+通过FutureTask将Callable包装了一下,创建线程的方式还是new Thread(FutureTask).start();
+
+34.2 常用api介绍  
+* `get()` 返回Callable接口的call()方法的返回值.这是一个阻塞方法,直到call方法运行结束,获取到返回值.返回值的类型需要通过创建FutureTask类的泛型指定
+
+34.3 代码演示
+```java
+public class Demo37 {
+    public static void main(String[] args) {
+        FutureTask<Integer> task = new FutureTask(() -> {		//这里指代的泛型就是call()方法返回的值的类型
+            Thread.sleep(500);
+            return 1000;
+        });
+        new Thread(task).start();           //启动线程
+        try {
+            System.out.println(task.get());	//阻塞		输出结果1000
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        } catch (ExecutionException e) {
+            e.printStackTrace();
+        }
+    }
+}
+```
+
+### 35.线程池与Future  
+35.1 基本概念  
+例子34和前面的知识没什么关联.上面说到过执行Callable可以获得一个Future对象(返回值).call()方法的返回值就保存到这个对象里面  
+
+35.2 常用api介绍  
+* `get()` 和FutureTask用法一致
+* `isDone()` 任务是否执行完毕
+
+35.3 代码演示  
+```java
+public class Demo38 {
+    public static void main(String[] args) {
+        ExecutorService service = Executors.newFixedThreadPool(5);
+        Future<Integer> future = service.submit(() -> {
+            try {
+                Thread.sleep(500);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+            return -1;
+        });
+        System.out.println(future.isDone());
+        service.shutdown();		//关闭线程池
+    }
+}
+```
+
+### 36.线程池之缓存线程池-CachedThreadPool  
+这种线程池一开始是没有线程的,当线程池中没有空闲线程分配的时候当你需要一个线程的时候就会创建一个线程,如果有线程就复用线程,如果一个线程超过60s(生命周期,当你可以指定生命周期的时长)没有使用就会自动销毁.  
+
+### 37.线程池之缓存线程池-ScheduledThreadPool  
+这种线程池会每隔一段时间去执行任务,方法返回ScheduledExecutorService类.如果每个线程执行任务的时间太长了,导致下一次间隔执行任务的时候没有线程了,那就得延迟执行,线程保证当前方法执行成功.
+```java
+public class Demo39 {
+    public static void main(String[] args) {
+        ScheduledExecutorService service = Executors.newScheduledThreadPool(4);
+        service.scheduleAtFixedRate(() -> {
+            try {
+                Thread.sleep(new Random().nextInt(1000));
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+            System.out.println(Thread.currentThread().getName());
+        }, 0, 100, TimeUnit.MILLISECONDS);
+    }
+}
+```
+
+### 38.线程池之窃取任务-WorkStealingPool  
+38.1 基本介绍  
+假如这里有三个线程,<font color="#00FF00">每个线程都有自已的任务队列</font>(任务执行顺序),假如第一个线程有5个任务,第二个线程有一个,第三个线程有两个,如果第二个线程执行完了,就会去第一个线程里窃取任务执行,当一个线程全部执行完毕之后,会查看其余的线程是否有没执行的任务,如果有就拿过来执行.  
+而且这个线程很有意思的一点是,如果主函数结束了,虽然在运行这个线程但是你看不到任何输出,所以这种线程也称之为精灵线程daemon
+从这个线程的源码可知,newWorkStealingPool实际上就是对<font color="#FF00FF">ForkJoinPool</font>的一层封装  
+```java
+public class Demo40 {
+    public static void main(String[] args) {
+        ExecutorService service = Executors.newWorkStealingPool();
+        System.out.println(Runtime.getRuntime().availableProcessors());     //查看CPU核心数
+        System.out.println(service);
+        service.execute(new Run(1000));		//这里起了9个任务,因为CPU核心是8.便于查看最后一次的打野结果.
+        service.execute(new Run(2000));
+        service.execute(new Run(2000));
+        service.execute(new Run(2000));
+        service.execute(new Run(2000));
+        service.execute(new Run(2000));
+        service.execute(new Run(2000));
+        service.execute(new Run(2000));
+        service.execute(new Run(2000));
+
+        try {
+            System.in.read();			//由于产生的是守护线程,不暂停的话看不到输出
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    static class Run implements Runnable {
+
+        private int time;
+
+        public Run(int time) {
+            this.time = time;
+        }
+
+        @Override
+        public void run() {
+            try {
+                TimeUnit.MILLISECONDS.sleep(time);		//睡眠
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+            System.out.println(time + "---" + Thread.currentThread().getName());		//打印时间和当前线程的名称
+        }
+    }
+
+}
+/**
+ * 输出结果如下
+ * 打印:这里起了8个线程,名称是1 3 5 7 9 11 13 15	全是奇数(这点很奇怪)
+ * 1000---ForkJoinPool-1-worker-3
+ * 2000---ForkJoinPool-1-worker-9
+ * 2000---ForkJoinPool-1-worker-7
+ * 2000---ForkJoinPool-1-worker-5
+ * 2000---ForkJoinPool-1-worker-13
+ * 2000---ForkJoinPool-1-worker-15
+ * 2000---ForkJoinPool-1-worker-11
+ * 2000---ForkJoinPool-1-worker-1
+ * 2000---ForkJoinPool-1-worker-3
+ * 分析:
+ * 线程3肯定是最先执行完的,所以他就会去窃取第9个任务用来执行
+ */
+```
+
+### 39.线程池之ForkJoinPool  
+39.1 基本介绍  
+如果有一个任务只靠单线程来计算,耗时特别巨大.那就可以将这个大任务切分成一个个的小任务,如果切分后的任务还大 还可以继续切分.分完之后调用多个线程来计算,最后把结果合并.这种线程是一个精灵线程.线程的启动由ForkJoinPool这个线程本身来维护  
+
+39.2 ForkJoinPool常用api介绍  
+* `execute(ForkJoinTask<?>)`ForkJoinTask是一个抽象类,你只要传入一个RecursiveAction的子类,但是这个类的compute方法没有返回值
+
+39.3 RecursiveAction类的常用方法介绍  
+* `fork()` 开辟新线程,用来运行compute方法
+
+39.4 RecursiveTask类的常用方法介绍  
+* `fork()` 开辟新线程,用来运行compute方法
+
+39.5 问题  
+*问题:计算一个长度为1000000的数组的每个元素的和*  
+
+39.6 继承RecursiveAction类来实现分片执行  
+```java
+public class Demo41 {
+
+    static int[] values = new int[1000000];
+    static final int MMAX_NUM = 50000;			//将数组按照50000来分割
+    static Random random = new Random();
+    static {
+        for (int i = 0; i < values.length; i++) {
+            values[i] = random.nextInt(100);
+        }
+    }
+
+    static class AddTask extends RecursiveAction {		//需要继承RecursiveAction类重写compute方法
+
+        int start, end;
+
+        public AddTask(int start, int end) {
+            this.start = start;
+            this.end = end;
+        }
+
+        @Override
+        protected void compute() {
+            if (end - start <= MMAX_NUM) {
+                long num = 0;
+                for (int i = start; i < end; i++) {
+                    num += values[i];
+                }
+                System.out.println(num);
+            } else {
+                int middle = start+((end-start)>>1);
+                AddTask addTask1 =  new AddTask(start,middle);
+                AddTask addTask2 =  new AddTask(middle,end);
+                addTask1.fork();		//让当前的线程池开辟新线程调用该类的compute方法
+                addTask2.fork();	//类似于递归
+            }
+        }
+    }
+
+    public static void main(String[] args) {
+        ForkJoinPool forkJoinPool = new ForkJoinPool();
+        AddTask addTask = new AddTask(0,values.length);
+        forkJoinPool.execute(addTask);			//执行任务
+
+        try {
+            System.in.read();			//暂停main线程,(因为ForkJoinPool是精灵线程)
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+}
+```
+
+39.7 通过RecursiveTask的泛型指定返回值  
+```java
+public class Demo42 {
+
+    static int[] values = new int[1000000];
+    static final int MMAX_NUM = 50000;
+    static Random random = new Random();
+    static {
+        for (int i = 0; i < values.length; i++) {
+            values[i] = random.nextInt(100);
+        }
+    }
+
+    static class AddTask extends RecursiveTask<Long> {
+
+        int start, end;
+
+        public AddTask(int start, int end) {
+            this.start = start;
+            this.end = end;
+        }
+
+        @Override
+        protected Long compute() {
+            if (end - start <= MMAX_NUM) {
+                long num = 0;
+                for (int i = start; i < end; i++) {
+                    num += values[i];
+                }
+                return num;
+            } else {
+                int middle = start+((end-start)>>1);
+                AddTask addTask1 =  new AddTask(start,middle);
+                AddTask addTask2 =  new AddTask(middle,end);
+                addTask1.fork();
+                addTask2.fork();
+                /*
+                一旦调用join,那么当前线程就被阻塞,直到别的线程运行结束
+                先被阻塞的后不阻塞
+                join方法的返回值就是泛型的返回值
+                 */
+                return addTask1.join()+addTask2.join();
+            }
+        }
+    }
+
+    public static void main(String[] args) {
+        ForkJoinPool forkJoinPool = new ForkJoinPool();
+        AddTask addTask = new AddTask(0,values.length);
+        forkJoinPool.execute(addTask);
+        Long join = addTask.join();     //当前线程被阻塞,直到别的线程运行结束,main线程被阻塞.
+        System.out.println(join);
+    }
+}
+/**
+ * 适用场景
+ * 就是计算一个任务为了提高效率把它分成几个线程,最后得到合并结果.
+ */
+```
+
+### 40.线程池原理ThreadPoolExecutor  
+除了WorkStealingPool和ForkJoinPool线程池
+别的线程池的实现都是调用ThreadPoolExecutor这个类,可以从点开上面创建线程池的静态方法的源码中得知.
+
+ThreadPoolExecutor的构造方法:
+* `ThreadPoolExecutor(int corePoolSize,int maximumPoolSize,long keepAliveTime,TimeUnit unit,BlockingQueue<Runnable> workQueue)`
+  * corePoolSize:核心线程数
+  * maximumPoolSize:最多能允许多少个线程
+  * keepAliveTime:当一个线程多长时间没有执行任务时会销毁
+  * unit:时间的单位	TimeUnit类里的常量
+  * workQueue:队列的并发容器
+
+*提示:所以如果你想定义自已的线程池,你就可以简单的去new ThreadPoolExecutor()*
 
 
 ## B.线程基础知识
