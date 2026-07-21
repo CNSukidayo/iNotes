@@ -558,7 +558,10 @@ OpenSpec是一个轻量的规范驱动开发框架,比Spec-kit更简单易用,�
 
 ### 1.8 Git WorkTree  
 1.介绍  
-并行Agent的底‍层其实依赖Git WorkTree(工作树)技术,WorkTree可以让一个仓库同时⁡拥有多个独立的工作目录,每个目录对应不同的分​支,让多个AI各自在独立的文件夹里干活,互不干扰,开发完再用Git合并代码  
+并行Agent的底‍层其实依赖Git WorkTree(工作树)技术,WorkTree可以让一个仓库同时⁡拥有多个独立的工作目录,每个目录对应不同的分​支(<font color="#00FF00">必须是一对一</font>),让多个AI各自在独立的文件夹里干活,互不干扰,开发完再用Git合并代码  
+
+
+
 
 
 ## 2.Vibe Coding实战  

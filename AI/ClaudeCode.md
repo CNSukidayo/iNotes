@@ -2,6 +2,9 @@
 1.Claude Code核心概念  
 2.使用Claude Code  
 3.代理和并行  
+4.MCP  
+5.Skills  
+6.插件  
 3.参考  
 
 ## 1.Claude Code核心概念   
@@ -2122,13 +2125,16 @@ AgentView标题中显示的模型名称是调度默认值,用户从输入框中�
 ### 3.5 worktree  
 **目录:**  
 3.5.1 在worktree中启动Claude  
+3.5.2 将gitignored文件复制到worktrees  
+3.5.3 使用worktrees隔离子代理  
+3.5.4 清理worktrees  
+3.5.5 手动管理worktrees  
 
 
 #### 3.5.1 在worktree中启动Claude  
 1.概述  
-在单独的git worktrees中隔离并行Claude Code会话,<font color="#00FF00">以便更改不会相互冲突</font>  
-git worktree是一个<font color="#00FF00">单独的工作目录</font>,具有自己的文件和分支,但与主分支共享相同的存储库历史和远程,在自己的worktree中运行每个Claude Code会话意味着<font color="#00FF00">一个会话中的编辑永远不会触及另一个会话中的文件</font>  
-就好比两个开发者它们都有一个本地的dev分支,它们在自已的dev分支开发时并不会干扰对方的开发内容,<font color="#FF00FF">而worktree就是用于本地模拟多个人同时对一个分支进行开发的操作</font>,和传统的agent开发不同,worktree是有可能产生冲突的,而单Claude会话永远不会产生冲突  
+并行Agent的底‍层其实依赖Git WorkTree(工作树)技术,WorkTree可以让一个仓库同时⁡拥有多个独立的工作目录,每个目录对应不同的分​支(<font color="#00FF00">必须是一对一</font>),让多个AI各自在独立的文件夹里干活,互不干扰,开发完再用Git合并代码  
+一旦进入worktree,Claude可以通过调用`EnterWorktree`工具并指定目标路径,直接切换到`.claude/worktrees/`下的另一个worktree,之前的worktree保留在磁盘上不变  
 
 2.使用方式  
 
@@ -2145,6 +2151,784 @@ claude --worktree bugfix-123
 
 2.3 省略名称  
 如果启动时不指定名称,则Claude会生成一个名称  
+
+3.技巧  
+* 将`.claude/worktrees/`添加到`.gitignore`文件中,否则会导致远程仓库内容膨胀
+
+#### 3.5.2 将gitignored文件复制到worktrees  
+参考[[ClaudeCode#1324-worktreeinclude]]  
+
+
+#### 3.5.3 使用worktrees隔离子代理  
+1.概述  
+子代理可以在自己的worktrees中运行,以便并行编辑而不产生冲突,或通过向子代理的配置文件元数据添加`isolation: worktree`要求Claude为子代理使用worktrees,每个子代理都会获得一个临时worktree,当子代理完成且没有更改时会自动删除  
+
+
+#### 3.5.4 清理worktrees  
+1.概述  
+当退出worktree会话时,清理取决于您是否进行了更改  
+* 无未提交的更改、无未跟踪的文件且无新提交
+  worktree及其分支会自动删除
+* 存在未提交的更改、未跟踪的文件或新提交
+  Claude提示您保留或删除worktree,如果选择保留则会保留目录和分支,如果选择删除则会删除worktree目录及其分支,丢弃所有未提交的更改、未跟踪的文件和提交
+* 非交互式运行
+  使用`--worktree`和`-p`创建的worktrees不会自动清理,因为没有退出提示
+
+2.自动清理  
+Claude为子代理和后台会话创建的worktrees一旦超过cleanupPeriodDays设置的时间,就会自动删除(前提是它们没有未提交的更改、没有未跟踪的文件和没有未推送的提交)  
+
+#### 3.5.5 手动管理worktrees  
+1.概述  
+要完全控制worktree位置和分支配置,请直接使用Git创建worktrees  
+
+2.在新分支上创建worktree  
+`git worktree add ../project-feature-a -b feature-a`  
+
+3.从现有分支创建worktree  
+`git worktree add ../project-bugfix bugfix-123`  
+
+4.在worktree中启动Claude  
+`cd ../project-feature-a && claude`  
+
+5.列出worktrees列表  
+`git worktree list`  
+
+6.完成后删除一个worktree  
+`git worktree remove ../project-feature-a`  
+
+
+
+## 4.MCP  
+**目录:**  
+4.1 快速入门  
+4.2 参考  
+
+### 4.1 快速入门  
+**目录:**  
+4.1.1 添加并验证服务器  
+4.1.2 服务器保存位置  
+4.1.3 更改服务器范围  
+4.1.4 其他MCP服务器示例  
+4.1.5 直接编辑.mcp.json  
+
+
+#### 4.1.1 添加并验证服务器  
+1.添加MCP服务器  
+直接在终端中执行如下命令,这种添加方式只针对当前终端  
+`claude mcp add --transport http claude-code-docs https://code.claude.com/docs/mcp`  
+
+* claude mcp add 向Claude Code注册服务器
+* --transport http 连接服务器的方式为http
+* claude-code-docs 为当前MCP服务器起的名称
+* `https://code.claude.com/docs/mcp` 服务器的地址
+
+
+2.检查连接状态  
+`claude mcp list` 该命令获取服务器列表并显示其状态
+
+3.使用服务器  
+直接运行Claude并在聊天框中输入`Use the claude-code-docs server to look up what MCP_TIMEOUT does`Claude会自动调用对应的MCP服务器,当Claude第一次调用服务器时,它会要求用户批准该新工具的权限  
+
+4.删除服务器  
+`claude mcp remove claude-code-docs`  
+
+
+#### 4.1.2 服务器保存位置  
+1.概述  
+`claude mcp add`命令将服务器的详细信息写入配置文件,它默认仅在当前项目的当前用户生效,传递`--scope user`为当前用户注册,或`--scope project`于团队共享(为当前项目注册)  
+
+2.在本机找到MCP配置  
+|         | 范围                                | 文件可用于       |
+|:--------|:------------------------------------|:-----------------|
+| local   | ~/.claude.json,在此项目的条目下     | 仅此项目(默认值) |
+| project | 项目根目录中的.mcp.json             | 克隆项目的所有人 |
+| user    | ~/.claude.json,在顶级mcpServers键下 | 用户级-所有项目  |
+
+如果设置了环境变量`CLAUDE_CONFIG_DIR`则Claude Code会从该目录内读取`.claude.json`  
+
+#### 4.1.3 更改服务器范围  
+1.概述  
+服务器的范围在添加时就是固定的,所以<font color="#00FF00">更改范围意味着删除条目并在新范围内重新添加它</font>  
+
+2.先删除
+`claude mcp remove claude-code-docs --scope local`  
+
+3.再添加  
+`claude mcp add --scope user --transport http claude-code-docs https://code.claude.com/docs/mcp` 用户级别  
+`claude mcp add --scope project --transport http claude-code-docs https://code.claude.com/docs/mcp` 团队级别
+
+
+#### 4.1.4 其他MCP服务器示例  
+**目录:**  
+4.1.4.1 添加本地服务器  
+4.1.4.2 添加需要登陆的服务器  
+
+##### 4.1.4.1 添加本地服务器 
+1.概述  
+本地服务器不是HTTP服务器,而是Claude Code在当前电脑上创建的子进程,它能提供本地资源的访问(浏览器、您的文件系统或数据库套接字)的工具  
+
+2.Playwright-MCP服务器  
+这是一个本地服务器,通过`npx`运行,它为Claude提供了一个可以导航、点击和读取的浏览器,并且不需要帐户  
+
+3.添加Playwright服务器  
+`claude mcp add playwright -- npx -y @playwright/mcp@latest`  
+* 没有`--transport`标志,因为本地服务器使用默认的`stdio`传输
+* `--`分隔符之后的所有内容都是Claude Code运行以启动服务器的命令
+* `-y`告诉npx安装包而不提示
+
+Playwright驱动当前电脑上已安装的任何Chrome,要使用不同的浏览器,请在`@playwright/mcp@latest`之后附加`--browser`和浏览器名称,例如`--browser firefox`  
+
+4.检查连接  
+`claude mcp list`  
+
+5.使用浏览器  
+在Claude对话框中输入`Use playwright to open https://example.com and tell me the page title`此时浏览器将被打开  
+
+##### 4.1.4.2 添加需要登陆的服务器
+1.概述  
+[[ClaudeCode#411-添加并验证服务器]]的示例是添加无需登录的服务器,这里演示需要登陆的服务器Sentry  
+
+2.添加服务器  
+`claude mcp add --transport http sentry https://mcp.sentry.dev/mcp`  
+添加后,`claude mcp list`显示服务器为! Needs authentication表明需要验证身份
+
+3.在浏览器中进行身份验证  
+执行`/mcp`命令,然后从列表中选择sentry,按`Enter`然后选择Authenticate,此时浏览器被打开到Sentry的登录页面,在页面完成授权即可  
+
+4.使用服务器  
+在Claude对话框中执行`What Sentry projects do I have access to?`  
+
+#### 4.1.5 直接编辑.mcp.json  
+1.概述  
+本节编辑项目范围的.mcp.json文件,在项目根目录中创建`.mcp.json`
+
+2.示例  
+该示例定义了本章中的两个服务器,一是通过HTTP访问的托管文档服务器,二作为本地stdio进程的Playwright服务器  
+```json
+{
+  "mcpServers": {
+    "claude-code-docs": {
+      "type": "http",
+      "url": "https://code.claude.com/docs/mcp"
+    },
+    "playwright": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest"]
+    }
+  }
+}
+```
+json文件中字段因服务器类型而异,对于对于HTTP服务器,`url`是MCP服务器的链接;对于stdio服务器,`command`和`args`是它运行的程序的参数  
+
+3.运行使用  
+Claude Code第一次看到项目范围的服务器时,它会要求用户批准它(为了防止不安全),批准后运行`/mcp`并检查服务器是否显示为已连接  
+
+
+### 4.2 参考
+**目录:**  
+4.2.1 查找和构建MCP服务器  
+4.2.2 安装MCP服务器  
+4.2.3 MCP安装范围  
+4.2.4 使用远程MCP服务器进行身份验证  
+4.2.5 从JSON配置添加MCP服务器  
+4.2.6 从Claude Desktop导入MCP服务器  
+4.2.7 使用来自claude\.ai的MCP服务器  
+4.2.8 将Claude Code用作MCP服务器  
+4.2.9 MCP输出限制和警告  
+
+## 5.Skills  
+**目录:**  
+5.1 默认的skills  
+5.2 入门  
+5.3 配置skills  
+5.4 高级模式  
+5.5 评估和迭代skill  
+5.6 共享skills  
+
+### 5.1 默认的skills
+1.默认的SKills  
+Claude Code内置的Skills包括`/doctor`、`/code-review`、`/batch`、`/debug`、`/loop`和`/claude-api`,与Claude自带的命令不同,内置命令直接执行固定逻辑,而内置的skills是基于提示词的,调用skills的方式就是`/[skill_name]`  
+
+2.运行并验证  
+可以执行`/run`来启动当前的应用以查看更改是否有效  
+
+### 5.2 入门  
+**目录:**  
+5.2.1 创建第一个skill  
+5.2.2 SKill的位置  
+5.2.3 添加支持文件  
+5.2.4 控制谁调用skill  
+
+#### 5.2.1 创建第一个skill 
+1.概述  
+此示例创建的skill,用于总结git仓库中未提交的更改,并标记任何风险内容,该skill基于diff进行推断,当用户询问代码更改时,Claude会自动加载该skill,或者可以使用`/summarize-changes`命令来手动调用  
+
+2.创建skill目录  
+在你的个人skills文件夹中为skill创建一个目录  
+`mkdir -p ~/.claude/skills/summarize-changes`  
+
+3.编写skill\.MD  
+每个skill都需要一个SKILL\.md文件,文件内容包含两部分,元数据告知Claude何时使用该skill,正文内容是调用该skill需要遵守的内容,文件所在的目录名称就是该skill的名称,`description`属性告知Claude何时使用该skill  
+将下面的文件保存到`~/.claude/skills/summarize-changes/SKILL.md`  
+```markdown
+---
+description: Summarizes uncommitted changes and flags anything risky. Use when the user asks what changed, wants a commit message, or asks to review their diff.
+---
+
+## Current changes
+
+!`git diff HEAD`
+
+## Instructions
+
+Summarize the changes above in two or three bullet points, then list any risks you notice such as missing error handling, hardcoded values, or tests that need updating. If the diff is empty, say there are no uncommitted changes.
+```
+上述内容的`!git diff HEAD`这一行使用了<font color="#00FF00">动态上下文注入</font>,Claude Code运行该命令,并在Claude看到skill内容之前将该行替换为其输出  
+注意如果使用`name`属性修改了skill的名称,这并不意味着在调用这个skill的时候要使用name属性指定的名称,它只会改变在skill列表中的显示名称,所以调用skill永远以目录名称为准  
+
+4.测试skill  
+在一个git项目中做一点修改后,有两种方式测试该skill  
+**让Claude自动调用它,通过询问与描述匹配内容**  
+`What did I change?`  
+**或者直接使用skill名称调用它**  
+`/summarize-changes`  
+
+#### 5.2.2 SKill的位置  
+1.skill的位置  
+存储skill的位置决定了谁可以使用它  
+| 位置 | 路径                                     | 适用于               |
+|:-----|:-----------------------------------------|:---------------------|
+| 企业 | 请参阅托管设置                           | 你的组织中的所有用户 |
+| 个人 | ~/.claude/skills/\<skill-name\>/SKILL.md | 你的所有项目         |
+| 项目 | .claude/skills/\<skill-name\>/SKILL.md   | 仅此项目             |
+| 插件 | <plugin>/skills/\<skill-name\>/SKILL.md  | 启用插件的位置       |
+
+当名称冲突时,优先级为托管>用户>项目,另外任何级别的skill都会覆盖相同名称的默认skill,插件skills使用`plugin-name:skill-name`的方式进行使用,因此插件不会与其他的级别产生冲突
+Skills也会从当前工作目录的下一级`.claude/skills/`子目录加载,如果子目录的名称和父目录的名称一致,则两者都是可以用的,例如根目录和`apps/web/.claude/skills/`下都有一个`deploy`的skill,则运行`/deploy`会执行根目录下的skill,运行`/apps/web:deploy`会执行子目录下的skill  
+另外Claude也支持符号链接的skill  
+
+2.实时变更检测  
+Claude Code 监视skill目录的文件变更,在`~/.claude/skills/`、`.claude/skills/`或`--add-dir`参数指定的`.claude/skills/`目录中添加、编辑或删除skill会在当前会话中生效,无需重新启动,<font color="#00FF00">创建在会话启动时不存在的skills目录需要重新启动Claude Code</font>  
+
+*提示:实时变更检测仅涵盖SKILL\.md文件,对于也是插件(plugin)的skill文件夹、对hooks/、.mcp.json、agents/和output-styles 的更改需要/reload-plugins才能生效*  
+
+3.从父目录和嵌套目录自动发现  
+项目级skills从起始目录中的`.claude/skills/`以及从起始目录到仓库根目录的每个父目录中加载,因此<font color="#00FF00">在子目录中启动Claude仍然会加载在根目录定义的skills</font>,当用户在起始目录下方的子目录中处理文件时,Claude Code也会按需从嵌套的`.claude/skills/`目录中发现skills  
+每个skill都是一个以SKILL\.md作为入口点的目录  
+```markdown
+my-skill/
+├── SKILL.md           # 主要说明（必需）
+├── template.md        # Claude 要填写的模板
+├── examples/
+│   └── sample.md      # 显示预期格式的示例输出
+└── scripts/
+    └── validate.sh    # Claude 可以执行的脚本
+```
+
+4.来自其它目录的skill  
+除了上述说的4个skill位置之外,`--add-dir`标志和`/add-dir`命令可以自动加载指定目录的`.claude/skills/`
+
+
+### 5.3 配置skills  
+**目录:**  
+5.3.1 概述  
+5.3.2 添加支持文件  
+5.3.3 控制谁调用skill  
+5.3.4 skill内容生命周期  
+5.3.5 为skill预先批准工具  
+5.3.6 将参数传递给skills  
+
+#### 5.3.1 概述
+1.元数据  
+skill顶部的元数据包含如下内容,参考官网[元数据](https://code.claude.com/docs/zh-CN/skills#frontmatter-reference)  
+
+2.动态字符串替换  
+Skills支持skill\.MD内容中动态值的字符串替换,例如`$ARGUMENTS`,参考官网[可用的字符串替换](https://code.claude.com/docs/zh-CN/skills#available-string-substitutions)  
+使用示例如下  
+```markdown
+---
+name: session-logger
+description: Log activity for this session
+---
+
+Log the following to logs/${CLAUDE_SESSION_ID}.log:
+
+$ARGUMENTS
+```
+
+#### 5.3.2 添加支持文件  
+1.概述  
+用户可以在skills文件夹内添加一些额外的文件供Claude参考或使用,让skill\.MD更加专注于要点,同时让Claude仅在需要时访问详细的参考资料  
+
+2.示例  
+```markdown
+my-skill/
+├── SKILL.md (required - overview and navigation)
+├── reference.md (detailed API docs - loaded when needed)
+├── examples.md (usage examples - loaded when needed)
+└── scripts/
+    └── helper.py (utility script - executed, not loaded)
+```
+3.引用文件  
+从SKILL\.md中引用支持文件,以便Claude知道每个文件包含什么以及何时加载它  
+```markdown
+## Additional resources
+
+- For complete API details, see [reference.md](reference.md)
+- For usage examples, see [examples.md](examples.md)
+```
+*提示:将SKILL\.md保持在500行以下*  
+
+#### 5.3.3 控制谁调用skill  
+1.概述  
+默认情况下,用户和Claude都可以调用任何skill,用户可以输入`/skill-name`直接调用它,Claude可以在与你的对话相关时自动加载它,两个元数据字段可以限制这一点  
+* `disable-model-invocation: true`
+  只有用户可以调用该skill
+* `user-invocable: false`
+  只有Claude可以调用该skill
+
+2.示例  
+此示例创建一个只有用户可以触发的部署skill  
+```markdown
+---
+name: deploy
+description: Deploy the application to production
+disable-model-invocation: true
+---
+
+Deploy $ARGUMENTS to production:
+
+1. Run the test suite
+2. Build the application
+3. Push to the deployment target
+4. Verify the deployment succeeded
+```
+
+#### 5.3.4 skill内容生命周期  
+1.概述 
+当用户或Claude调用一个skill时,完整的SKILL\.md内容作为单个消息进入对话,并在会话的其余部分保持在那里,Claude Code不会在后续轮次重新读取skill文件  
+当Claude重新调用一个skill且其呈现的内容与已上下文中的副本相同时,Claude Code添加一个简短的说明,表示该skill已加载  
+当呈现的内容不同时,因为参数改变或<font color="#00FF00">动态上下文</font>命令产生了新输出,Claude Code会再次附加完整内容  
+
+#### 5.3.5 为skill预先批准工具 
+1.概述  
+`allowed-tools`字段在skill处于活动状态时授予对列出的工具的权限,因此Claude可以使用它们而无需提示用户获得批准  
+若要移除某些工具则使用`disallowed-tools`属性  
+
+2.示例  
+此skill让Claude在用户调用它时运行git命令而无需每次使用批准  
+```markdown
+---
+name: commit
+description: Stage and commit the current changes
+disable-model-invocation: true
+allowed-tools: Bash(git add *) Bash(git commit *) Bash(git status *)
+---
+```
+
+#### 5.3.6 将参数传递给skills  
+1.概述  
+用户和Claude的skill调用都可以在调用时传递参数,参数可通过`$ARGUMENTS`占位符获得,`$ARGUMENTS`占位符被替换为skill命令名称后面的任何内容  
+
+2.示例  
+此skill按编号修复GitHub问题  
+```markdown
+---
+name: fix-issue
+description: Fix a GitHub issue
+disable-model-invocation: true
+---
+
+Fix GitHub issue $ARGUMENTS following our coding standards.
+
+1. Read the issue description
+2. Understand the requirements
+3. Implement the fix
+4. Write tests
+5. Create a commit
+```
+
+如果使用参数调用skill但skill本身不包含`$ARGUMENTS`,则Claude Code会将`ARGUMENTS: <your input>`追加到skill内容的末尾,以便Claude仍然看到你输入的内容  
+
+
+### 5.4 高级模式  
+**目录:**  
+5.4.1 注入动态上下文  
+5.4.2 在subagent中运行skills  
+5.4.3 限制Claude的skill访问  
+5.4.4 从设置覆盖skill可见性  
+
+
+
+#### 5.4.1 注入动态上下文  
+1.概述  
+!\`\<command\>\`语法在将skill内容发送给Claude之前运行shell命令,命令输出替换占位符,因此Claude接收命令运行后的结果,而不是命令本身  
+
+2.示例  
+此skill通过使用GitHub CLI获取实时PR数据来总结拉取请求,!\`gh pr diff\`和其它命令会先被运行然后再统一输出到提示词中  
+```markdown
+---
+name: pr-summary
+description: Summarize changes in a pull request
+context: fork
+agent: Explore
+allowed-tools: Bash(gh *)
+---
+
+## Pull request context
+- PR diff: !`gh pr diff`
+- PR comments: !`gh pr view --comments`
+- Changed files: !`gh pr diff --name-only`
+
+## Your task
+Summarize this pull request...
+```
+
+3.注意事项  
+`!`命令要能够被正常解析必须出现在首行,或者在空白格之后才能被识别,例如KEY=!\`cmd\`就仅仅保留字面意思  
+
+4.多行命令  
+多行命令使用\`\`\`!开头,下面的示例要去掉空格和\  
+```markdown
+## Environment
+
+` ` \` !
+node --version
+npm --version
+git status --short
+` ` \`
+```
+
+5.禁用  
+要禁用来自用户、项目、插件或其他目录源的skills和自定义命令的行为,在setting.json文件中设置 `"disableSkillShellExecution": true` 来实现
+默认的skill不受影响  
+
+#### 5.4.2 在subagent中运行skills  
+1.概述  
+要想让skill在subagent中执行,则在skill的元数据中添加`context: fork`  
+
+2.Skills和subagents以两个方向协同工作  
+| 方法                     | 系统提示               | 任务             | 也加载                            |
+|:-------------------------|:-----------------------|:-----------------|:----------------------------------|
+| 带有context:fork的Skill  | 来自代理类型           | SKILL.md内容     | CLAUDE.md,除非代理是Explore或Plan |
+| 带有skills字段的Subagent | Subagent的markdown正文 | Claude的委派消息 | 预加载的skills+CLAUDE.md          |
+
+你在你的skill中编写任务并<font color="#00FF00">选择一个代理类型</font>来执行它
+
+3.使用Explore代理的研究skill  
+此skill在并发的子Explore代理中运行研究,skill内容变成任务,代理提供针对代码库探索优化的只读工具  
+```markdown
+---
+name: deep-research
+description: Research a topic thoroughly
+context: fork
+agent: Explore
+---
+
+Research $ARGUMENTS thoroughly:
+
+1. Find relevant files using Glob and Grep
+2. Read and analyze the code
+3. Summarize findings with specific file references
+```
+
+4.解析  
+当skill运行时  
+* 创建一个新的隔离上下文
+* Subagent接收skill内容作为其提示 `Research $ARGUMENTS thoroughly...`  
+* agent字段确定执行环境(模型、工具和权限)
+* 结果被总结并返回到你的主对话
+
+`agent`字段指定要使用的subagent配置,选项包括内置代理(Explore、Plan、general-purpose)或来自`.claude/agents/`的任何自定义subagent,`如果省略使用general-purpose`  
+
+#### 5.4.3 限制Claude的skill访问  
+1.控制Claude可以调用哪些skills的三种方式  
+
+1.1 通过在`/permissions`中拒绝Skill工具来禁用所有skills  
+```markdown
+# Add to deny rules:
+Skill
+```
+
+1.2 使用权限规则允许或拒绝特定skills  
+```markdown
+# Allow only specific skills
+Skill(commit)
+Skill(review-pr *)
+
+# Deny specific skills
+Skill(deploy *)
+```
+
+1.3 元数据  
+通过在其元数据中添加`disable-model-invocation: true`来隐藏单个skills  
+
+#### 5.4.4 从设置覆盖skill可见性  
+1.概述  
+通过在setting.json文件中设置`skillOverrides`来控制skill可见性,而不是从skill自己的元数据,例如别人的项目中存在skills但是你又不想修改它的元数据,就可以在用户级的setting.json或者settings.local.json中对skill进行限制  
+可以直接通过`/skills`命令来进行设置,选中一个skill后可以按下`Space`来循环切换该skill的状态,然后按下`Enter`将配置保存在`.claude/settings.local.json`文件中  
+
+2.settings.json文件编写  
+遵循每个key是一个skill名称,每个值是以下四种状态之一,来设置特定的skill  
+| 值                    | 列出给Claude | 在/菜单中 |
+|:----------------------|:-------------|:----------|
+| "on"                  | 名称和描述   | 是        |
+| "name-only"           | 仅名称       | 是        |
+| "user-invocable-only" | 隐藏         | 是        |
+| "off"                 | 隐藏         | 隐藏      |
+
+3.示例  
+`skillOverrides`中不存在的skill均被视为"on",下面的示例将一个skill只显示名称,并完全关闭另一个skill  
+```json
+{
+  "skillOverrides": {
+    "legacy-context": "name-only",
+    "deploy": "off"
+  }
+}
+```
+
+4.插件的skill  
+插件skills不受skillOverrides影响,通过`/plugin`管理这些  
+
+## 6.插件  
+**目录:**  
+6.1 通过市场发现和安装预构建插件  
+6.2 创建插件  
+
+
+
+### 6.1 通过市场发现和安装预构建插件  
+**目录:**  
+6.1.1 Anthropic市场  
+6.1.2 社区市场  
+6.1.3 添加市场  
+6.1.4 安装插件  
+6.1.5 管理已安装的插件  
+6.1.6 管理市场  
+6.1.7 配置团队市场  
+
+
+#### 6.1.1 Anthropic市场  
+**目录:**  
+6.1.1.1 概述  
+6.1.1.2 代码智能  
+6.1.1.3 外部集成  
+6.1.1.4 自动安全审查  
+6.1.1.5 开发工作流  
+6.1.1.6 输出样式  
+
+
+##### 6.1.1.1 概述  
+1.概述  
+插件通过skills、agents、hooks和MCP扩展Claude Code,插件市场是帮助用户发现和安装这些扩展的目录,无需自己构建,所以插件就相当于一个整合包  
+
+2.市场  
+市场是他人创建和共享的插件目录,使用市场分为两步  
+* 添加市场
+  这会向Claude Code注册市场,以便用户可以浏览插件,此时尚未安装任何插件
+* 安装单个插件
+  浏览市场目录并安装您想要的插件
+
+3.Anthropic市场  
+Anthropic官方市场在启动Claude Code时自动可用(自带),运行`/plugin`即可浏览  
+
+4.安装插件  
+要从官方市场安装插件,请使用`/plugin install [plugin-name]@claude-plugins-official`  
+* plugin-name 是插件的名称
+* claude-plugins-official 从哪个市场安装
+
+5.官方市场的插件分类  
+官方市场包括多个插件类别,代码智能、外部集成、自动安全审查、开发工作流、输出样式  
+
+##### 6.1.1.2 代码智能  
+1.概述  
+代码智能插件启用Claude Code的内置LSP工具,使Claude能够跳转到定义、查找引用并在编辑后立即查看类型错误,这是一项和VS Code代码智能提供支持的相同技术  
+这些插件需要在当前系统上安装语言服务器二进制文件,要想生效还需要进一步安装相应的插件  
+比如java语言就需要安装`jdtls-lsp`和`jdtls`的LSP二进制工具  
+
+2.功能  
+安装代码智能插件并且其语言服务器二进制文件可用后,Claude获得两项功能  
+* 自动诊断
+  在Claude进行的每次文件编辑后,语言服务器分析更改并自动报告错误和警告,Claude看到类型错误、缺失导入和语法问题,无需运行编译器或linter
+* 代码导航
+  Claude可以使用语言服务器跳转到定义、查找引用、获取悬停时的类型信息、列出符号、查找实现和追踪调用层次结构
+
+##### 6.1.1.3 外部集成  
+1.概述  
+帮助Claude连接到外部服务器  
+* 源代码控制 github、gitlab
+* 项目管理 atlassian(Jira/Confluence)、asana、linear、notion
+* 设计 figma
+* 基础设施 vercel、firebase、supabase
+* 通信 slack
+* 监控 sentry
+
+
+##### 6.1.1.4 自动安全审查  
+`security-guidance`插件审查Claude所做的每项更改是否存在常见漏洞,并指示Claude在同一会话中修复发现的问题
+有关其检查内容以及如何添加特定于项目的规则,参考[在Claude编写代码时捕获安全问题](https://code.claude.com/docs/zh-CN/security-guidance)  
+
+
+
+##### 6.1.1.5 开发工作流  
+为常见开发任务添加skills和agents的插件  
+* commit-commands Git提交工作流，包括提交、推送和PR创建
+* pr-review-toolkit 用于审查拉取请求的专门agents
+* agent-sdk-dev 使用Claude Agent SDK构建的工具
+* plugin-dev 用于创建您自己的插件的工具包
+
+##### 6.1.1.6 输出样式  
+自定义Claude的响应方式  
+* explanatory-output-style 关于实现选择的教育见解
+* learning-output-style 用于技能构建的交互式学习模式
+
+#### 6.1.2 社区市场  
+1.概述  
+社区市场`anthropics/claude-plugins-community`是已通过Anthropic自动验证和安全筛选的第三方插件
+
+2.添加市场  
+与官方市场不同,您需要手动添加它  
+`/plugin marketplace add anthropics/claude-plugins-community`  
+
+3.安装插件  
+从claude-community市场中按名称安装插件  
+`/plugin install <plugin-name>@claude-community`
+
+
+#### 6.1.3 添加市场  
+1.概述  
+执行`/plugin marketplace add`命令从不同来源添加市场
+
+2.从GitHub添加  
+使用`[owner]/[repo]`的格式来添加仓库中含有`.claude-plugin/marketplace.json`文件的<font color="#00FF00">GitHub仓库</font>,其中`owner`是GitHub用户名或组织,`repo`是存储库名称  
+
+例如`anthropics/claude-code`指的就是`anthropics`创建的`claude-code`仓库  
+`/plugin marketplace add anthropics/claude-code` 可以去GitHub上看一下这个仓库的`marketplace.json`文件,该文件相当于是plugin列表的说明文件,然后在这个仓库里还有一个`plugins`文件夹用于存放每个具体的plugin  
+
+3.从其它git添加  
+通过提供完整URL添加任何git存储库(包括GitLab、Bitbucket和自已的服务器),以便Claude Code克隆存储库(说白了Claude会去下载这个仓库里的plugin,通过GitHub等服务器来托管这些plugin)  
+
+3.1 使用http  
+`/plugin marketplace add https://gitlab.com/company/plugins.git`  
+
+3.2 使用ssh  
+`/plugin marketplace add git@gitlab.com:company/plugins.git`  
+
+3.3 指定特定分支或标签,在最后加上`#`  
+`/plugin marketplace add https://gitlab.com/company/plugins.git#v1.0.0`  
+
+4.从本地路径添加  
+
+4.1 添加包含`.claude-plugin/marketplace.json`文件的本地目录  
+`/plugin marketplace add ./my-marketplace`  
+
+4.2 也可以直接添加`marketplace.json`文件的路径  
+`/plugin marketplace add ./path/to/marketplace.json`  
+
+5.从远程URL添加  
+通过URL添加远程`marketplace.json`文件  
+`/plugin marketplace add https://example.com/marketplace.json`  
+
+#### 6.1.4 安装插件  
+1.概述
+添加市场后,用户可以直接安装插件,类似[[ClaudeCode#6111-概述]]  
+`/plugin install [plugin-name]@[marketplace-name]`  
+* plugin-name 插件名称
+* marketplace-name 市场名称
+
+2.安装范围  
+该命令打开该插件的详情,用户可以在其中选择<font color="#00FF00">安装范围</font>,或者运行`/plugin`转到插件列表页面后,在选中的插件上按下`Enter`同样可以安装插件并选择安装范围  
+* 用户范围(默认) 在所有项目中为用户自已安装
+* 项目范围 为本仓库的团队成员安装这会将插件添加到`.claude/settings.json`
+* 本地范围 仅在此存储库中为自己安装,不与团队共享
+
+#### 6.1.5 管理已安装的插件  
+1.概述  
+运行`/plugin`并转到已安装插件列表以查看、启用、禁用或卸载插件,该列表按范围分组并排序,以便用户首先看到问题,具有加载错误或未解决依赖项的插件出现在顶部,然后是用户的收藏夹,禁用的插件折叠在底部的折叠标题后面  
+
+2.列表操作  
+* 按`f`以收藏或取消收藏选定的插件
+* 输入内容以按插件名称或描述筛选插件
+* 按`Enter`打开插件的详细视图并启用、禁用或卸载它
+
+3.其它命令  
+
+3.1 列出已安装的插件而不打开菜单  
+`/plugin list` 传递`--enabled`或`--disabled`以仅显示处于该状态的插件  
+
+3.2 禁用插件而不卸载  
+`/plugin disable plugin-name@marketplace-name`  
+
+3.3 重新启用已禁用的插件  
+`/plugin enable plugin-name@marketplace-name`  
+
+3.4 完全删除插件  
+`/plugin uninstall plugin-name@marketplace-name`  
+
+3.5 限定范围  
+`--scope`选项允许您使用CLI命令针对特定范围  
+```shell
+claude plugin install formatter@your-org --scope project
+claude plugin uninstall formatter@your-org --scope project
+```
+
+4.应用插件更改而不重启  
+当用户在会话期间安装、启用或禁用插件时,运行`/reload-plugins`以在不重启的情况下更新所有更改  
+重新加载在下一个请求时会产生令牌成本,新加载的组件将新内容附加到对话中,而现有历史记录仍然从prompt cache读取,而对于没有被延迟加载的MCP而言,该更改会使得缓存失效,下一个请求将重新读取整个会话,此时`/reload-plugins`会显示警告并不应用重新加载,传递`--force`以强制应用  
+
+
+#### 6.1.6 管理市场  
+1.使用交互式界面  
+运行`/plugin`并转到市场选项卡页面  
+* 查看所有已添加的市场及其来源和状态
+* 添加新市场
+* 更新市场列表以获取最新插件
+* 删除您不再需要的市场
+
+2.使用CLI命令  
+
+2.1 列出所有已配置的市场  
+`/plugin marketplace list`
+
+2.2 刷新市场的插件列表  
+`/plugin marketplace update marketplace-name`  
+
+2.3 删除市场  
+`/plugin marketplace remove marketplace-name`  
+
+3.配置自动更新  
+Claude Code可以在启动后在后台自动更新市场及其已安装的插件,延迟时间最多为十分钟,如何有任何插件更新则会出现提示运行`/reload-plugins`的通知  
+可以通过`/plugin`打开插件管理器后,选择市场选项,在市场中选择某个具体的市场后,选择启用自动更新或禁用自动更新  
+
+#### 6.1.7 配置团队市场  
+1.概述
+项目仓库可以通过将市场配置添加到`.claude/settings.json`来为项目设置自动市场安装,当团队成员信任存储库文件夹时,Claude Code会提示他们安装这些市场和插件,对于那些仅仅由项目的`.claude/settings.json`且是来自外部源的插件<font color="#00FF00">在团队成员安装之前不会加载</font>,所以Claude会将该插件报告为未安装,并提示需要运行`claude plugin install`命令来安装  
+
+2.为项目添加插件  
+将`extraKnownMarketplaces`属性添加到项目的`.claude/settings.json`文件中  
+```json
+{
+  "extraKnownMarketplaces": {
+    "my-team-tools": {
+      "source": {
+        "source": "github",
+        "repo": "your-org/claude-plugins"
+      }
+    }
+  }
+}
+```
+
+
+
+
+
+
+
+
+### 6.2 创建插件 
 
 
 
