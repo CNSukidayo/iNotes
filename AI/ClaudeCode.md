@@ -5,6 +5,8 @@
 4.MCP  
 5.Skills  
 6.插件  
+7.自动化  
+
 3.参考  
 
 ## 1.Claude Code核心概念   
@@ -2930,48 +2932,485 @@ Claude Code可以在启动后在后台自动更新市场及其已安装的插件
 
 ### 6.2 创建插件 
 
-
-
-
-
-
-
-## 3.参考  
+## 7.自动化  
 **目录:**  
-3.1 Sehll命令  
-3.2 会话命令  
-3.3 工具  
+7.1 使用hooks自动化  
+7.2 将外部事件推送到Claude  
+7.3 按计划运行提示词  
+7.4 目标  
+7.5 编程使用  
+7.6 从链接启动会话  
 
-### 3.1 Sehll命令 
-1.常用Shell命令  
-*提示:shell命令是在控制台中输入的命令,和会话命令区分下来*  
-| 命令              | 功能                       | 示例                              |
-|:------------------|:---------------------------|:----------------------------------|
-| claude            | 启动交互模式               | claude                            |
-| claude "task"     | 运行一次性任务             | claude "fix the build error"      |
-| claude -p "query" | 运行一次性查询，然后退出   | claude -p "explain this function" |
-| claude -c         | 在当前目录中继续最近的对话 | claude -c                         |
-| claude -r         | 恢复之前的对话             | claude -r                         |
+### 7.1 使用hooks自动化
+**目录:**  
+7.1.1 设置第一个hook  
+7.1.2 自动化案例  
+7.1.3 hook如何工作  
+7.1.4 基于提示词的hooks  
+7.1.5 基于代理的hooks  
+7.1.6 HTTP hooks  
 
-2.完整命令  
-参考[CLI参考](https://code.claude.com/docs/zh-CN/cli-reference)  
 
-### 3.2 会话命令  
-1.常用会话命令  
-| 命令            | 功能             | 示例   |
-|:----------------|:-----------------|:-------|
-| /clear          | 清除对话历史     | /clear |
-| /help           | 显示可用命令     | /help  |
-| /exit 或 Ctrl+D | 退出 Claude Code | /exit  |
+#### 7.1.1 设置第一个hook  
+1.概述  
+Hooks是用户定义的shell命令,在Claude Code生命周期中的<font color="#00FF00">特定点</font>执行,它们对Claude Code的行为提供<font color="#00FF00">确定性控制</font>,使用hooks来强制执行项目规则、自动化重复任务,并将Claude Code与现有工具集成  
+对于需要判断而不是确定性规则的决策,也可以使用<font color="#00FF00">基于提示的 hooks</font>或<font color="#00FF00">基于Agent的hooks</font>,这些会通过Claude模型进行评估是否要执行  
 
-2.完整命令  
-[会话命令](https://code.claude.com/docs/zh-CN/commands)  
+2.示例  
+本示例创建一个桌面通知hook,每当Claude等待用户输入时,用户都会收到警报  
 
-### 3.3 工具
-1.基本介绍  
+2.1 将hook添加到setting.json  
+打开`~/.claude/settings.json`文件并添加`Notification`的hook  
+```json
+{
+  "hooks": {
+    "Notification": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "notify-send 'Claude Code' 'Claude Code needs your attention'"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
 
-2.完整工具介绍  
-[官网工具参考](https://code.claude.com/docs/zh-CN/tools-reference)  
+2.2 验证配置  
+输入`/hooks`打开hooks浏览器,这里显示了所有hook事件的列表,每个配置了hooks的事件旁边都有一个计数,选择Notification以确认新的hook出现在列表中,选择hook会显示其详细信息,事件、匹配器、类型、源文件和命令  
+
+2.3 测试hook  
+按`Esc`返回CLI,要求Claude做需要权限的事情,然后切换离开终端,你应该会收到桌面通知  
+
+3.`matcher`  
+空的`matcher`对所有通知类型触发,要仅在特定事件上触发,将其设置为以下值之一  
+| Matcher              | 触发时机                                          |
+|:---------------------|:--------------------------------------------------|
+| permission_prompt    | Claude需要你批准工具使用                          |
+| idle_prompt          | Claude完成并等待你的下一个提示                    |
+| auth_success         | 身份验证完成                                      |
+| elicitation_dialog   | MCP服务器打开引导表单                             |
+| elicitation_complete | MCP引导表单被提交或关闭                           |
+| elicitation_response | MCP引导响应被发送回服务器                         |
+| agent_needs_input    | 后台会话开始等待你的输入.仅在agent view打开时触发 |
+| agent_completed      | 后台会话完成或失败.仅在agent view打开时触发       |
+
+4.`type`  
+每个hook都有一个type来确定它如何运行,大多数hooks使用`"type": "command"`,它运行shell命令,还有四种其他类型可用  
+* `"type": "http"` 将事件将数据通过POST发送到URL
+* `"type": "mcp_tool"` 在已连接的MCP服务器上调用工具
+* `"type": "prompt"` 让模型评估是否运行
+* `"type": "agent"` 具有工具访问权限的多轮验证
+
+
+#### 7.1.2 自动化案例  
+**目录:**  
+7.1.2.1 在Claude需要输入时获得通知  
+7.1.2.2 编辑后自动格式化代码  
+7.1.2.3 阻止对受保护文件的编辑  
+7.1.2.4 压缩后重新注入上下文  
+7.1.2.5 审计配置更改  
+7.1.2.6 当目录或文件更改时重新加载环境  
+7.1.2.7 自动批准特定权限提示  
+
+
+##### 7.1.2.1 在Claude需要输入时获得通知
+同[[ClaudeCode#711-设置第一个hook]]  
+
+##### 7.1.2.2 编辑后自动格式化代码  
+在Claude编辑的每个文件上自动运行Prettier(一个格式化代码的工具),以便格式保持一致而无需手动干  
+此hook使用带有`Edit|Write`匹配器的`PostToolUse`事件,因此它仅在文件编辑工具之后运行,该命令使用jq提取编辑的文件路径并将其传递给Prettier,将其添加到项目根目录中的`.claude/settings.json`以启用  
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path' | xargs npx prettier --write"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+##### 7.1.2.3 阻止对受保护文件的编辑  
+1.概述  
+防止Claude修改敏感文件,如`.env`、`package-lock.json`或`.git/`中的任何内容,Claude会收到解释编辑被阻止原因的反馈,因此它可以调整其方法  
+此示例使用hook调用的独立的脚本文件,该脚本文件根据受保护模式列表检查目标文件路径  
+
+2.创建独立hook脚本  
+将其保存到`.claude/hooks/protect-files.sh`
+```shell
+#!/bin/bash
+# protect-files.sh
+
+INPUT=$(cat)
+FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty')
+
+PROTECTED_PATTERNS=(".env" "package-lock.json" ".git/")
+
+for pattern in "${PROTECTED_PATTERNS[@]}"; do
+  if [[ "$FILE_PATH" == *"$pattern"* ]]; then
+    echo "Blocked: $FILE_PATH matches protected pattern '$pattern'" >&2
+    exit 2
+  fi
+done
+
+exit 0
+```
+
+3.使脚本可执行  
+`chmod +x .claude/hooks/protect-files.sh`  
+
+4.注册hook  
+将PreToolUse事件的hook添加到`.claude/settings.json`,在任何Edit或Write工具调用之前运行脚本  
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/protect-files.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+##### 7.1.2.4 压缩后重新注入上下文  
+1.概述  
+当Claude的上下文窗口填满时,compact会总结对话以释放空间,但这可能会丢失重要细节,使用带有compact匹配器的`SessionStart`hook在每次压缩后重新注入关键上下文  
+用户的任何写入标准输出(stdout)的文本都会添加到Claude的上下文中,这里的示例将Claude的项目约定和最近的工作写入到上下文,将下述文件添加到`.claude/settings.json`中  
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo 'Reminder: use Bun, not npm. Run bun test before committing. Current sprint: auth refactor.'"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+##### 7.1.2.5 审计配置更改  
+1.概述  
+`ConfigChange`事件在外部进程或编辑器修改配置文件时触发,因此你可以记录更改以进行合规性检查或阻止未授权的修改  
+```json
+{
+  "hooks": {
+    "ConfigChange": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -c '{timestamp: now | todate, source: .source, file: .file_path}' >> ~/claude-config-audit.log"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+##### 7.1.2.6 当目录或文件更改时重新加载环境  
+
+
+##### 7.1.2.7 自动批准特定权限提示  
+1.概述  
+跳过你总是允许的工具调用的批准对话,此示例自动批准`ExitPlanMode`,这是Claude在完成呈现计划并要求继续时调用的工具,因此你不会在每次计划准备好时被提示  
+自动批准需要你的hook将JSON决策写入stdout(标准输出),`PermissionRequest`hook在Claude Code即将显示权限对话时触发,返回"behavior": "allow"代表你回答它(就是通过标准输出的方式,让hook代替用户回答,因为hook和Claude只能通过标准输入/输出交互)  
+匹配器将hook的范围限制为仅ExitPlanMode  
+```json
+{
+  "hooks": {
+    "PermissionRequest": [
+      {
+        "matcher": "ExitPlanMode",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '{\"hookSpecificOutput\": {\"hookEventName\": \"PermissionRequest\", \"decision\": {\"behavior\": \"allow\"}}}'"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+#### 7.1.3 hook如何工作  
+**目录:**  
+7.1.3.1 hook的触发事件  
+7.1.3.2 合并来自多个hooks的结果  
+7.1.3.3 读取输入并返回输出  
+7.1.3.4 使用匹配器过滤hooks  
+7.1.3.5 配置hook位置  
+
+
+##### 7.1.3.1 hook的触发事件
+1.概述
+Hook事件在Claude Code中的特定生命周期点触发,当事件触发时,所有匹配的hooks并行运行,相同的hook命令会自动去重  
+
+2.每个事件的触发时间点  
+参考官网[Hooks 如何工作](https://code.claude.com/docs/zh-CN/hooks-guide#how-hooks-work)  
+
+
+##### 7.1.3.2 合并来自多个hooks的结果  
+1.概述  
+当多个hooks匹配同一事件时,每个hook的命令都会运行到完成,然后Claude Code合并结果,一个hook返回deny不会阻止兄弟hooks执行,<font color="#00FF00">不要依赖一个hook的deny来抑制另一个hook中的副作用</font>  
+所有匹配的hooks完成后,Claude Code合并它们的输出,对于PreToolUse权限决策,最严格的结果获胜,顺序为`deny`、`defer`、`ask`、`allow`,来自`additionalContext`的文本从每个hook保留并一起传递给Claude  
+
+2.示例  
+下面的示例在Bash上注册两个`PreToolUse`事件hooks,第一个将每个命令附加到日志文件并以0退出,第二个运行一个脚本(block-rm-rf\.sh),当命令包含`rm -rf`时以2退出以拒绝  
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r .tool_input.command >> ~/.claude/bash.log"
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/block-rm-rf.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+当Claude尝试运行`rm -rf /tmp/build`时,两个hooks并行执行,日志hook将命令写入`~/.claude/bash.log`并以0退出,这并没有决策,第二个hook以2退出,它拒绝了工具调用,所以Claude Code阻止命令并向Claude显示第二个Hook的stderr(标准错误输出),日志条目仍然被写入,因为日志hooks已经运行  
+
+##### 7.1.3.3 读取输入并返回输出  
+1.概述  
+<font color="#FF00FF">Hooks通过stdin、stdout、stderr和退出代码与Claude Code通信</font>,当事件触发时Claude Code将事件特定的数据作为JSON传递到脚本的 stdin,你的脚本读取该数据,完成其工作,并通过退出代码告诉Claude Code接下来要做什么
+
+2.Hook输入  
+每个事件都包含常见字段,如`session_id`和`cwd`,但不同的事件又添加不同的数据,例如当Claude运行Bash命令时,`PreToolUse`事件的hook在标准输入接受如下内容,用户编写的脚本可以解析该JSON并对任何这些字段进行操作  
+```json
+{
+  "session_id": "abc123",          // 此会话的唯一 ID
+  "cwd": "/Users/sarah/myproject", // 事件触发时的工作目录
+  "hook_event_name": "PreToolUse", // 哪个事件触发了此 hook
+  "tool_name": "Bash",             // Claude 即将使用的工具
+  "tool_input": {                  // Claude 传递给工具的参数
+    "command": "npm test"          // 对于 Bash，这是 shell 命令
+  }
+}
+```
+
+3.Hook输出  
+编写的脚本通过写入stdout或stderr并以特定代码退出来告诉Claude Code接下来要做什么,以下` PreToolUse`hook阻止一个命令  
+```shell
+#!/bin/bash
+INPUT=$(cat)
+COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command')
+
+if echo "$COMMAND" | grep -q "drop table"; then
+  echo "Blocked: dropping tables is not allowed" >&2  # stderr 变成 Claude 的反馈
+  exit 2 # exit 2 = 阻止操作
+fi
+
+exit 0  # exit 0 = 没有决策;正常权限流程适用
+```
+
+**退出代码确定接下来会发生什么**  
+* 退出0 hook 报告没有异议
+* 退出2 操作被阻止
+* 任何其他退出代码 操作继续
+
+4.结构化JSON输出  
+退出代码只起到了阻止或保持沉默的功能,为了获得更多控制,退出0并改为将JSON对象打印到stdout(标准输出)  
+*提示:当使用退出2时,使用stderr消息阻止执行,和退出0区分,Claude Code在你退出2时忽略JSON*  
+
+例如,`PreToolUse`hook可以拒绝工具调用并告诉Claude为什么,或将其升级给用户以获得批准  
+```json
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "Use rg instead of grep for better performance"
+  }
+}
+```
+
+**permissionDecision的值**  
+* "allow" 跳过交互式权限提示
+* "deny" 取消工具调用并将原因发送给Claude
+* "ask" 照常向用户显示权限提示
+* "defer" 在非交互模式中使用`-p`标志时可用,它以保留的工具调用退出进程,以便Agent SDK包装器可以收集输入并恢复
+
+##### 7.1.3.4 使用匹配器过滤hooks  
+没有匹配器(matcher),hook会在其事件的每次出现时触发,匹配器让你缩小范围,例如如果你只想在文件编辑后运行格式化程序(而不是在每个工具调用后),将匹配器添加到你的`PostToolUse`hook  
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          { "type": "command", "command": "prettier --write ..." }
+        ]
+      }
+    ]
+  }
+}
+```
+
+"Edit|Write"匹配器仅在Claude使用Edit或Write工具时触发  
+
+2.每个事件类型在特定字段上匹配  
+参考官网[使用匹配器过滤 hooks](https://code.claude.com/docs/zh-CN/hooks-guide#filter-hooks-with-matchers)  
+
+3.使用`if`字段按工具名称和参数过滤  
+`if`字段使用权限规则语法按工具名称和参数一起过滤hooks,因此hook进程仅在工具调用匹配时生成,if超过了match,因为match仅在工具名称级别按组过滤  
+下面的示例配置仅在Claude使用git命令而不是所有Bash命令时运行hook  
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(git *)",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/check-git-policy.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+##### 7.1.3.5 配置hook位置  
+1.hook的位置决定了其范围  
+| 位置                        | 范围                         | 可共享                             |
+|:----------------------------|:-----------------------------|:-----------------------------------|
+| ~/.claude/settings.json     | 所有你的项目                 | 否,本地到你的机器                  |
+| .claude/settings.json       | 单个项目                     | 是,可以提交到仓库                  |
+| .claude/settings.local.json | 单个项目                     | 否,gitignored当Claude Code创建它时 |
+| 托管策略设置                | 组织范围                     | 是,管理员控制                      |
+| Plugin hooks/hooks.json     | 启用插件时                   | 是,与插件捆绑                      |
+| Skill或agent frontmatter    | 当skill或agent处于活动状态时 | 是,在组件文件中定义                |
+
+
+在Claude Code中运行`/hooks`以浏览所有按事件分组的配置hooks,要禁用hooks,在设置文件中设置`"disableAllHooks": true`  
+
+
+#### 7.1.4 基于提示词的hooks  
+1.概述  
+对于需要判断而不是确定性规则的决策,使用`type: "prompt"`hooks,Claude Code不运行shell命令,而是将你的提示和hook的输入数据发送到Claude模型来做出决策,如果你需要更多功能,可以使用model字段指定不同的模型
+
+2.模型的工作  
+模型的唯一工作是返回一个是/否决策的JSON  
+* `ok": true` 操作继续
+* `"ok": false` 此时发生的操作取决于事件
+  * `Stop`和`SubagentStop` 结果被反馈给Claude以便它继续工作
+  * `PreToolUse` 工具调用被拒绝,结果作为工具错误返回给Claude,以便它可以调整并继续
+  * PostToolUse、PostToolBatch、UserPromptSubmit和UserPromptExpansion 回合结束,结果在聊天中显示为警告行
+
+3.示例  
+此示例使用`Stop`hook询问模型是否所有请求的任务都已完成,如果模型返回`"ok": false`则Claude继续工作并使用结果作为其下一条指令  
+```json
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Check if all tasks are complete. If not, respond with {\"ok\": false, \"reason\": \"what remains to be done\"}."
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+#### 7.1.5 基于代理的hooks  
+1.概述  
+当验证需要检查文件或运行命令时,使用`type: "agent"`hooks,与只进行单个模型调用的提示词hooks不同,代理hooks生成一个subagent,它可以读取文件、搜索代码和使用其他工具来验证条件,然后返回决策  
+
+代理hooks使用与提示词hooks相同的`"ok"/"reason"`响应格式,但默认超时更长(60秒)和最多50个工具使用轮次  
+
+2.示例  
+此示例验证在允许Claude停止之前测试通过  
+```json
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "agent",
+            "prompt": "Verify that all unit tests pass. Run the test suite and check the results. $ARGUMENTS",
+            "timeout": 120
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+当hook输入数据本身足以做出决策时使用提示hooks,当你需要根据代码库的实际状态验证某些内容时使用代理hooks  
+
+#### 7.1.6 HTTP hooks  
+1.概述  
+使用`type: "http"`hooks将事件数据POST到HTTP接口,端点接收命令hook在标准输入上接收的相同JSON,并使用相同的JSON格式通过HTTP响应体返回结果  
+HTTP hooks在你想要web服务器、云函数或外部服务处理hook逻辑时很有用,例如一个跨团队记录工具使用事件的共享审计服务  
+HTTP接口应使用与命令hooks相同的输出格式返回JSON响应体  
+
+2.示例  
+此示例将每个工具使用POST到本地日志服务  
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:8080/hooks/tool-use",
+            "headers": {
+              "Authorization": "Bearer $MY_TOKEN"
+            },
+            "allowedEnvVars": ["MY_TOKEN"]
+          }
+        ]
+      }
+    ]
+  }
+}
+```
 
 
 
