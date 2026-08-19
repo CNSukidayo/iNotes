@@ -78,6 +78,10 @@ Customize选择最小化安装(不要选normal模式)
 2.更新软件  
 `sudo apt upgrade`更新软件  
 
+3.已安装的软件列表  
+`apt list --installed 2>/dev/null`  
+*解释:2是Linux的标准错误输出,将程序的错误信息输出到/dev/null这个文件中,而/dev/null这个文件是一个垃圾桶,意思就是丢掉这个错误输出,这个命令是高频命令,这样使用的话可以将命令产生的warning信息丢掉,保持输出干净*  
+
 #### 2.2 Linux软件安装  
 1.deb软件包安装在哪里  
 Linux安装软件和Windows的设计不同,Windows一般会把软件的所有内容安装到一个文件夹剩下,而Linux会分类管理,deb包会把不同的文件放进系统的各个文件夹下  
@@ -94,7 +98,9 @@ Linux安装软件和Windows的设计不同,Windows一般会把软件的所有内
 
 3.用户级别`~/.local/share/applications/`
 
-4.这两个文件夹就有点类似Windows的star menu菜单  
+4.这两个文件夹就有点类似Windows的star menu菜单;一个是系统级的一个是用户级的  
+
+
 
 ### 2.2 显卡驱动安装
 

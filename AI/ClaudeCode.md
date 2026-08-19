@@ -879,7 +879,7 @@ Claude Code升级后恢复会话会重新处理整个对话历史记录而没有
 * /etc/claude-code/CLAUDE\.md 由IT/DevOps管理的组织范围指令,组织中的所有对象共享(就这个是多出来的)
 * ~/.claude/CLAUDE\.md 用户级
 * ./.claude/CLAUDE.md 项目级
-* ./CLAUDE.local.md 项目私有级
+* ./.claude/CLAUDE.local.md 项目私有级
 
 2.加载顺序
 [[ClaudeCode#2126-claudemd文件如何加载]]  
